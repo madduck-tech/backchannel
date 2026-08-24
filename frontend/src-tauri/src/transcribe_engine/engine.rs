@@ -337,8 +337,23 @@ impl TranscribeEngine {
     ) -> Result<()> {
         let entry = transcribe_model(model_name)
             .ok_or_else(|| anyhow!("Unknown model: {}", model_name))?;
-        let (repo, filename) = (entry.hf_repo, entry.filename);
+        self.download_file(model_name, entry.hf_repo, entry.filename, progress_callback)
+            .await
+    }
 
+    /// Download a GGUF by repo and filename, with no catalog lookup.
+    ///
+    /// The speaker diarizer is the only caller that is not a catalog row: it is
+    /// not a transcription model and must never reach the picker, but it still
+    /// wants this path's cancellation, progress reporting and — the part worth
+    /// not reimplementing — the partial-file cleanup below.
+    pub async fn download_file(
+        &self,
+        model_name: &str,
+        repo: &str,
+        filename: &str,
+        progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
+    ) -> Result<()> {
         {
             let mut active = self.active_downloads.write().await;
             if !active.insert(model_name.to_string()) {

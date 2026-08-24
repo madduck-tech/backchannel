@@ -752,6 +752,10 @@ pub fn run() {
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,
             audio::retranscription::is_retranscription_in_progress_command,
+            audio::diarization::label_speakers_command,
+            audio::diarization::is_diarizer_downloaded_command,
+            audio::diarization::diarizer_size_mb,
+            audio::diarization::download_diarizer_command,
             // Import audio commands
             audio::import::select_and_validate_audio_command,
             audio::import::validate_audio_file_command,

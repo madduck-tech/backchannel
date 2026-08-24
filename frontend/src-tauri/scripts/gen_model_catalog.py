@@ -30,7 +30,9 @@ END = "    // END GENERATED\n"
 # Variants deliberately kept out of the catalog.
 EXCLUDED = {
     # Speaker diarizer: emits speaker turns, never text. Cannot be a
-    # transcription model.
+    # transcription model, so it must never reach the picker — it lives as
+    # config.rs::SPEAKER_DIARIZER instead, downloaded on demand by the
+    # post-hoc labelling pass in audio/diarization.rs.
     "diar_streaming_sortformer_4spk-v2.1",
     # Upstream google/medasr is gated behind the Health AI Developer
     # Foundations terms, so the download 401s for most users.

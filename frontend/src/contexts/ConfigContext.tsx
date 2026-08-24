@@ -72,6 +72,10 @@ interface ConfigContextType {
   isAutoSummary: boolean;
   toggleIsAutoSummary: (checked: boolean) => void;
 
+  // Speaker labelling (post-hoc diarization)
+  isAutoLabelSpeakers: boolean;
+  toggleIsAutoLabelSpeakers: (checked: boolean) => void;
+
   // Provider-specific API keys
   providerApiKeys: {
     claude: string | null;
@@ -158,6 +162,16 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('isAutoSummary');
       return saved !== null ? saved === 'true' : false
+    }
+    return false;
+  });
+
+  // Off by default: turning it on downloads the speaker model, and a 139 MB
+  // fetch is not something to opt somebody into on their behalf.
+  const [isAutoLabelSpeakers, setIsAutoLabelSpeakers] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('isAutoLabelSpeakers');
+      return saved !== null ? saved === 'true' : false;
     }
     return false;
   });
@@ -391,6 +405,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const toggleIsAutoLabelSpeakers = useCallback((checked: boolean) => {
+    setIsAutoLabelSpeakers(checked);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('isAutoLabelSpeakers', checked.toString());
+    }
+  }, []);
+
   // Update individual provider API key
   const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
     setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
@@ -472,7 +493,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     modelConfig,
     setModelConfig,
     isAutoSummary,
+    isAutoLabelSpeakers,
     toggleIsAutoSummary,
+    toggleIsAutoLabelSpeakers,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,
@@ -494,7 +517,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   }), [
     modelConfig,
     isAutoSummary,
+    isAutoLabelSpeakers,
     toggleIsAutoSummary,
+    toggleIsAutoLabelSpeakers,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,

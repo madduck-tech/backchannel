@@ -15,10 +15,12 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useSpeakerLabelling } from '@/hooks/useSpeakerLabelling';
 
 export default function PageContent({
   meeting,
   summaryData,
+  cameFromRecording = false,
   shouldAutoGenerate = false,
   onAutoGenerateComplete,
   onMeetingUpdated,
@@ -33,6 +35,7 @@ export default function PageContent({
 }: {
   meeting: any;
   summaryData: Summary | null;
+  cameFromRecording?: boolean;
   shouldAutoGenerate?: boolean;
   onAutoGenerateComplete?: () => void;
   onMeetingUpdated?: () => Promise<void>;
@@ -63,7 +66,7 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig } = useConfig();
+  const { modelConfig, setModelConfig, isAutoLabelSpeakers } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
@@ -158,6 +161,35 @@ export default function PageContent({
       cancelled = true;
     };
   }, [shouldAutoGenerate, meeting.id]); // Re-run if meeting changes
+
+  // Automatic speaker labelling, on the same "just came from recording" gate as
+  // auto-summary above. Independent of it: summaries never read speaker labels,
+  // so neither job has to wait for the other.
+  const { labelSpeakers } = useSpeakerLabelling({
+    meetingId: meeting.id,
+    meetingFolderPath: meeting.folder_path,
+    onComplete: onRefetchTranscripts,
+  });
+  const autoLabelledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isAutoLabelSpeakers || !cameFromRecording) return;
+    if (!meeting.folder_path || meetingData.transcripts.length === 0) return;
+    // Once per meeting: this effect re-runs as transcripts page in.
+    if (autoLabelledRef.current === meeting.id) return;
+
+    autoLabelledRef.current = meeting.id;
+    // downloadIfMissing stays false: the user turned a setting on, they did not
+    // ask for a 139 MB download the moment a meeting ended.
+    labelSpeakers({ downloadIfMissing: false });
+  }, [
+    isAutoLabelSpeakers,
+    cameFromRecording,
+    meeting.id,
+    meeting.folder_path,
+    meetingData.transcripts.length,
+    labelSpeakers,
+  ]);
 
   return (
     // No mount choreography — see /DESIGN.md → Motion.
