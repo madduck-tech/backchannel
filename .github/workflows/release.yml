@@ -118,6 +118,36 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Publish SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+        run: |
+          # Installers are unsigned, so checksums are the only way a user can
+          # verify a download. The release is still a draft here, so assets are
+          # fetched by id: the by-tag endpoint does not return drafts.
+          gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
+            --jq '.[] | select(.name | test("\\.(dmg|exe|msi|deb|rpm|AppImage)$")) | "\(.id) \(.name)"' > assets.txt
+
+          if [ ! -s assets.txt ]; then
+            echo "::error::No installer assets found on release ${RELEASE_ID}"
+            exit 1
+          fi
+
+          while read -r id name; do
+            echo "Fetching ${name}"
+            gh api "repos/${REPO}/releases/assets/${id}" \
+              -H "Accept: application/octet-stream" > "${name}"
+          done < assets.txt
+
+          cut -d' ' -f2 assets.txt | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+          gh api --method POST \
+            "https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=SHA256SUMS" \
+            -H "Content-Type: text/plain" --input SHA256SUMS --jq .name
+
       - name: Get release assets and latest.json
         id: release-info
         run: |

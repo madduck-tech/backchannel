@@ -1,0 +1,32 @@
+{
+    "version": "1.3.0",
+    "description": "Privacy-first meeting assistant that transcribes and summarizes locally",
+    "homepage": "https://github.com/bykof/conversationaly",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/bykof/conversationaly/releases/download/v1.3.0/conversationaly_1.3.0_x64-setup.exe#/dl.7z",
+            "hash": "bfd05b2018155dc048f4931b6c13bb5860f48628cb3bb2adc6ede5bbd53263e3"
+        }
+    },
+    "pre_install": "Remove-Item \"$dir\\`$PLUGINSDIR\", \"$dir\\uninstall.exe\" -Recurse -Force -ErrorAction SilentlyContinue",
+    "shortcuts": [
+        [
+            "conversationaly.exe",
+            "Conversationaly"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/bykof/conversationaly"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/bykof/conversationaly/releases/download/v$version/conversationaly_$version_x64-setup.exe#/dl.7z"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}

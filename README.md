@@ -55,7 +55,23 @@ It is a fork of [Meetily](https://github.com/Zackriya-Solutions/meeting-minutes)
 
 ## Installation
 
-Prebuilt installers (macOS `.dmg`, Windows `.exe`, Linux `.deb`/`.rpm`/`.AppImage`) are published on the [Releases page](https://github.com/bykof/conversationaly/releases) when a version is tagged.
+Prebuilt installers (macOS `.dmg`, Windows `.exe`, Linux `.deb`/`.rpm`/`.AppImage`) are published on the [Releases page](https://github.com/bykof/conversationaly/releases) when a version is tagged, each alongside a `SHA256SUMS` file to check them against.
+
+```bash
+# macOS
+brew install --cask --no-quarantine bykof/tap/conversationaly
+```
+
+```powershell
+# Windows
+scoop bucket add conversationaly https://github.com/bykof/conversationaly
+scoop install conversationaly
+```
+
+The builds are not code-signed, so macOS and Windows each block them once on
+first launch. [docs/INSTALL.md](docs/INSTALL.md) has the click-through for every
+platform, how to verify a download, and what to do when macOS forgets the
+microphone permission after an update.
 
 ### Build from source
 
