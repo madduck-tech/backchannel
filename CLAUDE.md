@@ -176,6 +176,20 @@ await listen<TranscriptUpdate>('transcript-update', (event) => {
 });
 ```
 
+### Speaker Labelling (post-hoc diarization)
+
+Only two catalog families diarize (`config::DIARIZING_VARIANTS`: `granite-speech-4.1-2b-plus`, `moss-transcribe-diarize`), and picking one means accepting its WER, languages and speed for the sake of a label. `audio/diarization.rs` removes that trade: after a meeting, `diar_streaming_sortformer_4spk-v2.1` (Q8_0, 139 MB) runs over the saved recording and stamps speaker ids onto the transcript rows that are already there, whichever model wrote them.
+
+- **Stamp-only.** Text, times and row ids are untouched; only the `speaker` column changes. The pass is idempotent and re-runnable.
+- **One continuous run.** Sortformer's speaker cache is what carries identity across the meeting, so it must see the whole recording in a single `Session::run` — feeding it VAD segments restarts the numbering at every pause.
+- **Loaded and dropped inside the pass.** It never enters `TranscribeEngine`'s single model slot, so nothing about recording changes and no memory is held between meetings.
+- **Not a catalog row.** It is not a transcription model and must never reach the picker, so it lives as `config::SPEAKER_DIARIZER` and downloads through `TranscribeEngine::download_file` (the catalog downloader minus the catalog lookup).
+- **`VERY_HIGH_LATENCY` preset** — ~30 s lookahead, free on a finished recording, and the operating point upstream's 14.7% AMI DER was measured at.
+- **Mapping rule**: dominant speaker per row, summing each speaker's overlap. Rows are never split (that needs word timestamps the stored rows do not carry), and a row nothing overlaps stays `None` rather than being snapped to the nearest speaker.
+- Shares `RETRANSCRIPTION_IN_PROGRESS` with `retranscription.rs` — both rewrite one meeting's rows.
+
+Limits: 4 speakers maximum, with a fifth silently folded into an existing slot; labels are arrival-order, not identities, and do not match across recordings. Renaming is per meeting through the existing `speaker_names` table.
+
 ### Transcription Model Management
 
 **Model Storage Locations**:
@@ -421,3 +435,4 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 - [frontend/src-tauri/src/audio/transcription/ports.rs](frontend/src-tauri/src/audio/transcription/ports.rs) - `Transcriber` / `TranscriptSink`, the live-transcription boundaries
 - [frontend/src-tauri/src/audio/transcription/service.rs](frontend/src-tauri/src/audio/transcription/service.rs) - The live-transcription use case (infrastructure-free, unit-tested)
 - [frontend/src-tauri/src/audio/transcription/adapters/](frontend/src-tauri/src/audio/transcription/adapters/) - transcribe.cpp streaming, VAD+batch, and the Tauri event sink
+- [frontend/src-tauri/src/audio/diarization.rs](frontend/src-tauri/src/audio/diarization.rs) - Post-hoc speaker labelling over a finished recording

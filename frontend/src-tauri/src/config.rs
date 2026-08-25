@@ -1346,6 +1346,45 @@ pub fn model_diarizes(name: &str) -> bool {
         .is_some_and(|m| DIARIZING_VARIANTS.iter().any(|v| m.name.starts_with(v)))
 }
 
+/// The speaker diarizer, deliberately *not* a [`TRANSCRIBE_MODEL_CATALOG`] row.
+///
+/// It emits speaker turns and never text, so it can never be picked as a
+/// transcription model — which is exactly why it is a const instead of a
+/// catalog entry with a "not selectable" flag. Every consumer of the catalog
+/// (the picker, `discover_models`, `exactly_the_documented_variants_diarize`)
+/// would otherwise need a branch for the one row that is not a transcription
+/// model, and `gen_model_catalog.py`'s exclusion comment would stop being true.
+///
+/// `TranscribeEngine::download_file` takes repo and filename as plain
+/// arguments, so these four fields are the whole integration.
+pub struct DiarizerModel {
+    pub hf_repo: &'static str,
+    pub filename: &'static str,
+    pub size_mb: u64,
+    /// Architectural cap. A fifth speaker is silently folded into one of the
+    /// four arrival-order slots — there is no signal that it happened.
+    pub max_speakers: u32,
+}
+
+/// `nvidia/diar_streaming_sortformer_4spk-v2.1`, Q8_0.
+///
+/// Q8_0 rather than F16: 139 MB against 237 MB for 0.5 points of DER
+/// (14.73% vs 14.23% on AMI IHM), and neither tier showed a label-swap event
+/// on the upstream 16-meeting acceptance set.
+pub const SPEAKER_DIARIZER: DiarizerModel = DiarizerModel {
+    hf_repo: "diar_streaming_sortformer_4spk-v2.1-gguf",
+    filename: "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf",
+    size_mb: 139,
+    max_speakers: 4,
+};
+
+/// The name the download machinery tracks this file under.
+///
+/// Not a catalog name: `set_status` is a no-op for a name the catalog cache
+/// does not hold, which is what keeps the diarizer out of the picker's model
+/// list while still using the picker's downloader.
+pub const SPEAKER_DIARIZER_NAME: &str = "diar_streaming_sortformer_4spk-v2.1";
+
 pub fn transcribe_model(name: &str) -> Option<&'static TranscribeModel> {
     TRANSCRIBE_MODEL_CATALOG.iter().find(|m| m.name == name)
 }

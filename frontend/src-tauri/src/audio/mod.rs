@@ -53,6 +53,9 @@ pub mod constants;
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
 
+// Post-hoc speaker labelling, layered on retranscription's audio front end.
+pub mod diarization;
+
 // Import module (import external audio files as new meetings)
 pub mod import;
 

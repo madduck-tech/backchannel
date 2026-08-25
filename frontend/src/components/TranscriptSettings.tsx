@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import TranscriptionModelManager from './TranscriptionModelManager';
+import { SpeakerLabelSettings } from './SpeakerLabelSettings';
 import { configService } from '@/services/configService';
 
 
@@ -138,6 +139,10 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                 {/* <div className="flex justify-between items-center mb-4">
                     <h3 className="text-lg font-semibold text-ink">Transcript Settings</h3>
                 </div> */}
+                <div className="pb-6">
+                    <SpeakerLabelSettings />
+                </div>
+
                 <div className="space-y-4 pb-6">
                     <div>
                         <Label className="block text-sm font-medium text-ink mb-1">

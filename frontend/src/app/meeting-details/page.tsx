@@ -354,6 +354,9 @@ function MeetingDetailsContent() {
   return <PageContent
     meeting={meetingDetails}
     summaryData={meetingSummary}
+    // Same gate as auto-summary: only a meeting we just finished recording.
+    // Opening an old meeting must not silently start labelling it.
+    cameFromRecording={source === 'recording'}
     shouldAutoGenerate={shouldAutoGenerate}
     onAutoGenerateComplete={() => setShouldAutoGenerate(false)}
     onMeetingUpdated={async () => {
