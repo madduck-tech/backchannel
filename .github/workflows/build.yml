@@ -625,19 +625,7 @@ jobs:
       - name: Assert no AVX-512 in the ggml build
         if: contains(inputs.platform, 'windows')
         shell: pwsh
-        run: |
-          $trees = @(Get-ChildItem -Directory -ErrorAction SilentlyContinue `
-            -Path "target/*/release/build/transcribe-cpp-sys-*/out", "target/release/build/transcribe-cpp-sys-*/out")
-          if (-not $trees) { throw "no transcribe-cpp-sys build tree found - the guard verified nothing" }
-
-          $hits = $trees |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -Include *.vcxproj, *.rsp, CMakeCache.txt -ErrorAction SilentlyContinue } |
-            Select-String -Pattern 'arch:AVX512', 'AVX512_FOUND:BOOL=TRUE'
-          if ($hits) {
-            $hits | ForEach-Object { Write-Host "$($_.Path): $($_.Line.Trim())" }
-            throw "ggml built with AVX-512 - this binary would die with 0xC000001D on any CPU without it"
-          }
-          Write-Host "OK: no AVX-512 in the ggml compile line ($($trees.Count) build tree(s) checked)"
+        run: ./scripts/assert-no-avx512.ps1
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')
