@@ -51,6 +51,15 @@ jobs:
     runs-on: ${{ inputs.platform }}
     env:
       VULKAN_VERSION: 1.4.357.0
+      # x86: never let the runner's CPU decide the shipped ISA. ggml defaults
+      # GGML_NATIVE=ON, and on MSVC that pulls in FindSIMD.cmake, which *runs* AVX
+      # probes on the build machine — a GitHub Xeon has AVX-512, so /arch:AVX512 is
+      # baked in and the app dies with 0xC000001D (illegal instruction) on every CPU
+      # without it (e.g. Alder Lake i7-1255U, where AVX-512 is fused off). OFF falls
+      # back to ggml's own portable defaults: /arch:AVX2 on MSVC, -mavx2 -mfma -mf16c
+      # on Linux. Deliberately not set on macOS: NATIVE=OFF drops the ARM baseline
+      # below apple-m1 (loses dotprod) for no gain.
+      TRANSCRIBE_CMAKE_ARGS: ${{ !contains(inputs.platform, 'macos') && '-DGGML_NATIVE=OFF' || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -113,7 +122,11 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v2
+          # -v3: bumped with the GGML_NATIVE=OFF switch above. CMake's option()
+          # never overwrites an existing cache entry, so a restored CMakeCache.txt
+          # would keep GGML_AVX2=OFF (the value it got while NATIVE was ON) and
+          # silently build a scalar-only CPU backend.
+          key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v3
 
       - name: install dependencies (ubuntu 24.04)
         if: contains(inputs.platform, 'ubuntu-24.04')
@@ -605,6 +618,26 @@ jobs:
           releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseId: ${{ inputs.release-id }}
           args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }}
+
+      # Regression guard for TRANSCRIBE_CMAKE_ARGS above. If ggml ever gets compiled
+      # with /arch:AVX512 again the build still succeeds and the crash only shows up
+      # on a user's machine, so fail here instead.
+      - name: Assert no AVX-512 in the ggml build
+        if: contains(inputs.platform, 'windows')
+        shell: pwsh
+        run: |
+          $trees = @(Get-ChildItem -Directory -ErrorAction SilentlyContinue `
+            -Path "target/*/release/build/transcribe-cpp-sys-*/out", "target/release/build/transcribe-cpp-sys-*/out")
+          if (-not $trees) { throw "no transcribe-cpp-sys build tree found - the guard verified nothing" }
+
+          $hits = $trees |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -Include *.vcxproj, *.rsp, CMakeCache.txt -ErrorAction SilentlyContinue } |
+            Select-String -Pattern 'arch:AVX512', 'AVX512_FOUND:BOOL=TRUE'
+          if ($hits) {
+            $hits | ForEach-Object { Write-Host "$($_.Path): $($_.Line.Trim())" }
+            throw "ggml built with AVX-512 - this binary would die with 0xC000001D on any CPU without it"
+          }
+          Write-Host "OK: no AVX-512 in the ggml compile line ($($trees.Count) build tree(s) checked)"
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')

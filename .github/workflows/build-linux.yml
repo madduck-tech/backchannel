@@ -48,8 +48,10 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  WHISPER_NO_AVX: ON
-  WHISPER_NO_AVX2: ON
+  # Portable x86 floor — see the comment in build.yml. Replaces WHISPER_NO_AVX/
+  # WHISPER_NO_AVX2, which nothing has read since the whisper-rs -> transcribe.cpp
+  # move and which made it look like the ISA floor was already handled.
+  TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
 
 jobs:
   build-linux:
@@ -138,7 +140,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu
+          # Bumped with GGML_NATIVE=OFF — see the comment in build.yml.
+          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu-v2
 
       - name: Install dependencies (Ubuntu 24.04)
         if: github.event.inputs.ubuntu-version == 'ubuntu-24.04'

@@ -31,6 +31,8 @@ jobs:
       contents: write
     env:
       VULKAN_VERSION: 1.4.357.0
+      # Portable x86 floor — see the comment in build.yml.
+      TRANSCRIBE_CMAKE_ARGS: ${{ !contains(matrix.platform, 'macos') && '-DGGML_NATIVE=OFF' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +101,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ matrix.platform }}-${{ matrix.target }}
+          # Bumped with GGML_NATIVE=OFF — see the comment in build.yml.
+          key: ${{ matrix.platform }}-${{ matrix.target }}-v2
 
       # Platform-specific dependencies
       - name: Install dependencies (Ubuntu 24.04)
