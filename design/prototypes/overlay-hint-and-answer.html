@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Backchannel overlay · hint and answer states</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* design/backchannel/tokens.css — pasted verbatim. */
+:root {
+  /* ─── Surface ─────────────────────────────────────────────────── */
+  --bg: oklch(1 0 0);                       /* canvas: transcript and review are documents */
+  --surface: oklch(1 0 0);                  /* cards, popovers, dialogs (app: --elevated) */
+  --surface-warm: oklch(0.976 0.004 190);   /* rails, toolbars (app: --panel) */
+  --surface-sunken: oklch(0.968 0.005 190); /* extension: input wells, code, inset readouts */
+
+  /* ─── Foreground ramp ─────────────────────────────────────────── */
+  --fg: oklch(0.215 0.013 190);
+  --fg-2: var(--fg);
+  --muted: oklch(0.46 0.014 190);
+  --meta: oklch(0.54 0.012 190);
+
+  /* ─── Border ──────────────────────────────────────────────────── */
+  --border: oklch(0.912 0.006 190);
+  --border-soft: var(--border);
+  --border-strong: oklch(0.855 0.008 190); /* extension: input outlines */
+
+  /* ─── Accent = brand ──────────────────────────────────────────── */
+  --accent: oklch(0.365 0.082 190);
+  --accent-on: oklch(1 0 0);
+  --accent-hover: oklch(0.315 0.078 190);
+  --accent-active: var(--accent-hover);
+  --accent-soft: oklch(0.955 0.022 190);   /* extension: selection / active-row tint */
+  --accent-soft-on: oklch(0.33 0.075 190);
+
+  /* ─── Signals ─────────────────────────────────────────────────── */
+  --success: var(--accent);                 /* the brand is the success color */
+  --warn: oklch(0.72 0.15 72);
+  --warn-on: oklch(0.47 0.11 72);
+  --warn-soft: oklch(0.966 0.03 72);
+  --danger: oklch(0.545 0.205 25);
+  --danger-on: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.962 0.022 25);
+  --info: oklch(0.52 0.115 262);            /* extension: local-model and device readouts */
+  --info-soft: oklch(0.962 0.018 262);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-display: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 0.6875rem;  /* 11 · mono readouts */
+  --text-xs: 0.75rem;     /* 12 · captions */
+  --text-sm: 0.8125rem;   /* 13 · dense labels, buttons */
+  --text-base: 0.875rem;  /* 14 · UI body, overlay hint */
+  --text-md: 0.9375rem;   /* 15 · transcript */
+  --text-lg: 1.0625rem;   /* 17 · summary body */
+  --text-xl: 1.25rem;     /* 20 · panel title */
+  --text-2xl: 1.5625rem;  /* 25 · page title */
+  --text-3xl: 1.9375rem;  /* 31 · meeting title */
+  --text-4xl: var(--text-3xl);
+  --leading-body: 1.5;
+  --leading-tight: 1.2;
+  --tracking-display: -0.01em;
+  --measure: 68ch;
+
+  /* ─── Shape ───────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* ─── Elevation (border-first) ────────────────────────────────── */
+  --elev-flat: none;
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 1px 2px oklch(0.2 0.01 190 / 0.06), 0 4px 12px oklch(0.2 0.01 190 / 0.08);
+  --elev-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06), 0 12px 32px oklch(0.2 0.01 190 / 0.12);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.5 0.1 190);
+
+  /* ─── Motion ──────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Spacing ─────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-20: 80px;
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  --container-max: 1100px;                  /* desktop app: the two-pane breakpoint */
+  --container-gutter-desktop: 24px;
+  --container-gutter-tablet: 16px;
+  --container-gutter-phone: 12px;
+  --section-y-desktop: 32px;
+  --section-y-tablet: 24px;
+  --section-y-phone: 16px;
+  --rail-w: 19rem;
+  --rail-w-collapsed: 3.5rem;
+  --overlay-w: 420px;                       /* extension: overlay default width (360–480) */
+}
+
+/* Dark theme: independent values, not a filter. The overlay uses this block by default. */
+.dark,
+[data-theme="dark"] {
+  --bg: oklch(0.155 0.004 190);
+  --surface: oklch(0.225 0.006 190);
+  --surface-warm: oklch(0.185 0.005 190);
+  --surface-sunken: oklch(0.125 0.004 190);
+  --fg: oklch(0.945 0.006 190);
+  --muted: oklch(0.72 0.011 190);
+  --meta: oklch(0.625 0.01 190);
+  --border: oklch(0.285 0.007 190);
+  --border-strong: oklch(0.37 0.009 190);
+  --accent: oklch(0.8 0.115 190);
+  --accent-on: oklch(0.16 0.03 190);        /* bright aqua takes dark ink */
+  --accent-hover: oklch(0.855 0.12 190);
+  --accent-soft: oklch(0.255 0.032 190);
+  --accent-soft-on: oklch(0.845 0.1 190);
+  --warn: oklch(0.78 0.145 72);
+  --warn-on: oklch(0.82 0.13 72);
+  --warn-soft: oklch(0.245 0.045 72);
+  --danger: oklch(0.55 0.21 25);
+  --danger-on: oklch(0.72 0.16 25);
+  --danger-soft: oklch(0.245 0.055 25);
+  --info: oklch(0.66 0.13 262);
+  --info-soft: oklch(0.245 0.045 262);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
+  --elev-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.8 0.115 190);
+}
+
+/* ─── Base ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--accent-soft); color: var(--accent-soft-on); }
+:where(button, [href], [tabindex]):focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ─── Stage: the video call the overlay sits beside ────────────── */
+/* Scenery, not product. These are the colors of somebody else's call window and of the
+   rooms behind six webcams; they are deliberately outside the Backchannel palette. */
+.stage {
+  --scene-bg: oklch(0.14 0.006 250);
+  --scene-chrome: oklch(0.26 0.01 250);
+  --scene-label: oklch(0.9 0.005 250);
+  --scene-scrim: oklch(0.1 0.005 250 / 0.38);
+  --sil: oklch(0.17 0.012 60);
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--scene-bg);
+}
+.call {
+  position: absolute;
+  inset: -16px;
+  padding: 72px 40px 104px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 10px;
+  filter: blur(7px);
+  transform: scale(1.02);
+  pointer-events: none;
+}
+.tile {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background-color: var(--scene-chrome);
+}
+.tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(ellipse 13% 21% at var(--px, 50%) 44%, var(--sil) 0 58%, transparent 61%),
+    radial-gradient(ellipse 36% 34% at var(--px, 50%) 103%, var(--sil) 0 60%, transparent 63%),
+    var(--room);
+}
+.tile-1 { --px: 52%; --room: radial-gradient(circle at 80% 28%, oklch(0.74 0.12 75 / 0.55), transparent 32%), linear-gradient(160deg, oklch(0.47 0.06 65), oklch(0.31 0.04 55) 60%, oklch(0.23 0.03 50)); }
+.tile-2 { --px: 46%; --room: radial-gradient(ellipse 38% 46% at 18% 22%, oklch(0.8 0.04 230 / 0.7), transparent 60%), linear-gradient(180deg, oklch(0.41 0.03 240), oklch(0.26 0.02 240)); }
+.tile-3 { --px: 55%; --room: linear-gradient(180deg, oklch(0 0 0 / 0) 0 56%, oklch(0.28 0.03 50) 56% 100%), repeating-linear-gradient(90deg, oklch(0.38 0.05 45) 0 26px, oklch(0.31 0.06 30) 26px 40px, oklch(0.42 0.05 80) 40px 64px, oklch(0.34 0.04 20) 64px 78px); }
+.tile-4 { --px: 49%; --room: radial-gradient(circle at 30% 20%, oklch(0.7 0.01 90 / 0.5), transparent 40%), linear-gradient(180deg, oklch(0.56 0.01 90), oklch(0.39 0.01 90)); }
+.tile-5 { --px: 44%; --room: radial-gradient(circle at 14% 72%, oklch(0.47 0.1 145 / 0.9), transparent 28%), radial-gradient(circle at 88% 60%, oklch(0.42 0.08 150 / 0.7), transparent 24%), linear-gradient(200deg, oklch(0.37 0.05 150), oklch(0.24 0.03 160)); }
+.tile-6::before { background-image: none; }
+.tile-6 .avatar {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 84px; height: 84px;
+  margin: -42px 0 0 -42px;
+  border-radius: 50%;
+  background: oklch(0.44 0.05 300);
+  color: var(--scene-label);
+  font: 600 28px/84px var(--font-body);
+  text-align: center;
+}
+.tile .name {
+  position: absolute;
+  left: 12px; bottom: 12px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: oklch(0 0 0 / 0.55);
+  color: var(--scene-label);
+  font-size: 13px;
+  line-height: 17px;
+}
+.call-top {
+  position: absolute;
+  left: 40px; top: 28px;
+  color: var(--scene-label);
+  font-size: 14px;
+  line-height: 20px;
+  opacity: 0.8;
+}
+.call-bar {
+  position: absolute;
+  left: 50%; bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: oklch(0.2 0.008 250);
+}
+.call-bar i {
+  display: block;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  background: var(--scene-chrome);
+}
+.call-bar i.wide { width: 88px; border-radius: 21px; background: oklch(0.34 0.02 250); }
+.scrim { position: absolute; inset: 0; background: var(--scene-scrim); pointer-events: none; }
+
+/* ─── Two states, side by side ─────────────────────────────────── */
+.overlays {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: center;
+  justify-content: center;
+  gap: 56px;
+  padding: 64px var(--container-gutter-desktop);
+}
+.state { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+.state figcaption {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--muted);
+  padding: 0 2px;
+}
+
+/* ─── Overlay ──────────────────────────────────────────────────── */
+.overlay {
+  width: var(--overlay-w);
+  /* about a third of the screen, then scroll inside; floored so short preview panes stay readable */
+  max-height: max(calc(100vh / 3), 360px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elev-float);
+  font-size: var(--text-base);
+  line-height: 21px;
+}
+.ov-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The one thing: a hint or an answer. Kind is a mono label, never a color. */
+.hint { display: flex; flex-direction: column; gap: 6px; transition: opacity var(--motion-base) var(--ease-standard); }
+.hint.is-leaving { opacity: 0; }
+.hint.is-entering { opacity: 0; }
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--muted);
+}
+.kind {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 16px;
+  color: var(--meta);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+.source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.streaming {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--meta);
+  transition: opacity var(--motion-base) var(--ease-standard);
+}
+.hint-text { margin: 0; color: var(--fg); text-wrap: pretty; }
+.word { opacity: 0; transition: opacity var(--motion-base) var(--ease-standard); }
+.word.on { opacity: 1; }
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--fg);
+  animation: blink 1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Input row. Collapsed: one line and the hotkey. Expanded: two lines and the key hints. */
+.ask { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.ask-well {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  padding: 7px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: text;
+  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+.ask-well:hover { background: var(--surface-warm); }
+.ask-well:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); background: var(--surface-sunken); }
+.ask textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0; /* the well carries the one focus ring via :focus-within */
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 20px;
+  resize: none;
+  overflow: hidden;
+}
+.ask[data-state="expanded"] textarea { overflow: auto; }
+.ask textarea::placeholder { color: var(--meta); opacity: 1; }
+.key {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  color: var(--meta);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  white-space: nowrap;
+}
+.ask[data-state="expanded"] .hotkey { display: none; }
+.ask-hints {
+  display: none;
+  gap: 14px;
+  padding: 0 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  color: var(--meta);
+  transition: opacity var(--motion-base) var(--ease-standard);
+}
+.ask-hints span { display: inline-flex; align-items: center; gap: 6px; }
+.ask[data-state="expanded"] .ask-hints { display: flex; }
+
+/* Footer: live dot + word + elapsed, and the share-protection readout. */
+.ov-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--muted);
+}
+.live { display: inline-flex; align-items: center; gap: 7px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.timer, .readout {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--meta);
+  font-variant-numeric: tabular-nums;
+}
+.readout { margin-left: auto; }
+
+/* ─── Responsive / reduced motion ─────────────────────────────── */
+@media (max-width: 1000px) {
+  .call { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); }
+  .overlays { gap: 40px; padding: 48px var(--container-gutter-tablet); }
+}
+@media (max-width: 480px) {
+  .overlays { padding: 32px var(--container-gutter-phone); }
+  .overlay { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret { animation: none; }
+  .ask-well { transition-duration: 1ms; }
+}
+</style>
+</head>
+<body>
+<div class="stage" data-od-id="call-scene">
+  <div class="call" aria-hidden="true">
+    <div class="call-top">Architecture sync · 6 participants</div>
+    <div class="tile tile-1"><span class="name">Priya Natarajan</span></div>
+    <div class="tile tile-2"><span class="name">Tomas Kral</span></div>
+    <div class="tile tile-3"><span class="name">Lena Ostrowski</span></div>
+    <div class="tile tile-4"><span class="name">You</span></div>
+    <div class="tile tile-5"><span class="name">Marcus Hale</span></div>
+    <div class="tile tile-6"><span class="avatar">JR</span><span class="name">Jonah Reyes</span></div>
+    <div class="call-bar"><i></i><i></i><i></i><i></i><i></i><i class="wide"></i></div>
+  </div>
+  <div class="scrim"></div>
+
+  <main class="overlays">
+
+    <!-- State 1 · proactive hint, input collapsed -->
+    <figure class="state" data-od-id="overlay-state-hint">
+      <section class="overlay" data-od-id="overlay-hint-card" aria-label="Backchannel overlay">
+        <div class="ov-body">
+          <article class="hint" data-od-id="hint-history" aria-live="polite">
+            <div class="meta">
+              <span class="kind">history</span>
+              <span class="source" data-od-id="hint-source">Meeting 14 Aug, decision 3</span>
+            </div>
+            <p class="hint-text">Two weeks ago the team chose Kafka over RabbitMQ (ADR 0007). The speaker just proposed RabbitMQ for the auth-service queue.</p>
+          </article>
+          <form class="ask" data-state="collapsed" data-od-id="ask-row-collapsed">
+            <label class="ask-well">
+              <textarea rows="1" placeholder="Ask the agent" aria-label="Ask the agent"></textarea>
+              <kbd class="key hotkey">Ctrl+Space</kbd>
+            </label>
+            <div class="ask-hints"><span><kbd class="key">Enter</kbd> ask</span><span><kbd class="key">Esc</kbd> close</span></div>
+          </form>
+        </div>
+        <footer class="ov-foot" data-od-id="overlay-footer-hint">
+          <span class="live"><span class="dot" aria-hidden="true"></span>Listening</span>
+          <time class="timer" datetime="PT42M17S">00:42:17</time>
+          <span class="readout">share protection: on</span>
+        </footer>
+      </section>
+      <figcaption data-od-id="caption-hint">1 · Architecture Copilot · proactive hint, input collapsed</figcaption>
+    </figure>
+
+    <!-- State 2 · the hint has faded, the input is open, an answer is streaming -->
+    <figure class="state" data-od-id="overlay-state-answer">
+      <section class="overlay" data-od-id="overlay-answer-card" aria-label="Backchannel overlay, answering">
+        <div class="ov-body">
+          <article class="hint answer" data-od-id="answer-retries" aria-live="polite">
+            <div class="meta">
+              <span class="kind">answer</span>
+              <span class="source" data-od-id="answer-source">Meeting 14 Aug, decision 5</span>
+              <span class="streaming">streaming</span>
+            </div>
+            <p class="hint-text">Retries were settled in the same meeting as the Kafka decision: consumers retry three times with exponential backoff, starting at 500 ms and capped at 30 s. Anything still failing after the third attempt goes to a dead-letter topic and raises an alert instead of blocking the partition.<span class="caret" aria-hidden="true"></span></p>
+          </article>
+          <form class="ask" data-state="expanded" data-od-id="ask-row-expanded">
+            <label class="ask-well">
+              <textarea rows="2" placeholder="Ask the agent" aria-label="Ask the agent">what did we decide about retries?</textarea>
+              <kbd class="key hotkey">Ctrl+Space</kbd>
+            </label>
+            <div class="ask-hints"><span><kbd class="key">Enter</kbd> ask</span><span><kbd class="key">Esc</kbd> close</span></div>
+          </form>
+        </div>
+        <footer class="ov-foot" data-od-id="overlay-footer-answer">
+          <span class="live"><span class="dot" aria-hidden="true"></span>Listening</span>
+          <time class="timer" datetime="PT42M41S">00:42:41</time>
+          <span class="readout">share protection: on</span>
+        </footer>
+      </section>
+      <figcaption data-od-id="caption-answer">2 · same card 24 s later · hint faded out, question asked, answer streaming</figcaption>
+    </figure>
+
+  </main>
+</div>
+
+<script>
+(() => {
+  const DUR = 180;
+  const ANSWER = {
+    kind: 'answer',
+    source: 'Meeting 14 Aug, decision 5',
+    text: 'Retries were settled in the same meeting as the Kafka decision: consumers retry three times with exponential backoff, starting at 500 ms and capped at 30 s. Anything still failing after the third attempt goes to a dead-letter topic and raises an alert instead of blocking the partition.'
+  };
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Fade a block out, then take it out of flow. Height changes are instant; only opacity animates.
+  function fadeOut(el) {
+    return new Promise(resolve => {
+      if (!el || el.hidden) return resolve();
+      el.classList.add('is-leaving');
+      setTimeout(() => { el.hidden = true; resolve(); }, DUR + 20);
+    });
+  }
+
+  function streamAnswer(card, answer) {
+    const body = card.querySelector('.ov-body');
+    card.querySelectorAll('.answer').forEach(a => a.remove());
+
+    const block = document.createElement('article');
+    block.className = 'hint answer is-entering';
+    block.setAttribute('aria-live', 'polite');
+    block.innerHTML =
+      '<div class="meta"><span class="kind"></span><span class="source"></span><span class="streaming">streaming</span></div>' +
+      '<p class="hint-text"></p>';
+    block.querySelector('.kind').textContent = answer.kind;
+    block.querySelector('.source').textContent = answer.source;
+
+    const p = block.querySelector('.hint-text');
+    const words = answer.text.split(' ').map((w, i) => {
+      const s = document.createElement('span');
+      s.className = 'word';
+      s.textContent = (i ? ' ' : '') + w;
+      p.appendChild(s);
+      return s;
+    });
+    const caret = document.createElement('span');
+    caret.className = 'caret';
+    caret.setAttribute('aria-hidden', 'true');
+    p.appendChild(caret);
+
+    body.prepend(block);
+    requestAnimationFrame(() => block.classList.remove('is-entering'));
+
+    if (reduced) {
+      words.forEach(w => w.classList.add('on'));
+      finish();
+      return;
+    }
+    let i = 0;
+    const tick = setInterval(() => {
+      words[i++].classList.add('on');
+      if (i >= words.length) { clearInterval(tick); setTimeout(finish, 400); }
+    }, 42);
+
+    function finish() {
+      const label = block.querySelector('.streaming');
+      label.style.opacity = '0';
+      caret.style.transition = 'opacity ' + DUR + 'ms';
+      caret.style.opacity = '0';
+      setTimeout(() => { label.remove(); caret.remove(); }, DUR + 20);
+    }
+  }
+
+  document.querySelectorAll('.overlay').forEach(card => {
+    const form = card.querySelector('.ask');
+    const ta = form.querySelector('textarea');
+
+    const expand = () => { form.dataset.state = 'expanded'; ta.rows = 2; };
+    const collapse = () => { form.dataset.state = 'collapsed'; ta.rows = 1; ta.blur(); };
+
+    ta.addEventListener('focus', expand);
+    ta.addEventListener('blur', () => { if (!ta.value.trim()) collapse(); });
+    ta.addEventListener('keydown', async e => {
+      if (e.key === 'Escape') { e.preventDefault(); collapse(); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const q = ta.value.trim();
+        if (!q) return;
+        await fadeOut(card.querySelector('.hint:not(.answer)'));
+        streamAnswer(card, ANSWER);
+      }
+    });
+  });
+
+  // Hotkey: Ctrl+Space opens the input row of the first overlay.
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.code === 'Space') {
+      e.preventDefault();
+      const ta = document.querySelector('.overlay textarea');
+      if (document.activeElement === ta) ta.blur(); else ta.focus();
+    }
+  });
+})();
+</script>
+</body>
+</html>
