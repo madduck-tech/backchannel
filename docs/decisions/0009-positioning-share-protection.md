@@ -1,24 +1,25 @@
-# ADR 0009: Позиционирование — share protection, а не stealth
+# ADR 0009: Positioning — share protection, not stealth
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Overlay, исключённый из screen share (§9), реактивный вопрос «что ответить» (§8) и слово «интервью»
-в примерах агентов снаружи читаются как инструмент для обмана на интервью. Спека различает share protection
-и stealth, но внешняя аудитория читает README. Project Raven и NexQ открыто позиционируются как невидимые
-интервью-копилоты; рынок это терпит, но у обоих шлейф обвинений в читерстве.
+An overlay excluded from screen sharing (§9), the reactive "what should I answer" question (§8) and the word
+"interview" in the example agents read from the outside as a tool for cheating in interviews. The spec
+distinguishes share protection from stealth, but the outside audience reads the README. Project Raven and NexQ
+openly position themselves as invisible interview copilots; the market tolerates it, but both carry a trail
+of cheating accusations.
 
-## Решение
+## Decision
 
-1. **README получает абзац «что это и чем не является»:** копилот для собственных встреч пользователя;
-   share protection нужна, чтобы заметки не утекали при демонстрации экрана; это не невидимость
-   и не инструмент для прохождения чужих интервью.
-2. **Терминология.** В UI и документации только «share protection». Слова «stealth», «undetectable»,
-   «invisible» не используются. Это и технически честно: на Linux защиты нет (ADR 0005), на других ОС
-   она не абсолютна.
-3. **Примеры агентов** называются со стороны пользователя. «Java Interviewer» — сторона интервьюера,
-   остаётся. «Interview Copilot» и подобное в примерах и демо не появляется.
-4. **Демо и скриншоты** показывают архитектурную встречу или sales-звонок, не интервью.
-5. Функциональность продукта не ограничивается: «что ответить» остаётся, как требует спека.
+1. **The README gets a "what this is and what it is not" paragraph:** a copilot for the user's own meetings;
+   share protection exists so notes do not leak when the screen is shared; it is neither invisibility nor a tool
+   for passing someone else's interview.
+2. **Terminology.** Only "share protection" in the UI and docs. The words "stealth", "undetectable" and "invisible"
+   are not used. This is also technically honest: on Linux there is no protection (ADR 0005), and on other OSes
+   it is not absolute.
+3. **Example agents** are named from the user's side. "Java Interviewer" is the interviewer's side and stays.
+   "Interview Copilot" and the like do not appear in examples or demos.
+4. **Demos and screenshots** show an architecture meeting or a sales call, not an interview.
+5. Product functionality is not restricted: "what should I answer" stays, as the spec requires.

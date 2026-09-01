@@ -1,43 +1,43 @@
-# ADR 0006: Проактивный режим — механика уровней вмешательства
+# ADR 0006: Proactive mode — mechanics of the intervention levels
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Спека задаёт Low/Medium/High без отдельных triggers (§8) и требует, чтобы команды в сессии не меняли
-постоянную конфигурацию агента (§5). Runtime должен понимать, во что превращается уровень.
+The spec defines Low/Medium/High without separate triggers (§8) and requires that in-session commands
+do not change the agent's persistent configuration (§5). The runtime must know what a level turns into.
 
-Факт (2026-09-01): `llama-helper` создаёт новый `LlamaContext` на каждый запрос и не кеширует промпт.
-Для проактивности с локальной LLM это неприемлемо: каждая оценка заново обрабатывала бы весь транскрипт.
+Fact (2026-09-01): `llama-helper` creates a new `LlamaContext` per request and does not cache the prompt.
+For proactivity with a local LLM this is unacceptable: every evaluation would reprocess the whole transcript.
 
-## Решение
+## Decision
 
-1. **Триггер — событие, не таймер.** Оценка запускается после каждой законченной фразы (VAD-сегмент,
-   любой канал) при соблюдении минимального интервала. Сегменты не длиннее 8 с, границы приходят регулярно.
-2. **Один структурированный вызов.** Вход: цель и инструкции агента, контекст сессии, окно транскрипта
-   за последние минуты + сжатое резюме более раннего, фрагменты knowledge по последним фразам,
-   список уже показанных подсказок. Выход — JSON: `intervene`, `kind`, `confidence`, `text`, `source`.
-   Для локальных моделей формат фиксируется грамматикой llama.cpp.
-3. **Уровень = три ручки** (стартовые значения, скрыты в Advanced Settings):
+1. **The trigger is an event, not a timer.** Evaluation runs after every completed phrase (VAD segment,
+   any channel), subject to a minimum interval. Segments are at most 8 s, so boundaries arrive regularly.
+2. **One structured call.** Input: agent goal and instructions, session context, the transcript window for the
+   last minutes plus a compressed summary of earlier content, knowledge snippets for the latest phrases,
+   the list of hints already shown. Output — JSON: `intervene`, `kind`, `confidence`, `text`, `source`.
+   For local models the format is enforced with a llama.cpp grammar.
+3. **A level is three knobs** (starting values, hidden in Advanced Settings):
 
-   | Уровень | Порог confidence | Мин. интервал | Лимит / 10 мин | Типы |
+   | Level | Confidence threshold | Min interval | Cap / 10 min | Kinds |
    |---|---|---|---|---|
-   | Low | 0.85 | 60 с | 2 | contradiction, history, action |
-   | Medium | 0.7 | 30 с | 5 | + followup |
-   | High | 0.5 | 15 с | 10 | + answer («что сказать») |
+   | Low | 0.85 | 60 s | 2 | contradiction, history, action |
+   | Medium | 0.7 | 30 s | 5 | + followup |
+   | High | 0.5 | 15 s | 10 | + answer ("what to say") |
 
-4. **Защита от повторов.** Показанные подсказки возвращаются в контекст; кулдаун на пару (kind, source)
-   несколько минут; подсказка в overlay гаснет сама по таймеру.
-5. **Команды в сессии** садятся на те же ручки только для текущей сессии: «не вмешивайся» — intervene off;
-   «будь короче» — лимит длины; «копай тему X» — фокус в промпт и сниженный порог для X.
-6. **Reactive — тот же контур.** Вопрос по хоткею = триггер с принудительным ответом. Один runtime, два входа.
-7. **Обратная связь:** кнопка «не надо такого» поднимает порог для данного kind до конца сессии. Больше ничего.
-8. **Инкрементальный контекст LLM — подпункт Milestone 0 (п. 6).** Постоянный контекст с переиспользованием
-   KV-кеша (llama.cpp) либо llama-server с кешем промпта по слотам; каждая оценка обрабатывает только дельту.
-9. **Recommendation engine:** High + локальная LLM без GPU помечается «нужна GPU или облачная LLM».
-   Medium на CPU с кешем проверяется измерением из ADR 0003.
+4. **Repeat protection.** Shown hints go back into the context; cooldown on the (kind, source) pair for
+   several minutes; a hint in the overlay fades out on a timer.
+5. **In-session commands** act on the same knobs for the current session only: "don't interrupt" — intervene off;
+   "be shorter" — length cap; "dig into X" — focus in the prompt and a lowered threshold for X.
+6. **Reactive is the same loop.** A hotkey question is a trigger with a forced answer. One runtime, two entry points.
+7. **Feedback:** a "not this kind" button raises the threshold for that kind until the end of the session. Nothing more.
+8. **Incremental LLM context — Milestone 0 sub-item (item 6).** A persistent context with KV-cache reuse (llama.cpp)
+   or llama-server with a per-slot prompt cache; each evaluation processes only the delta.
+9. **Recommendation engine:** High plus a local LLM without a GPU is tagged "needs a GPU or a cloud LLM".
+   Medium on CPU with the cache is verified by the measurement from ADR 0003.
 
-## Не делаем в MVP
+## Not in the MVP
 
-Обучаемые пороги, отдельные triggers, персонализация сверх кнопки из п. 7.
+Learned thresholds, separate triggers, personalization beyond the button in item 7.

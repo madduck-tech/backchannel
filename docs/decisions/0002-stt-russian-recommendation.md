@@ -1,38 +1,38 @@
-# ADR 0002: STT для русского языка — список из каталога, рекомендация по языку встреч
+# ADR 0002: STT for Russian — catalog as is, recommendation by meeting language
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Спека требует русский язык, streaming, локальную работу и небольшой размер STT (§40) и называет
-Nemotron 3.5 ASR Streaming 0.6B как основной вариант. Milestone 0 (§36, п. 3) ставил риск
-«работает ли Nemotron или другой подходящий streaming STT».
+The spec requires Russian, streaming, local operation and a small STT model (§40) and names
+Nemotron 3.5 ASR Streaming 0.6B as the primary candidate. Milestone 0 (§36, item 3) framed the risk as
+"does Nemotron or another suitable streaming STT work".
 
-Проверено 2026-09-01 по карточкам моделей (transcribe.cpp и NVIDIA):
+Verified on 2026-09-01 from the model cards (transcribe.cpp and NVIDIA):
 
-- Nemotron 3.5 уже запускается через transcribe.cpp (GGUF на ggml, Metal/CUDA/Vulkan/ROCm/CPU).
-  Риск «как запустить NeMo из Rust на трёх ОС» снят фундаментом (ADR 0001).
-- Русский входит в ярус «transcription-ready». WER на FLEURS ru при заданном языке:
-  10.84 (чанк 80 мс), 9.87 (320 мс), 9.17 (1.12 с). Q8_0 = 716 MB. Лицензия OpenMDW-1.1.
-- GigaAM v3 (ai-sage, Сбер) есть в том же каталоге. e2e-rnnt: WER 5.36 на FLEURS ru, Q8_0 = 261 MB.
-  Только русский, только batch (сегменты до 25 с). Conversationaly уже умеет гонять batch-модели
-  в live-режиме через VAD-сегментацию (сегменты до 8 с), текст приходит фразами после паузы.
+- Nemotron 3.5 already runs through transcribe.cpp (GGUF on ggml, Metal/CUDA/Vulkan/ROCm/CPU).
+  The "how to run NeMo from Rust on three OSes" risk is removed by the foundation (ADR 0001).
+- Russian is in the "transcription-ready" tier. WER on FLEURS ru with the language given:
+  10.84 (80 ms chunk), 9.87 (320 ms), 9.17 (1.12 s). Q8_0 = 716 MB. License: OpenMDW-1.1.
+- GigaAM v3 (ai-sage, Sber) is in the same catalog. e2e-rnnt: WER 5.36 on FLEURS ru, Q8_0 = 261 MB.
+  Russian only, batch only (segments up to 25 s). Conversationaly already runs batch models live
+  via VAD segmentation (segments up to 8 s); text arrives per phrase after a pause.
 
-## Решение
+## Decision
 
-1. **Список моделей** — каталог transcribe.cpp как есть, пользователь выбирает любую. Отдельной работы нет.
-2. **Рекомендация зависит от языка встреч.** Мастер настройки при первом запуске спрашивает язык встреч.
-   - Русский: `Recommended` = `gigaam-v3-e2e-rnnt`; `nemotron-3.5-asr-streaming-0.6b-q8` помечается `Streaming`.
-   - Английский: остаётся дефолт Conversationaly, `parakeet-tdt-0.6b-v3-q8`.
-3. **Основание для маркеров** — цифры FLEURS из карточек моделей. Бенчмарк на реальных записях
-   в Milestone 0 не входит; делаем позже, только если захотим уточнить маркеры.
-4. **Смешанную речь (русский с английскими терминами) в MVP не закладываем** и не оптимизируем под неё.
-5. **Milestone 0, п. 3** переформулируется: в раздельном пайплайне YOU/OTHERS работают оба пути —
-   streaming (Nemotron) и VAD-сегментный (GigaAM). Оба пути уже есть в Conversationaly, но на смешанном потоке.
+1. **Model list** — the transcribe.cpp catalog as is; the user picks any model. No extra work.
+2. **The recommendation depends on the meeting language.** The Setup Master asks for it on first launch.
+   - Russian: `Recommended` = `gigaam-v3-e2e-rnnt`; `nemotron-3.5-asr-streaming-0.6b-q8` is tagged `Streaming`.
+   - English: Conversationaly's default stays, `parakeet-tdt-0.6b-v3-q8`.
+3. **Basis for the markers** — FLEURS numbers from the model cards. A benchmark on real recordings
+   is not part of Milestone 0; do it later only if we want to refine the markers.
+4. **Mixed speech (Russian with English terms) is out of scope for the MVP** and not optimized for.
+5. **Milestone 0, item 3** is reworded: both paths work in the split YOU/OTHERS pipeline —
+   streaming (Nemotron) and VAD-segmented (GigaAM). Both paths exist in Conversationaly, but on the mixed stream.
 
-## Последствия
+## Consequences
 
-- Пословный стриминг перестаёт быть обязательным: подсказки копилота считаются по законченным фразам,
-  transcript по спеке не главный интерфейс (§9–10).
-- Лицензия GigaAM v3 не проверялась; проверить перед релизом.
+- Word-by-word streaming is no longer mandatory: copilot hints are computed on completed phrases,
+  and the transcript is not the primary UI per the spec (§9–10).
+- The GigaAM v3 license was not checked; verify before release.

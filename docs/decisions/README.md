@@ -1,19 +1,19 @@
 # Architecture Decision Records
 
-| № | Решение | Статус |
+| # | Decision | Status |
 |---|---|---|
-| [0001](0001-foundation-conversationaly-fork.md) | Фундамент: hard fork Conversationaly в `madduck-tech/backchannel` | принято |
-| [0002](0002-stt-russian-recommendation.md) | STT для русского: каталог как есть, рекомендация по языку встреч | принято |
-| [0003](0003-two-stt-streams-resource-budget.md) | Два STT-потока: экземпляры моделей и бюджет ресурсов | принято |
-| [0004](0004-echo-cancellation-scope.md) | Эхо: без AEC в MVP, предупреждение о динамиках, gate по остатку времени | принято |
-| [0005](0005-platform-support-tiers.md) | Уровни поддержки платформ, разработка только на Linux | принято |
-| [0006](0006-proactive-mode-design.md) | Проактивный режим: механика уровней | принято |
-| [0007](0007-observation-schema-versioning.md) | Версионирование схемы observations | принято |
-| [0008](0008-latency-targets.md) | Целевые latency Milestone 0 и способ измерения | принято |
-| [0009](0009-positioning-share-protection.md) | Позиционирование: share protection, а не stealth | принято |
+| [0001](0001-foundation-conversationaly-fork.md) | Foundation: hard fork of Conversationaly at `madduck-tech/backchannel` | accepted |
+| [0002](0002-stt-russian-recommendation.md) | STT for Russian: catalog as is, recommendation by meeting language | accepted |
+| [0003](0003-two-stt-streams-resource-budget.md) | Two STT streams: model instances and resource budget | accepted |
+| [0004](0004-echo-cancellation-scope.md) | Echo: no AEC in the MVP, speaker warning, gate if time permits | accepted |
+| [0005](0005-platform-support-tiers.md) | Platform support tiers; development on Linux only | accepted |
+| [0006](0006-proactive-mode-design.md) | Proactive mode: mechanics of the intervention levels | accepted |
+| [0007](0007-observation-schema-versioning.md) | Versioning of the observation schema | accepted |
+| [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted |
+| [0009](0009-positioning-share-protection.md) | Positioning: share protection, not stealth | accepted |
+| [0010](0010-project-language-english.md) | The project language is English | accepted |
 
-## Отложенные вопросы
+## Deferred questions
 
-- **Embeddings в MVP.** Knowledge требует индексации, значит дефолтная embedding-модель нужна даже если
-  пользователь о ней не знает. Спека откладывает выбор embeddings (§18). Решение отложено 2026-09-01:
-  вернуться при проектировании Knowledge/RAG.
+- **Embeddings in the MVP.** Knowledge requires indexing, so a default embedding model is needed even if the user
+  never sees it. The spec defers the embeddings choice (§18). Deferred on 2026-09-01: revisit when designing Knowledge/RAG.

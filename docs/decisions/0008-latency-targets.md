@@ -1,35 +1,35 @@
-# ADR 0008: Целевые latency для Milestone 0 и способ измерения
+# ADR 0008: Latency targets for Milestone 0 and how to measure them
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Milestone 0 (§36, п. 8) требует «ответ с приемлемой latency» без числа. Подсказка в живом разговоре
-старше ~10 с бесполезна. В форке VAD закрывает сегмент через 2000 мс тишины (`redemption_time`) —
-правильно для записи, лишняя мёртвая задержка для копилота.
+Milestone 0 (§36, item 8) requires "an answer with acceptable latency" without a number. A hint older than
+~10 s in a live conversation is useless. In the fork VAD closes a segment after 2000 ms of silence
+(`redemption_time`) — right for recording, dead delay for a copilot.
 
-Оценка цепочки проактивной подсказки (русский дефолт, GigaAM, инкрементальный контекст LLM по ADR 0006),
-от конца фразы до overlay:
+Estimated chain for a proactive hint (Russian default, GigaAM, incremental LLM context per ADR 0006),
+from end of phrase to overlay:
 
-| Этап | Облачная LLM | Локальная LLM, GPU | Локальная LLM, CPU |
+| Stage | Cloud LLM | Local LLM, GPU | Local LLM, CPU |
 |---|---|---|---|
-| VAD закрывает сегмент | 0.7 с | 0.7 с | 0.7 с |
-| STT декодирует сегмент | 0.5 с | 0.5 с | 0.5 с |
-| LLM: дельта промпта + JSON ~60 токенов | 1.5 с | 1.5 с | 5 с |
-| Итого | ~3 с | ~3 с | ~6–7 с |
+| VAD closes the segment | 0.7 s | 0.7 s | 0.7 s |
+| STT decodes the segment | 0.5 s | 0.5 s | 0.5 s |
+| LLM: prompt delta + JSON of ~60 tokens | 1.5 s | 1.5 s | 5 s |
+| Total | ~3 s | ~3 s | ~6–7 s |
 
-## Решение
+## Decision
 
-1. **VAD в режиме встречи:** `redemption_time` = 700 мс (вместо 2000). Дробление фраз допустимо,
-   транскрипт склеивается на уровне текста.
-2. **Overlay стримит токены** ответа; воспринимаемая задержка = первый токен.
-3. **Критерии Milestone 0, p95 на минимальной машине (ADR 0003: 4 ядра, 8 GB, без GPU):**
-   - Реактивный ответ по хоткею: первый токен ≤ 2 с; полный ответ ≤ 4 с (облако) / ≤ 6 с (локальный CPU).
-   - Проактивная подсказка на Medium: конец фразы → экран ≤ 4 с (облако или GPU) / ≤ 8 с (локальный CPU).
-   - Транскрипт: streaming-частичный текст ≤ 1 с; закреплённый сегмент ≤ 2 с после конца речи.
-   - STT не отстаёт от realtime: отставание ≤ 5 с p95; лимит выброса 30 с не достигается.
-4. **Измерение.** Шесть меток времени на событие: аудио вошло, VAD закрыл, STT закрепил, LLM запрошена,
-   первый токен, overlay отрисован. Лог событий, отчёт Milestone 0 с p50/p95.
-5. **Эмуляция минимальной машины** на машине разработки (16 ядер, 30 GB):
-   `systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`. Цифры без ограничения не принимаются.
+1. **VAD in meeting mode:** `redemption_time` = 700 ms (instead of 2000). Phrase splitting is acceptable;
+   the transcript is merged at the text level.
+2. **The overlay streams answer tokens**; perceived latency equals the first token.
+3. **Milestone 0 criteria, p95 on the minimum machine (ADR 0003: 4 cores, 8 GB, no GPU):**
+   - Reactive answer via hotkey: first token ≤ 2 s; full answer ≤ 4 s (cloud) / ≤ 6 s (local CPU).
+   - Proactive hint at Medium: end of phrase → screen ≤ 4 s (cloud or GPU) / ≤ 8 s (local CPU).
+   - Transcript: streaming partial text ≤ 1 s; committed segment ≤ 2 s after end of speech.
+   - STT keeps up with realtime: backlog ≤ 5 s p95; the 30 s drop cap is never reached.
+4. **Measurement.** Six timestamps per event: audio in, VAD closed, STT committed, LLM requested,
+   first token, overlay painted. Event log; Milestone 0 report with p50/p95.
+5. **Emulating the minimum machine** on the development machine (16 cores, 30 GB):
+   `systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`. Numbers without the limit are not accepted.

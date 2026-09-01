@@ -1,40 +1,41 @@
-# ADR 0005: Уровни поддержки платформ и среда разработки
+# ADR 0005: Platform support tiers and development environment
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Спека требует Windows/macOS/Linux (§45) и overlay с always-on-top, хоткеями и share protection (§9).
-Разработка ведётся на одной машине: Ubuntu, GNOME 46, Wayland, PipeWire 1.0.5. Mac недоступен.
+The spec requires Windows/macOS/Linux (§45) and an overlay with always-on-top, hotkeys and share protection (§9).
+Development happens on a single machine: Ubuntu, GNOME 46, Wayland, PipeWire 1.0.5. No Mac is available.
 
-Факты (2026-09-01):
+Facts (2026-09-01):
 
-- **macOS.** Дефолтный бэкенд системного звука в форке — Core Audio process tap (разрешение «Audio capture»,
-  macOS 14.4+), ScreenCaptureKit — фолбэк. Overlay, always-on-top, content protection, глобальные хоткеи — штатно в Tauri.
-- **Windows.** WASAPI loopback через cpal в форке. Content protection в Tauri работает только вызовом в рантайме
-  после создания окна, флаг конфига там не действует.
+- **macOS.** The fork's default system audio backend is a Core Audio process tap ("Audio capture" permission,
+  macOS 14.4+); ScreenCaptureKit is the fallback. Overlay, always-on-top, content protection and global hotkeys
+  are supported by Tauri natively.
+- **Windows.** WASAPI loopback via cpal in the fork. Content protection in Tauri works only as a runtime call
+  after window creation; the config flag has no effect there.
 - **Linux.**
-  - Системный звук в форке ищет ALSA-устройства со словом `monitor` через cpal; на PipeWire-системах таких нет
-    (проверено: ALSA отдаёт только `pipewire`, `default`, железо). Путь фактически не работает.
-  - Always-on-top: tao — «Wayland: Unsupported»; GNOME не реализует layer-shell.
-  - Content protection: не поддерживается.
-  - Глобальные хоткеи: crate `global-hotkey` — только X11; портал GlobalShortcuts в GNOME 46 отсутствует.
-  - В сессии «Ubuntu on Xorg» always-on-top и хоткеи работают, share protection — нет.
+  - The fork's system audio looks for ALSA devices with `monitor` in the name via cpal; on PipeWire systems
+    there are none (verified: ALSA exposes only `pipewire`, `default` and hardware). The path effectively does not work.
+  - Always-on-top: tao documents "Wayland: Unsupported"; GNOME does not implement layer-shell.
+  - Content protection: unsupported.
+  - Global hotkeys: the `global-hotkey` crate is X11 only; the GlobalShortcuts portal is absent in GNOME 46.
+  - In an "Ubuntu on Xorg" session always-on-top and hotkeys work; share protection does not.
 
-## Решение
+## Decision
 
-1. **Уровни поддержки.** macOS и Windows — полный overlay. Linux — полный звук и копилот; overlay обычным окном
-   на Wayland, хоткеи и always-on-top только в X11-сессии, share protection отсутствует.
-   Так и пишем в README; Мастер настройки определяет тип сессии и сообщает об этом сразу.
-2. **Milestone 0, п. 1** получает подпункт: системный звук на Linux через PulseAudio-протокол
-   (`libpulse-binding` через pipewire-pulse / PulseAudio, открываем `<sink>.monitor`).
-   Нативный `pipewire` crate — альтернатива, если libpulse окажется недостаточно. Без этого Linux не проходит Milestone 0.
-3. **macOS:** оставляем Core Audio tap по умолчанию с фолбэком на ScreenCaptureKit.
-4. **Windows:** content protection включается в рантайме.
-5. **Среда разработки — только эта Linux-машина.** Следствия:
-   - Milestone 0 проходится сначала на Linux; overlay разрабатывается в Xorg-сессии.
-   - macOS и Windows в Milestone 0 проверяются только сборкой в CI. Ручная проверка звука и overlay на них
-     откладывается до появления доступа к машинам (виртуалка для Windows, чужой Mac или CI с самостоятельным
-     smoke-тестом позже).
-   - Платформо-специфичный код для macOS/Windows пишется вслепую и помечается как непроверенный.
+1. **Support tiers.** macOS and Windows: full overlay. Linux: full audio and copilot; the overlay is a normal
+   window on Wayland, hotkeys and always-on-top only in an X11 session, no share protection.
+   Stated as such in the README; the Setup Master detects the session type and says so immediately.
+2. **Milestone 0, item 1** gains a sub-item: Linux system audio via the PulseAudio protocol
+   (`libpulse-binding` through pipewire-pulse / PulseAudio, opening `<sink>.monitor`).
+   The native `pipewire` crate is the alternative if libpulse proves insufficient. Without this, Linux does not pass Milestone 0.
+3. **macOS:** keep the Core Audio tap as the default with ScreenCaptureKit as fallback.
+4. **Windows:** content protection is enabled at runtime.
+5. **The development environment is this Linux machine only.** Consequences:
+   - Milestone 0 is passed on Linux first; the overlay is developed in an Xorg session.
+   - macOS and Windows are verified in Milestone 0 by CI builds only. Manual verification of audio and overlay
+     on them is postponed until machines are available (a Windows VM, a borrowed Mac, or a self-contained
+     smoke test in CI later).
+   - Platform-specific code for macOS/Windows is written blind and marked as unverified.

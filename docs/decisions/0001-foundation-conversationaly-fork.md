@@ -1,49 +1,48 @@
-# ADR 0001: Фундамент приложения — hard fork Conversationaly
+# ADR 0001: Application foundation — hard fork of Conversationaly
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Спека (`realtime-meeting-copilot-mvp-spec.md`, §32–35) требует не писать desktop/audio/STT plumbing с нуля,
-а взять существующий OSS meeting stack и надстроить над ним agent-platform слой.
-Кандидаты проверены 2026-09-01: Conversationaly, Meetily, Project Raven, NexQ, Vexa Desktop.
+The product spec (§32–35) requires not writing desktop/audio/STT plumbing from scratch: take an existing
+open-source meeting stack and build the agent-platform layer on top of it.
+Candidates evaluated on 2026-09-01: Conversationaly, Meetily, Project Raven, NexQ, Vexa Desktop.
 
-## Решение
+## Decision
 
-Базой становится **hard fork `bykof/conversationaly`** (MIT).
-Форк создан 2026-09-01 как GitHub fork в организации `madduck-tech`: https://github.com/madduck-tech/backchannel
-(ветка `main`, public). Meetily напрямую не форкаем. Raven, NexQ и Vexa Desktop используем только как reference.
+The base is a **hard fork of `bykof/conversationaly`** (MIT).
+Created on 2026-09-01 as a GitHub fork in the `madduck-tech` organization: https://github.com/madduck-tech/backchannel
+(branch `main`, public). We do not fork Meetily directly. Raven, NexQ and Vexa Desktop are used as references only.
 
-## Почему
+## Why
 
-- Conversationaly сам является hard fork Meetily (`Zackriya-Solutions/meeting-minutes`, MIT) с точки 2026-06-05,
-  разошёлся с ним на ~58k удалённых строк. Из него уже убраны Python backend, платная лицензия, телеметрия
-  и дублирующие STT-движки. Апстрим Meetily тянуть обратно всё равно нереально.
-- Единый STT-рантайм transcribe.cpp (MIT, GGUF на ggml) с каталогом ~85 моделей, включая
-  `nemotron-3.5-asr-streaming-0.6b` (streaming, в метаданных есть `ru-RU`) и GigaAM v3.
-- Встроенный llama.cpp sidecar, SQLite через sqlx с миграциями, CI на macOS/Windows/Linux,
-  сборки под Metal/CUDA/Vulkan/ROCm, VAD, шумоподавление, обработка устройств и разрешений.
-- Вся цепочка лицензий MIT: Conversationaly → Meetily, transcribe.cpp, llama.cpp.
+- Conversationaly is itself a hard fork of Meetily (`Zackriya-Solutions/meeting-minutes`, MIT) from 2026-06-05,
+  diverged by ~58k deleted lines. The Python backend, paid licensing, telemetry and duplicate STT engines are
+  already removed. Pulling Meetily upstream back in is unrealistic anyway.
+- A single STT runtime, transcribe.cpp (MIT, GGUF on ggml), with a catalog of ~85 models including
+  `nemotron-3.5-asr-streaming-0.6b` (streaming, `ru-RU` in its metadata) and GigaAM v3.
+- Bundled llama.cpp sidecar, SQLite via sqlx with migrations, CI for macOS/Windows/Linux,
+  Metal/CUDA/Vulkan/ROCm builds, VAD, noise suppression, device and permission handling.
+- The whole license chain is MIT: Conversationaly → Meetily, transcribe.cpp, llama.cpp.
 
-## Что фундамент НЕ даёт (наша работа)
+## What the foundation does NOT provide (our work)
 
-- Микрофон и системный звук смешиваются до STT (`pipeline.rs`). Раздельные потоки YOU/OTHERS нужно строить самим.
-- transcribe.cpp допускает одну активную сессию на загруженную модель: два потока = две загруженные модели.
-- Нет overlay, content protection, хоткеев.
-- LLM используется только после встречи; realtime-контура нет.
-- Нет echo cancellation, RAG, MCP, агентов.
-- Linux system audio держится на эвристике поиска PulseAudio `monitor`-источников через cpal/ALSA.
+- Microphone and system audio are mixed before STT (`pipeline.rs`). Separate YOU/OTHERS streams must be built by us.
+- transcribe.cpp allows one active session per loaded model: two streams = two loaded models.
+- No overlay, content protection or hotkeys.
+- The LLM is used only after the meeting; there is no realtime loop.
+- No echo cancellation, RAG, MCP or agents.
+- Linux system audio relies on a heuristic search for PulseAudio `monitor` sources via cpal/ALSA.
 
-## Риски
+## Risks
 
-- Bus factor 1 и у Conversationaly, и у transcribe.cpp. Ревизии пинуем, при необходимости вендорим.
-- Conversationaly существует три недели (первый коммит форка 2026-08-06); возможна заброшенность.
-  Для hard fork это приемлемо.
+- Bus factor of 1 for both Conversationaly and transcribe.cpp. Pin revisions; vendor if needed.
+- Conversationaly is three weeks old (first fork commit 2026-08-06) and may be abandoned. Acceptable for a hard fork.
 
-## Reference-проекты
+## Reference projects
 
-- `Laxcorp-Research/project-raven` (MIT, Electron): dual streams YOU/THEM, WebRTC AEC3 + residual echo gate,
-  overlay с content protection, детект встречи по заголовкам окон, локальный RAG, «спроси по всем встречам».
-- `naxhq/NexQ` (MIT, Tauri): конфигурация overlay-окна в Tauri, dual-party capture на Rust. Только Windows.
-- `Vexa-ai/vexa-desktop` (MIT/Apache-2): таблица захвата звука по ОС. Ценность низкая.
+- `Laxcorp-Research/project-raven` (MIT, Electron): dual YOU/THEM streams, WebRTC AEC3 + residual echo gate,
+  content-protected overlay, meeting detection by window titles, local RAG, "ask across meetings".
+- `naxhq/NexQ` (MIT, Tauri): overlay window configuration in Tauri, dual-party capture in Rust. Windows only.
+- `Vexa-ai/vexa-desktop` (MIT/Apache-2): per-OS audio capture table. Low value.

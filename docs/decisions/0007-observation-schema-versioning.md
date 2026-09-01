@@ -1,19 +1,20 @@
-# ADR 0007: Версионирование схемы structured observations
+# ADR 0007: Versioning of the structured observation schema
 
-Дата: 2026-09-01
-Статус: принято
+Date: 2026-09-01
+Status: accepted
 
-## Контекст
+## Context
 
-Схема observations агента создаётся и меняется через чат (§12). После накопления встреч пользователь
-добавляет или убирает поле; старые встречи новых полей не имеют. Аналитика по серии встреч (§13)
-должна работать с разнородными записями.
+An agent's observation schema is created and changed through chat (§12). After meetings accumulate,
+the user adds or removes a field; older meetings lack the new fields. Analytics across a series of
+meetings (§13) must work with heterogeneous records.
 
-## Решение
+## Decision
 
-- У агента хранится текущая схема с номером версии; каждое изменение через чат — новая версия, старые сохраняются.
-- Каждая встреча хранит observations вместе с номером версии схемы, по которой они извлечены.
-- Аналитика читает встречи как есть: отсутствующее поле = `null`, а не ошибка. Промпт аналитики получает
-  все версии схемы, встречающиеся в выборке, чтобы модель понимала, почему у части встреч поля нет.
-- Миграцию старых встреч под новую схему в MVP не делаем. Позже это можно предложить как действие
-  «пере-извлечь по новой схеме» с подтверждением, транскрипты для этого сохраняются.
+- The agent stores its current schema with a version number; every change through chat creates a new version,
+  and old versions are kept.
+- Every meeting stores its observations together with the schema version they were extracted with.
+- Analytics reads meetings as they are: a missing field is `null`, not an error. The analytics prompt receives
+  every schema version present in the selection so the model understands why some meetings lack a field.
+- No migration of old meetings to a new schema in the MVP. Later it can be offered as a
+  "re-extract with the new schema" action with confirmation; transcripts are kept for that purpose.
