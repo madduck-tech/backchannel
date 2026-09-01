@@ -1,7 +1,7 @@
 # ADR 0012: Development workflow
 
 Date: 2026-09-01
-Status: accepted
+Status: accepted; cycle structure superseded by ADR 0013
 
 ## Context
 

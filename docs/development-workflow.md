@@ -1,130 +1,82 @@
 # Development workflow
 
-How Backchannel is built: who decides, how decisions are recorded, how UI is designed, how code
-lands, how a milestone is verified, and what needs the maintainer's explicit approval.
-Changes to this document go through an ADR.
+One cycle for every change. Every step leaves a trace in the GitHub issue, so the issue is the
+record and `main` never disagrees with it.
 
-## Roles
+## The cycle
 
-- **Maintainer.** Owns product and design decisions, approves designs and merges, releases.
-- **Claude Code** (and any other coding agent). Primary implementer. Works from ADRs and this
-  document, reports outcomes faithfully, and stops at the approval gates below.
-- **Contributors.** Welcome. Follow the same cycles; product decisions still go through an ADR.
+1. **Issue.** Every change starts as a GitHub issue using the "Work item" template. Its one
+   mandatory field is *what would settle it*: the observation that decides the issue is done,
+   stated so it could come back negative. An issue without it is not ready to be worked.
+2. **Critic.** `gopnik-critic` attacks the issue: the diagnosis, the scope, the oracle. Its
+   verdict (`CONTINUE`, `REVISE`, `BLOCK`) is posted as a comment. `CONTINUE` adds the `ready`
+   label; `REVISE` means the issue is rewritten before any work; `BLOCK` means it is closed or
+   split. The critic and the implementer are the same model, so the maintainer's `ready` is the
+   real gate: the maintainer may override any verdict with a comment saying why, and that
+   comment, not the verdict, is the record.
+3. **Design, when the issue adds a screen or changes a layout** (label `ui`; a new button label
+   or a field in an existing form is not design). Prototype variants are made in OpenDesign
+   against the `backchannel` design system. The maintainer picks one in Studio or from screenshots; the
+   chosen variant is linked in the issue and, once approved, committed to `design/prototypes/`.
+   No implementation starts before the pick.
+4. **Implementation** on a branch from `main`. The Stage 0 matrix from the `gopnik` skill is
+   posted to the issue before the first commit.
+5. **Gate.** `gopnik` attacks the finished change: Stage 1 against the repository, Stage 2 across
+   the delivery boundary, with proof that a load-bearing check can fail. The verdict and its
+   evidence are posted to the issue. `NOT READY` means fix and a fresh round on the new revision.
+   Stage 2 for this product is the built application on a clean profile: UI flows are driven
+   with the `computer-use` skill (real window, accessibility tree, screenshots); audio flows use
+   the PipeWire virtual-device harness (a null sink fed with a recording as the system channel,
+   a virtual source as the microphone). Until the harness exists, audio verdicts are narrowed and
+   name what is not proven; merging on a narrowed verdict is the maintainer's per-issue decision,
+   recorded as a comment.
+6. **Pull request** with `Closes #N` and a link to the verdict. The maintainer merges; the merge
+   closes the issue.
 
-Design discussion between maintainer and agent may happen in any language. Everything that
-lands in the repository is in English (ADR 0010).
+That is the whole cycle. It applies to every executable change without exception; waiting longer
+for a verified change is the accepted cost. Documentation-only changes skip steps 2–5 and go
+straight to `main`.
 
-## Cycle 1 — Decide (ADRs)
+## Decisions
 
-An Architecture Decision Record is required for anything that changes architecture, product
-scope, product rules, platform support, tooling, or this workflow. Small implementation choices
-do not need one; a decision that someone would otherwise have to rediscover from code does.
+A decision that someone would otherwise have to rediscover from code is recorded as an ADR in
+`docs/decisions/` (Context, Decision, Consequences; row in the index; supersede, never rewrite).
+An ADR is not a step of the cycle; it is written when the cycle produces such a decision.
 
-1. Discuss until the decision is clear. One question at a time.
-2. Write `docs/decisions/NNNN-slug.md`: Context (facts, with dates), Decision (numbered),
-   Consequences. Status: `accepted`, later `superseded by NNNN` if replaced. Never edit an
-   accepted decision's substance; write a new ADR that supersedes it.
-3. Add the row to `docs/decisions/README.md`. Deferred questions live in its "Deferred" section.
-4. Commit with `docs:` and push. ADRs may go straight to `main`.
+## Conventions
 
-## Cycle 2 — Design (UI/UX)
-
-The design system is the package in `design/backchannel/` (ADR 0011). OpenDesign is the
-prototyping tool, not the source of truth and not a code generator.
-
-1. **Define the screen** first: which of the five product moments it serves (create an agent,
-   start a meeting, get useful help, save a structured result, ask across meetings), what it
-   shows, what it must never show. This usually already exists in the spec or an ADR.
-2. **Prototype in OpenDesign** against the `backchannel` design system. The agent starts the
-   run over MCP (`start_run` with `project: "backchannel-prototypes"`) or the maintainer works
-   in Studio. Iterate in Studio chat; each iteration is minutes.
-3. **Approval gate.** The maintainer looks at the prototype (Studio, or a screenshot the agent
-   sends) and says yes or what to change. Nothing moves further without the yes.
-4. **Record.** The approved HTML goes to `design/prototypes/` with a row in its README, committed
-   with `design:`.
-5. **Implement** in the app (Tauri + React + Tailwind). Token names match between prototype and
-   app (`var(--accent)` in the prototype is `bg-brand` in code), so the port is mechanical.
-   The prototype is a reference, never copied as-is.
-6. **Verify in the running app.** The agent runs the app, captures a screenshot, and compares
-   it with the prototype; the maintainer reviews the real screen.
-
-Rules:
-
-- A change to the design system itself (a token, a component rule, a surface constraint) is one
-  commit touching all three: `design/backchannel/DESIGN.md`, `design/backchannel/tokens.css`,
-  `frontend/src/app/globals.css`.
-- Prototype only where there is design risk: My Agents home, agent chat + card, Setup Master,
-  Meeting Review, overlay. Settings forms, lists and dialogs are built directly from shadcn
-  primitives under `DESIGN.md` rules.
-- Prototype key states, not every state.
-- Never ask OpenDesign for React code; its output is HTML.
-- Terminology from ADR 0009 applies to every prototype and every screen.
-
-## Cycle 3 — Build (code)
-
-- **Branches.** `main` is the only long-lived branch and must always build. Work on short-lived
-  branches from `main`. The former `devtest` branch convention from upstream is retired.
-- **What may go straight to `main`:** docs, ADRs, design-system files and approved prototypes,
-  CI fixes, and trivial changes (typos, comments, one-line fixes with no behavior change).
-- **What goes through a pull request:** everything else, and always anything touching the audio
-  pipeline, transcription, the LLM runtime, storage schema and migrations, platform-specific
-  capture code, or the overlay. The maintainer merges. A PR description states what changed,
-  why, how it was verified, and what was not verified.
-- **Commits.** Conventional style: `feat`, `fix`, `docs`, `design`, `refactor`, `test`, `chore`,
-  `ci`, with an optional scope, e.g. `feat(audio): split mic and system streams`. Subject in the
-  imperative, body explains why. Commits made with an agent carry its trailer.
-- **Tests.** Logic in the Rust core gets unit tests; the transcription layer is a port with
-  adapters on purpose, keep it testable with fakes. Frontend logic in `frontend/tests`. CI must
-  be green before merge.
-- **Platform code.** macOS and Windows paths are written blind on Linux (ADR 0005). Such code is
-  marked unverified in the PR and in a comment until someone runs it on the platform.
-- **Dependencies.** A new crate or npm package is called out in the PR with its license and why
-  it is needed. Pin git dependencies to a revision.
-- **Upstream.** `upstream` points at Conversationaly with push disabled. Cherry-pick individual
-  fixes when useful; never merge upstream wholesale.
-
-## Cycle 4 — Verify (milestones)
-
-A milestone closes on measured numbers, not on "it works".
-
-1. Its criteria come from ADRs (Milestone 0: ADR 0002, 0003, 0005, 0008) and are listed in
-   `docs/milestones/<name>.md` before work starts.
-2. Measurements run on the emulated minimum machine (ADR 0003, ADR 0008): 4 cores, 8 GB, no GPU,
-   via `systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`. Numbers without the limit are not
-   accepted.
-3. The report in the same file lists p50 and p95 per criterion, the hardware, the models used,
-   and what was skipped or failed. Failed criteria stay listed as failed; the milestone is not
-   closed by narrowing it.
-4. The maintainer closes the milestone.
-
-## Cycle 5 — Ship (releases)
-
-Not before Milestone 0 closes. When it does: a tag triggers the inherited release workflow that
-builds the installers; release notes in English list user-visible changes and known platform
-gaps (ADR 0005). Unsigned builds are documented as such.
+- **Language.** Everything in the repository, the issues and the pull requests is in English
+  (ADR 0010).
+- **Branches.** `main` is the only long-lived branch and must always build. Work happens on
+  short-lived branches; upstream's `devtest` convention is retired.
+- **Commits.** `feat|fix|docs|design|refactor|test|chore|ci(scope): subject`, imperative subject,
+  body says why. Agent commits carry the `Co-Authored-By` trailer.
+- **Platform code.** macOS and Windows paths are written blind on Linux (ADR 0005); they are
+  marked unverified in code and in the pull request, and the gate's verdict names them as not
+  proven. The release criterion accepts this explicitly: Linux proven end to end, macOS and
+  Windows built in CI and documented as unverified.
+- **What the cycle does not measure.** The critic and the gate prove that a change works, not
+  that the copilot is useful. Hint quality needs its own evaluation harness (a transcript set
+  and a scoring pass); it is a future issue, not a step of this cycle.
+- **Design system.** A change to a token or a component rule touches `design/backchannel/DESIGN.md`,
+  `design/backchannel/tokens.css` and `frontend/src/app/globals.css` in one commit.
+- **Dependencies.** A new crate or package is called out in the pull request with its license.
+  Git dependencies are pinned to a revision.
+- **Milestones.** A milestone is a set of issues. Its report in `docs/milestones/` is assembled
+  from their verdicts and the measurements they carry (ADR 0008). The maintainer closes it.
 
 ## Approval gates
 
-The agent proceeds on its own for everything that follows from an accepted ADR or an approved
-design and is reversible. It stops and asks before:
+The agent proceeds on its own inside the cycle. It stops and asks before: merging a pull
+request; releasing or anything else outward-facing; rewriting history, deleting branches or
+data; renaming the app or storage keys; adding a dependency that changes the license chain or a
+platform build; committing a prototype or design-system change the maintainer has not seen;
+changing an issue's scope after the critic accepted it.
 
-- merging a pull request, releasing, or anything else outward-facing (organization settings,
-  publishing, external services);
-- rewriting history, deleting branches or data, or force-pushing;
-- renaming the app, storage keys, bundle identifiers, or other rebrand steps;
-- adding a runtime dependency that affects the license chain or the build on any platform;
-- committing a prototype or a design-system change that the maintainer has not seen;
-- narrowing or widening scope relative to an ADR.
+## Tooling
 
-## Definition of done
-
-A task is done when: the change is implemented and pushed; logic has tests; docs and ADRs are
-updated where the change affects them; a UI change has been seen in the running app; the commit
-or PR says what was verified and what was not. Anything skipped is stated, not implied.
-
-## Agent session checklist
-
-At the start of a session an agent reads, in this order: `CLAUDE.md`, this file,
-`docs/decisions/README.md`. It writes decisions into ADRs, not into chat history. It never
-shadows `/usr/bin/od`; OpenDesign is driven through `opendesign` (daemon on 7456, web UI on 5175)
-or the `open-design` MCP server.
+- **Gopnik** (`.claude/skills/gopnik*`, config in `gopnik.json`): the critic and the gate.
+  `/issue` turns a discussion into an issue; `/work N` runs an issue through the cycle.
+- **OpenDesign** (`opendesign start|open|od …`, MCP server `open-design`): prototypes against
+  `design/backchannel`. Runs pass `project: "backchannel-prototypes"` explicitly.
+- **Agent session start:** read `CLAUDE.md`, this file, `docs/decisions/README.md`.

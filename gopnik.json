@@ -1,0 +1,20 @@
+{
+  "//": "Copy to gopnik.json in your project root. Safe to use as-is: the only key set is the one with no sensible default, and the checks below are placeholders until setup runs.",
+
+  "//verification": "The one thing this repository cannot work out for you: what checks this project has, and where the change stops being under your control once it ships. artifact_kind: service | library | cli | chart | migration | model-boundary | plugin.",
+  "verification": {
+    "artifact_kind": "service",
+    "stage1": [
+      "echo 'replace with this project: tests, lint, type check'"
+    ],
+    "stage2": [
+      "echo 'replace with whatever crosses the boundary for this artifact'",
+      "echo 'service: curl the deployed health endpoint, then a real end-to-end run'",
+      "echo 'library: build the package, install it into a fresh venv, import it as a consumer'"
+    ],
+    "notes": "Free text the agent should know: where the environment is, which account to use, what must never be touched.",
+
+    "//stage2_unreachable": "Only if there is genuinely nowhere to deploy. Set it to WHY, and every verdict narrows to Stage 1 and quotes that reason. Leaving it blank is rejected: a narrowed verdict that cannot say why is the gap this key exists to make visible.",
+    "//stage2_unreachable_example": "no dev cluster; this is an internal script run by hand"
+  }
+}

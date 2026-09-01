@@ -1,36 +1,27 @@
-## Description
-[Provide a detailed description of your changes]
+Closes #
 
-## Related Issue
-[Link to the issue this PR addresses (e.g., "Fixes #123")]
+## Verdict
 
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
-- [ ] Other (please describe)
+<!--
+`READY` or `NOT READY`, and a link to the comment on the issue that carries the
+evidence. A pull request whose verdict is a sentence rather than a link is a
+readiness claim without support — the thing this repository exists to refuse.
 
-## Testing
-- [ ] Unit tests added/updated
-- [ ] Manual testing performed
-- [ ] All tests pass
+If a BLOCKER was fixed during the work, the verdict is the one from the round
+that came after it, and the findings-dynamics line belongs here too.
+-->
 
-## Documentation
-- [ ] Documentation updated
-- [ ] No documentation needed
+## Verified past the delivery boundary
 
-## Checklist
-- [ ] Code follows project style
-- [ ] Self-reviewed the code
-- [ ] Added comments for complex code
-- [ ] Updated README if needed
-- [ ] Branch is up to date with devtest
-- [ ] No merge conflicts
+<!--
+Not "tests pass" — what was driven from the far side of the boundary, and what
+would have come back BROKEN if the change were incomplete. Stage 2 without a
+failure oracle is a demonstration, not a check.
+-->
 
-## Screenshots (if applicable)
-[Add screenshots here if your changes affect the UI]
+## Not proven
 
-## Additional Notes
-[Add any additional information that might be helpful for reviewers] 
+<!--
+The cells of the matrix that remain uncovered, and why. Empty is a claim; say
+"nothing" only if the matrix really is complete.
+-->
