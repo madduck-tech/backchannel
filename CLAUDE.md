@@ -1,6 +1,22 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Backchannel — read this first
+
+This repository is **Backchannel**, an open-source realtime meeting-copilot platform, built as a
+hard fork of Conversationaly (ADR 0001). The codebase guide below is inherited and still accurate
+for the audio, transcription and storage layers; product direction, scope and rules live in:
+
+- `docs/development-workflow.md` — the five cycles, approval gates, definition of done. Normative.
+- `docs/decisions/README.md` — every accepted decision (ADRs). Read the index every session.
+- `design/backchannel/DESIGN.md` — the design system; `tokens.css` next to it for prototypes.
+- `.claude/rules/` — the hard rules, loaded automatically; some are scoped to paths.
+
+Commit trailer for agent commits:
+`Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` plus the session link when available.
+
+---
+
+## Inherited codebase guide (Conversationaly)
 
 ## Project Overview
 

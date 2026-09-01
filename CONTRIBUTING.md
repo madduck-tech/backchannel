@@ -1,14 +1,17 @@
-# Contributing to Meeting Minutes Updates
+# Contributing to Backchannel
 
 Thank you for your interest in contributing to Conversationaly! This document provides guidelines and instructions for contributing to this project.
 
 ## Development Workflow
 
+The normative description of how this project is built — decisions, design, code, milestones,
+releases and approval gates — is [`docs/development-workflow.md`](docs/development-workflow.md).
+This file covers the mechanics.
+
 ### Branch Strategy
 
-- `main` - Production branch
-- `devtest` - Development and testing branch
-- Feature branches should be created from `devtest`
+- `main` - the only long-lived branch; it must always build
+- Feature branches are created from `main` and merged back through a pull request
 
 ### Getting Started
 
