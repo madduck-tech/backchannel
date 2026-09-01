@@ -51,7 +51,7 @@ interface SidebarItem {
  * footer utilities stay icons even in the expanded rail. Being on a route
  * reads as a filled row — the brand-soft language. An open *meeting* is
  * content and gets an edge rule instead, so the two never look like the same
- * kind of thing. See /DESIGN.md § Component rules.
+ * kind of thing. See /design/backchannel/DESIGN.md § Component rules.
  *
  * `tone` covers the capture affordances: `danger` is the idle record button,
  * `live` is that same slot once capture is running.
@@ -161,7 +161,7 @@ const Sidebar: React.FC = () => {
 
   // The collapsed rail's search icon expands the rail. It also has to land the
   // cursor in the field — otherwise the control promises search and delivers a
-  // panel. See /DESIGN.md § Component rules.
+  // panel. See /design/backchannel/DESIGN.md § Component rules.
   useEffect(() => {
     if (isCollapsed || !wantSearchFocus) return;
     searchRef.current?.focus();

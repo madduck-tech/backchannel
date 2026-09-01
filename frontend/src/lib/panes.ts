@@ -53,7 +53,7 @@ function read(): Partial<Record<PaneKey, number>> {
 /**
  * Writes the width for the current frame only. Used on every pointer move:
  * routing a drag through React state would re-render the virtualized
- * transcript on each frame, and /DESIGN.md is explicit that reporting state
+ * transcript on each frame, and /design/backchannel/DESIGN.md is explicit that reporting state
  * may not cost a relayout of that list.
  */
 export function paintPaneWidth(pane: PaneKey, px: number) {

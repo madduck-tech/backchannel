@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 
-// One button vocabulary for the whole app — see /DESIGN.md. The ad-hoc
+// One button vocabulary for the whole app — see /design/backchannel/DESIGN.md. The ad-hoc
 // `green` / `blue` / `red` / `gray` variants that used to live here were
 // unreferenced and are gone; `destructive` is the only red affordance.
 const buttonVariants = cva(

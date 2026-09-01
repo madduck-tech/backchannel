@@ -170,7 +170,7 @@ export default function Home() {
 
   return (
     // No entrance animation: this screen opens dozens of times a day and
-    // choreography on mount reads as latency. See /DESIGN.md → Motion.
+    // choreography on mount reads as latency. See /design/backchannel/DESIGN.md → Motion.
     <div className="flex h-screen flex-col bg-canvas">
       {/* All Modals supported*/}
       <SettingsModals

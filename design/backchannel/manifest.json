@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "od-design-system-project/v1",
+  "id": "backchannel",
+  "name": "Backchannel",
+  "category": "Product",
+  "description": "Design system of the Backchannel desktop app (realtime meeting copilot): restrained tinted neutrals, one teal brand hue, IBM Plex superfamily, border-first elevation, two surfaces (app window and overlay). Source of truth lives in the app repository under design/backchannel.",
+  "source": {
+    "type": "local",
+    "origin": "madduck-tech/backchannel — design/backchannel (inherited from Conversationaly, MIT)"
+  },
+  "files": {
+    "design": "DESIGN.md",
+    "tokens": "tokens.css"
+  },
+  "usage": "USAGE.md",
+  "importMode": "normalized",
+  "craft": {
+    "applies": [],
+    "suggested": ["color", "accessibility-baseline"],
+    "exemptions": []
+  }
+}

@@ -12,6 +12,7 @@
 | [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted |
 | [0009](0009-positioning-share-protection.md) | Positioning: share protection, not stealth | accepted |
 | [0010](0010-project-language-english.md) | The project language is English | accepted |
+| [0011](0011-design-system-package-and-opendesign.md) | Design system as a repository package; OpenDesign for prototyping | accepted |
 
 ## Deferred questions
 

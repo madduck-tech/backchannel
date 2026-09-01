@@ -6,7 +6,7 @@ import * as TabsPrimitive from "@radix-ui/react-tabs"
 import { cn } from "@/lib/utils"
 
 /**
- * Two tab voices, because the app has two jobs for them — see /DESIGN.md
+ * Two tab voices, because the app has two jobs for them — see /design/backchannel/DESIGN.md
  * § Component rules on chrome selection.
  *
  * `segmented` (default) is the in-panel switch: a sunken track with the active

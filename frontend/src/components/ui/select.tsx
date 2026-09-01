@@ -125,7 +125,7 @@ const SelectItem = React.forwardRef<
     className={cn(
       // Keyboard/pointer highlight is neutral; the checked item carries brand.
       // Highlight and selection are different states and must not share a
-      // colour — see /DESIGN.md § Component rules.
+      // colour — see /design/backchannel/DESIGN.md § Component rules.
       "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-ink outline-none transition-colors duration-fast",
       "focus:bg-ink/5 data-[state=checked]:font-medium",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-45",

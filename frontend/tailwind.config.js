@@ -3,7 +3,7 @@
 // Every color reads its value from a custom property defined in
 // src/app/globals.css. Values are stored as bare OKLCH components so the
 // `<alpha-value>` placeholder below gives us working opacity modifiers
-// (`bg-brand/40`). globals.css is the source of truth — see /DESIGN.md.
+// (`bg-brand/40`). globals.css is the source of truth — see /design/backchannel/DESIGN.md.
 const c = (v) => `oklch(var(${v}) / <alpha-value>)`
 
 module.exports = {

@@ -192,7 +192,7 @@ export default function PageContent({
   ]);
 
   return (
-    // No mount choreography — see /DESIGN.md → Motion.
+    // No mount choreography — see /design/backchannel/DESIGN.md → Motion.
     <div className="flex h-screen flex-col bg-canvas">
       <div className="flex flex-1 overflow-hidden">
         <TranscriptPanel

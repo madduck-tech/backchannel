@@ -124,7 +124,7 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
     const truncatedMb = corruptedSizeMb(model.status);
 
     // Selection is a brand border, never a filled surface — the fill is what
-    // made a selected card read as a status callout. See /DESIGN.md.
+    // made a selected card read as a status callout. See /design/backchannel/DESIGN.md.
     return (
       <div
         key={model.name}

@@ -31,7 +31,7 @@ import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioF
 
 // One superfamily, three optical registers. Sans carries all UI chrome and the
 // transcript; serif sets the generated summary (a document); mono sets machine
-// facts — timestamps, model ids, device names. See /DESIGN.md.
+// facts — timestamps, model ids, device names. See /design/backchannel/DESIGN.md.
 const plexSans = IBM_Plex_Sans({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],

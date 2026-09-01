@@ -11,8 +11,8 @@
 @config "../../tailwind.config.js";
 
 /* ===========================================================================
-   Conversationaly — token layer
-   Source of truth for the visual system. See /DESIGN.md.
+   Backchannel — token layer
+   Source of truth for the visual system. See /design/backchannel/DESIGN.md.
 
    Colors are stored as bare OKLCH *components* (`L C H`) rather than full
    color functions so Tailwind's alpha modifiers (`bg-brand/40`) work. In raw
@@ -23,27 +23,27 @@
   :root {
     /* --- neutrals · light --------------------------------------------- */
     --bg: 1 0 0;
-    --panel: 0.976 0.004 110;
+    --panel: 0.976 0.004 190;
     --elevated: 1 0 0;
-    --sunken: 0.968 0.005 110;
-    --border-c: 0.912 0.006 110;
-    --border-strong: 0.855 0.008 110;
+    --sunken: 0.968 0.005 190;
+    --border-c: 0.912 0.006 190;
+    --border-strong: 0.855 0.008 190;
 
     /* Three tiers, all of which clear AA (4.5:1) against bg, panel AND sunken.
        An "only for large text" tier is a footgun in a codebase this size —
        every ramp step here is safe for body copy. */
-    --ink: 0.215 0.013 110;
-    --ink-muted: 0.46 0.014 110;
-    --ink-faint: 0.54 0.012 110;
+    --ink: 0.215 0.013 190;
+    --ink-muted: 0.46 0.014 190;
+    --ink-faint: 0.54 0.012 190;
 
     /* --- brand · light -------------------------------------------------
-       Deep olive. Carries white text. Doubles as the success color. */
-    --brand: 0.365 0.082 110;
-    --brand-hover: 0.315 0.078 110;
+       Deep teal. Carries white text. Doubles as the success color. */
+    --brand: 0.365 0.082 190;
+    --brand-hover: 0.315 0.078 190;
     --brand-ink: 1 0 0; /* text ON a brand fill */
-    --brand-soft: 0.955 0.022 110;
-    --brand-soft-ink: 0.33 0.075 110;
-    --ring-c: 0.5 0.1 110;
+    --brand-soft: 0.955 0.022 190;
+    --brand-soft-ink: 0.33 0.075 190;
+    --ring-c: 0.5 0.1 190;
 
     /* --- signal · light ------------------------------------------------
        Red is not decoration. Live capture and destructive actions only. */
@@ -61,11 +61,11 @@
     --info-soft: 0.962 0.018 262;
 
     /* --- elevation · light --------------------------------------------- */
-    --shadow-pop: 0 1px 2px oklch(0.2 0.01 110 / 0.06),
-      0 4px 12px oklch(0.2 0.01 110 / 0.08);
-    --shadow-float: 0 2px 4px oklch(0.2 0.01 110 / 0.06),
-      0 12px 32px oklch(0.2 0.01 110 / 0.12);
-    --scrim: 0.215 0.013 110;
+    --shadow-pop: 0 1px 2px oklch(0.2 0.01 190 / 0.06),
+      0 4px 12px oklch(0.2 0.01 190 / 0.08);
+    --shadow-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06),
+      0 12px 32px oklch(0.2 0.01 190 / 0.12);
+    --scrim: 0.215 0.013 190;
 
     /* --- shape ---------------------------------------------------------- */
     --r-sm: 4px;
@@ -138,24 +138,24 @@
   }
 
   .dark {
-    --bg: 0.155 0.004 110;
-    --panel: 0.185 0.005 110;
-    --elevated: 0.225 0.006 110;
-    --sunken: 0.125 0.004 110;
-    --border-c: 0.285 0.007 110;
-    --border-strong: 0.37 0.009 110;
+    --bg: 0.155 0.004 190;
+    --panel: 0.185 0.005 190;
+    --elevated: 0.225 0.006 190;
+    --sunken: 0.125 0.004 190;
+    --border-c: 0.285 0.007 190;
+    --border-strong: 0.37 0.009 190;
 
-    --ink: 0.945 0.006 110;
-    --ink-muted: 0.72 0.011 110;
-    --ink-faint: 0.625 0.01 110; /* clears 4.5:1 even on --elevated, the lightest dark surface */
+    --ink: 0.945 0.006 190;
+    --ink-muted: 0.72 0.011 190;
+    --ink-faint: 0.625 0.01 190; /* clears 4.5:1 even on --elevated, the lightest dark surface */
 
-    /* Brand flips polarity: bright sage that takes DARK text. */
-    --brand: 0.8 0.115 110;
-    --brand-hover: 0.855 0.12 110;
-    --brand-ink: 0.16 0.03 110;
-    --brand-soft: 0.255 0.032 110;
-    --brand-soft-ink: 0.845 0.1 110;
-    --ring-c: 0.8 0.115 110;
+    /* Brand flips polarity: bright aqua that takes DARK text. */
+    --brand: 0.8 0.115 190;
+    --brand-hover: 0.855 0.12 190;
+    --brand-ink: 0.16 0.03 190;
+    --brand-soft: 0.255 0.032 190;
+    --brand-soft-ink: 0.845 0.1 190;
+    --ring-c: 0.8 0.115 190;
 
     /* Held at L .55 so white text still clears 4.5:1 on the fill. */
     --danger: 0.55 0.21 25;
@@ -173,7 +173,7 @@
 
     --shadow-pop: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
     --shadow-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
-    --scrim: 0.08 0.004 110;
+    --scrim: 0.08 0.004 190;
 
     --destructive-foreground: 1 0 0;
   }
@@ -181,17 +181,17 @@
   /* Honour a system/user request for more contrast in both themes. */
   @media (prefers-contrast: more) {
     :root {
-      --ink-muted: 0.38 0.014 110;
-      --ink-faint: 0.44 0.012 110;
-      --border-c: 0.78 0.008 110;
-      --border-strong: 0.62 0.01 110;
+      --ink-muted: 0.38 0.014 190;
+      --ink-faint: 0.44 0.012 190;
+      --border-c: 0.78 0.008 190;
+      --border-strong: 0.62 0.01 190;
     }
 
     .dark {
-      --ink-muted: 0.84 0.011 110;
-      --ink-faint: 0.74 0.01 110;
-      --border-c: 0.42 0.009 110;
-      --border-strong: 0.56 0.011 110;
+      --ink-muted: 0.84 0.011 190;
+      --ink-faint: 0.74 0.01 190;
+      --border-c: 0.42 0.009 190;
+      --border-strong: 0.56 0.011 190;
     }
   }
 }
