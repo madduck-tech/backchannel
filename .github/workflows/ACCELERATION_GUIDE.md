@@ -339,8 +339,8 @@ error: the package 'conversationaly' does not contain this feature: openblas
 ```
 
 **Solution:**
-- Do not pass `--features openblas`, and do not set `TAURI_GPU_FEATURE=openblas`. The feature does
-  not exist: it was a whisper-rs feature and nothing replaced it (#3).
+- Do not ask cargo for an `openblas` feature, by flag or through `TAURI_GPU_FEATURE`. It does not
+  exist: it was a whisper-rs feature and nothing replaced it (#3).
 - If you want the system BLAS, install `libopenblas-dev` and build normally; transcribe.cpp's CMake
   probe picks it up on its own.
 
