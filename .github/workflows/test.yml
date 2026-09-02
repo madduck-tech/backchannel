@@ -1,0 +1,80 @@
+name: Tests
+
+# The suites nothing used to run (issue #1): frontend unit tests, the TypeScript
+# typecheck, and the Rust workspace tests. Linux only (ADR 0005). The apt and
+# sidecar steps mirror build-linux.yml, because the app's build script requires
+# the llama-helper sidecar and the webkit2gtk headers even for `cargo test`.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Frontend and Rust suites
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Provisions pnpm 11 from `version`; it reads $GITHUB_WORKSPACE/package.json,
+      # which does not exist here, so it never sees frontend/package.json's
+      # packageManager pin. Do not add package_json_file: the action refuses
+      # when the pin (11.25.0) differs from `version` (11).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: ubuntu-24.04-x86_64-unknown-linux-gnu-tests-v1
+
+      # Same package list and pins as build-linux.yml's Ubuntu 24.04 step.
+      - name: Install dependencies (Ubuntu 24.04)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+            libwebkit2gtk-4.1-0=2.44.0-2 \
+            libwebkit2gtk-4.1-dev=2.44.0-2 \
+            libjavascriptcoregtk-4.1-0=2.44.0-2 \
+            libjavascriptcoregtk-4.1-dev=2.44.0-2 \
+            gir1.2-javascriptcoregtk-4.1=2.44.0-2 \
+            gir1.2-webkit2-4.1=2.44.0-2
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: pnpm test
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: pnpm typecheck
+
+      # Same step as build-linux.yml: the app's build script copies the sidecar
+      # as an external binary and fails when it is missing.
+      - name: Build llama-helper sidecar
+        run: |
+          cargo build --release -p llama-helper
+          mkdir -p frontend/src-tauri/binaries
+          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
+
+      - name: Rust workspace tests
+        run: cargo test --workspace
