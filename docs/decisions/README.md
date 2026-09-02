@@ -14,7 +14,8 @@
 | [0010](0010-project-language-english.md) | The project language is English | accepted |
 | [0011](0011-design-system-package-and-opendesign.md) | Design system as a repository package; OpenDesign for prototyping | accepted |
 | [0012](0012-development-workflow.md) | Development workflow: approval gates, conventions | partly superseded by 0013 |
-| [0013](0013-single-cycle-with-gopnik.md) | One cycle: issue → critic → design → implementation → gopnik gate → PR | accepted |
+| [0013](0013-single-cycle-with-gopnik.md) | One cycle: issue → critic → design → implementation → gopnik gate → PR | accepted; merge gate superseded by 0014 |
+| [0014](0014-product-owner-and-engineering-roles.md) | Product owner and engineering: engineering merges on READY; product gates only | accepted |
 
 ## Deferred questions
 

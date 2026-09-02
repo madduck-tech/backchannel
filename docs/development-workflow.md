@@ -3,6 +3,15 @@
 One cycle for every change. Every step leaves a trace in the GitHub issue, so the issue is the
 record and `main` never disagrees with it.
 
+## Roles
+
+- **Product owner** (the maintainer). Owns direction and scope, evaluates concepts and design
+  variants, relays user feedback, decides what is released and when. Does not review pull
+  requests and is not the merge gate (ADR 0014).
+- **Engineering** (Claude Code, other coding agents, contributors). Owns the technical work end to
+  end: issues, critic, implementation, gate, merging, CI, dependencies, infrastructure. Works from
+  ADRs and this document, reports outcomes faithfully, and stops only at the product gates below.
+
 ## The cycle
 
 1. **Issue.** Every change starts as a GitHub issue using the "Work item" template. Its one
@@ -30,8 +39,9 @@ record and `main` never disagrees with it.
    a virtual source as the microphone). Until the harness exists, audio verdicts are narrowed and
    name what is not proven; merging on a narrowed verdict is the maintainer's per-issue decision,
    recorded as a comment.
-6. **Pull request** with `Closes #N` and a link to the verdict. The maintainer merges; the merge
-   closes the issue.
+6. **Pull request** with `Closes #N` and a link to the verdict. On a `READY` verdict engineering
+   merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by
+   a later fix is not merged on.
 
 That is the whole cycle. It applies to every executable change without exception; waiting longer
 for a verified change is the accepted cost. Documentation-only changes skip steps 2–5 and go
@@ -67,11 +77,12 @@ An ADR is not a step of the cycle; it is written when the cycle produces such a 
 
 ## Approval gates
 
-The agent proceeds on its own inside the cycle. It stops and asks before: merging a pull
-request; releasing or anything else outward-facing; rewriting history, deleting branches or
-data; renaming the app or storage keys; adding a dependency that changes the license chain or a
-platform build; committing a prototype or design-system change the maintainer has not seen;
-changing an issue's scope after the critic accepted it.
+Engineering proceeds on its own inside the cycle, merging included. It stops and asks the product
+owner only for product decisions: a new screen or a changed layout (design variants, step 3);
+a change of scope relative to an accepted ADR or an accepted issue; a release, and anything else
+that reaches users or the outside (publishing, organization settings, the app's name, storage
+keys). Destructive operations on shared state — rewriting history on `main`, deleting data —
+are still announced before they happen.
 
 ## Tooling
 
