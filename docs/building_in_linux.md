@@ -53,10 +53,9 @@ The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build
 | Priority | Hardware        | What It Checks                                               | Result                  |
 | -------- | --------------- | ------------------------------------------------------------ | ----------------------- |
 | 1️⃣       | **NVIDIA CUDA** | `nvidia-smi` exists + (`CUDA_PATH` or `nvcc` found)          | `--features cuda`       |
-| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features hipblas`    |
+| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features rocm`       |
 | 3️⃣       | **Vulkan**      | `vulkaninfo` exists + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` set | `--features vulkan`     |
-| 4️⃣       | **OpenBLAS**    | `BLAS_INCLUDE_DIRS` set                                      | `--features openblas`   |
-| 5️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
+| 4️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
 
 ### Common Scenarios
 
@@ -255,10 +254,14 @@ src-tauri/target/release/bundle/appimage/Conversationaly_<version>_amd64.AppImag
 | Mode     | Feature Flag          | Requirements                                      | Acceleration  | Speed Boost   |
 | -------- | --------------------- | ------------------------------------------------- | ------------- | ------------- |
 | CUDA     | `--features cuda`     | `nvidia-smi` + (`CUDA_PATH` or `nvcc`)            | GPU           | 5-10x         |
-| ROCm     | `--features hipblas`  | `rocm-smi` + (`ROCM_PATH` or `hipcc`)             | GPU           | 4-8x          |
+| ROCm     | `--features rocm`     | `rocm-smi` + (`ROCM_PATH` or `hipcc`)             | GPU           | 4-8x          |
 | Vulkan   | `--features vulkan`   | `vulkaninfo` + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` | GPU           | 3-6x          |
-| OpenBLAS | `--features openblas` | `BLAS_INCLUDE_DIRS`                               | CPU-optimized | 1.5-2x        |
 | CPU      | (none)                | (none)                                            | CPU-only      | 1x (baseline) |
+
+There is no OpenBLAS row: `openblas` is not a feature of this crate or of
+`transcribe-cpp`. A system BLAS, when installed, is picked up by transcribe.cpp's
+own CMake probe (`TRANSCRIBE_USE_SYSTEM_BLAS`, default ON) and accelerates the host
+decoder; no build flag requests it.
 
 ### Build Scripts Internals
 

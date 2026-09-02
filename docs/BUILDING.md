@@ -66,10 +66,9 @@ The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build
 | Priority | Hardware        | What It Checks                                               | Result                  |
 | -------- | --------------- | ------------------------------------------------------------ | ----------------------- |
 | 1️⃣       | **NVIDIA CUDA** | `nvidia-smi` exists + (`CUDA_PATH` or `nvcc` found)          | `--features cuda`       |
-| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features hipblas`    |
+| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features rocm`       |
 | 3️⃣       | **Vulkan**      | `vulkaninfo` exists + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` set | `--features vulkan`     |
-| 4️⃣       | **OpenBLAS**    | `BLAS_INCLUDE_DIRS` set                                      | `--features openblas`   |
-| 5️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
+| 4️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
 
 #### Common Scenarios
 
