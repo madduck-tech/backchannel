@@ -77,7 +77,7 @@ The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build
 | Clean Linux install       | CPU-only                    | No GPU SDK detected          |
 | NVIDIA GPU + drivers only | CPU-only                    | CUDA toolkit not installed   |
 | NVIDIA GPU + CUDA toolkit | **CUDA acceleration** ✅    | Full detection successful    |
-| AMD GPU + ROCm            | **HIPBlas acceleration** ✅ | Full detection successful    |
+| AMD GPU + ROCm            | **ROCm acceleration** ✅    | Full detection successful    |
 | Vulkan drivers only       | CPU-only                    | Vulkan SDK + env vars needed |
 | Vulkan SDK configured     | **Vulkan acceleration** ✅  | All requirements met         |
 
@@ -208,18 +208,19 @@ TAURI_GPU_FEATURE=cuda ./build-gpu.sh
 TAURI_GPU_FEATURE=vulkan ./dev-gpu.sh
 TAURI_GPU_FEATURE=vulkan ./build-gpu.sh
 
-# Force ROCm (HIPBlas)
-TAURI_GPU_FEATURE=hipblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=hipblas ./build-gpu.sh
+# Force ROCm
+TAURI_GPU_FEATURE=rocm ./dev-gpu.sh
+TAURI_GPU_FEATURE=rocm ./build-gpu.sh
 
 # Force CPU-only (for testing)
 TAURI_GPU_FEATURE="" ./dev-gpu.sh
 TAURI_GPU_FEATURE="" ./build-gpu.sh
-
-# Force OpenBLAS (CPU-optimized)
-TAURI_GPU_FEATURE=openblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=openblas ./build-gpu.sh
 ```
+
+`TAURI_GPU_FEATURE` is passed straight through to cargo as `--features <value>`
+(`frontend/scripts/tauri-auto.js`), so only a feature this crate declares works. `openblas` and
+`hipblas` are not among them — they were whisper-rs features and asking for either fails the
+build outright. A system BLAS needs no flag: transcribe.cpp links one when it is installed.
 
 #### Build Output Location
 

@@ -108,7 +108,7 @@ Each platform uses optimal hardware acceleration:
 |----------|-------------|-------------|
 | macOS | Metal GPU | 10-15x faster than CPU |
 | Windows | Vulkan GPU | 5-10x faster than CPU |
-| Linux | OpenBLAS CPU | 2-3x faster than vanilla CPU |
+| Linux | CPU | system BLAS is linked by CMake when `libopenblas-dev` is installed; it accelerates the decoder, not ggml |
 
 ## Troubleshooting
 

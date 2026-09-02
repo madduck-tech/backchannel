@@ -78,13 +78,13 @@ or by `transcribe-cpp`, and asking cargo for it fails the build.
 
 **Why not Vulkan on Linux?**
 - GitHub Actions runners don't have GPUs
-- OpenBLAS provides best performance for CPU-only
-- More reliable than trying to use virtual GPU
+- Vulkan without a GPU gives minimal benefit
+- The CPU backend is what actually runs there
 
 **How it works:**
-- OpenBLAS libraries installed (`libopenblas-dev`)
-- Whisper.cpp linked against OpenBLAS
-- Optimized matrix operations for transcription
+- `libopenblas-dev` is installed by the apt step
+- transcribe.cpp's CMake probe finds it and links it into the host-side decoder
+- no cargo feature is involved, and ggml still uses tinyBLAS
 
 #### 3. macOS Builds (Metal GPU)
 ```yaml
@@ -194,7 +194,7 @@ For a **10-minute meeting recording** (Whisper `base` model):
 | Configuration | Time to Transcribe | Real-time Factor |
 |--------------|-------------------|------------------|
 | **Old Linux (no AVX)** | ~15 minutes | 1.5x slower than real-time ⚠️ |
-| **New Linux (OpenBLAS)** | ~5 minutes | 2x faster than real-time ✅ |
+| **New Linux (CPU)** | not measured on this fork | not measured |
 | **Old Windows (CPU)** | ~10 minutes | Same as real-time ⚠️ |
 | **New Windows (Vulkan)** | ~2 minutes | 5x faster than real-time ✅ |
 | **macOS (Metal)** | ~1 minute | 10x faster than real-time ✅ |
@@ -203,7 +203,7 @@ For a **10-minute meeting recording** (Whisper `base` model):
 
 The acceleration changes **do not significantly increase build time**:
 - Vulkan SDK: Already being installed
-- OpenBLAS: Lightweight library
+- `libopenblas-dev`: lightweight library
 - Compilation time: ~same (30-45 minutes total)
 
 ## Verification
@@ -220,8 +220,7 @@ Windows build with Vulkan GPU acceleration
 ```
 
 ```
-Linux build with OpenBLAS CPU optimization
-✓ Linux build with OpenBLAS CPU optimization
+Linux build: CPU backend; system BLAS linked by CMake when present
 ```
 
 ```
@@ -302,14 +301,16 @@ one.
 - Works without dedicated GPU hardware
 - Broader compatibility
 
-### OpenBLAS vs Vulkan on Linux
+### CPU vs Vulkan on Linux
 
-We chose **OpenBLAS** over Vulkan for Linux because:
+CI builds Linux for CPU rather than Vulkan because:
 - ✅ More reliable on CI runners
-- ✅ Better CPU optimization
 - ✅ No GPU hardware needed
 - ✅ Consistent performance
 - ⚠️ Vulkan without GPU gives minimal benefit
+
+A system BLAS rides along when `libopenblas-dev` is installed, but it is not something the build
+asks for and it is not why CPU was chosen.
 
 For **local Linux development with GPU**, users can manually build with:
 ```bash
@@ -330,17 +331,18 @@ error: failed to compile whisper-rs with Vulkan support
 - Check the "Install Vulkan SDK" step output
 - Verify Vulkan version matches (VULKAN_VERSION in the workflow)
 
-### Build Fails with OpenBLAS Error (Linux)
+### Build Fails with an `openblas` Feature Error (Linux)
 
 **Error:**
 ```
-error: could not find OpenBLAS library
+error: the package 'conversationaly' does not contain this feature: openblas
 ```
 
 **Solution:**
-- Ensure `libopenblas-dev` is in apt install list
-- Check dependency installation step completed
-- Verify OpenBLAS package is available for Ubuntu version
+- Do not pass `--features openblas`, and do not set `TAURI_GPU_FEATURE=openblas`. The feature does
+  not exist: it was a whisper-rs feature and nothing replaced it (#3).
+- If you want the system BLAS, install `libopenblas-dev` and build normally; transcribe.cpp's CMake
+  probe picks it up on its own.
 
 ### Performance Still Slow
 
@@ -390,7 +392,7 @@ error: could not find OpenBLAS library
 
 ✅ **All CI/CD workflows now use hardware acceleration**
 - Windows: Vulkan GPU
-- Linux: OpenBLAS CPU optimization
+- Linux: CPU (system BLAS linked by CMake when installed)
 - macOS: Metal GPU (default)
 
 ✅ **Performance improvements**
