@@ -2,7 +2,8 @@
 // streaming path and nothing in the frontend listened. Nothing threw — the
 // uncommitted text was just dropped, so a streaming model looked exactly like a
 // batch one. Same shape as download-event-names.test.mjs, other direction:
-// every event stream_worker.rs emits must have a frontend listener.
+// every event the transcription sink (adapters/tauri_sink.rs) emits must have a
+// frontend listener. stream_worker.rs was split into ports + adapters in 3a4ac3a.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,23 +19,23 @@ function readAll(dir, exts) {
   });
 }
 
-const worker = fs.readFileSync(
-  path.join(root, 'src-tauri', 'src', 'audio', 'transcription', 'stream_worker.rs'),
+const sink = fs.readFileSync(
+  path.join(root, 'src-tauri', 'src', 'audio', 'transcription', 'adapters', 'tauri_sink.rs'),
   'utf8'
 );
 const ts = readAll(path.join(root, 'src'), ['.ts', '.tsx']).join('\n');
 
 // `\s*` because the payload often pushes the name onto its own line.
 const emitted = new Set(
-  [...worker.matchAll(/\.emit\(\s*"([a-z0-9-]+)"/g)].map((m) => m[1])
+  [...sink.matchAll(/\.emit\(\s*"([a-z0-9-]+)"/g)].map((m) => m[1])
 );
 
-assert.ok(emitted.size > 0, 'expected stream_worker.rs to emit events');
+assert.ok(emitted.size > 0, 'expected tauri_sink.rs to emit events');
 
 for (const name of emitted) {
   assert.ok(
     new RegExp(`listen(<[^>]*>)?\\(\\s*['"\`]${name}['"\`]`).test(ts),
-    `stream_worker.rs emits "${name}" but no frontend code listens for it`
+    `tauri_sink.rs emits "${name}" but no frontend code listens for it`
   );
 }
 
