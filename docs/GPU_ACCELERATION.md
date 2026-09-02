@@ -22,7 +22,9 @@ Defaults per platform:
 - **macOS** — Metal is enabled automatically. `transcribe-cpp` builds with it by default and nothing extra is needed.
 - **Windows and Linux** — CPU-only unless you opt in. `transcribe-cpp` is pulled in there with `default-features = false`, so a plain `cargo build` gives you a CPU build that always works.
 
-There is no CoreML backend (transcribe.cpp has no CoreML path — Metal covers Apple Silicon) and no OpenBLAS feature (the CPU path uses tinyBLAS). Both existed in the whisper-rs era and were removed with it; if you find either name still referenced somewhere, it is a leftover and will fail the build.
+There is no CoreML backend (transcribe.cpp has no CoreML path — Metal covers Apple Silicon) and no OpenBLAS feature. Both existed in the whisper-rs era and were removed with it; if you find either name still referenced as a cargo feature, it is a leftover and will fail the build.
+
+BLAS did not disappear, it stopped being a cargo decision: ggml's CPU path uses tinyBLAS (`GGML_BLAS` is forced OFF upstream), while transcribe.cpp's host-side decoder links a system BLAS when one is installed, through CMake's `TRANSCRIBE_USE_SYSTEM_BLAS` (default ON). Installing `libopenblas-dev` is therefore useful; asking cargo for it is an error.
 
 ## Automatic Detection
 

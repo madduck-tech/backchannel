@@ -53,10 +53,9 @@ The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build
 | Priority | Hardware        | What It Checks                                               | Result                  |
 | -------- | --------------- | ------------------------------------------------------------ | ----------------------- |
 | 1️⃣       | **NVIDIA CUDA** | `nvidia-smi` exists + (`CUDA_PATH` or `nvcc` found)          | `--features cuda`       |
-| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features hipblas`    |
+| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features rocm`       |
 | 3️⃣       | **Vulkan**      | `vulkaninfo` exists + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` set | `--features vulkan`     |
-| 4️⃣       | **OpenBLAS**    | `BLAS_INCLUDE_DIRS` set                                      | `--features openblas`   |
-| 5️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
+| 4️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
 
 ### Common Scenarios
 
@@ -65,7 +64,7 @@ The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build
 | Clean Linux install       | CPU-only                    | No GPU SDK detected          |
 | NVIDIA GPU + drivers only | CPU-only                    | CUDA toolkit not installed   |
 | NVIDIA GPU + CUDA toolkit | **CUDA acceleration** ✅    | Full detection successful    |
-| AMD GPU + ROCm            | **HIPBlas acceleration** ✅ | Full detection successful    |
+| AMD GPU + ROCm            | **ROCm acceleration** ✅    | Full detection successful    |
 | Vulkan drivers only       | CPU-only                    | Vulkan SDK + env vars needed |
 | Vulkan SDK configured     | **Vulkan acceleration** ✅  | All requirements met         |
 
@@ -196,18 +195,19 @@ TAURI_GPU_FEATURE=cuda ./build-gpu.sh
 TAURI_GPU_FEATURE=vulkan ./dev-gpu.sh
 TAURI_GPU_FEATURE=vulkan ./build-gpu.sh
 
-# Force ROCm (HIPBlas)
-TAURI_GPU_FEATURE=hipblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=hipblas ./build-gpu.sh
+# Force ROCm
+TAURI_GPU_FEATURE=rocm ./dev-gpu.sh
+TAURI_GPU_FEATURE=rocm ./build-gpu.sh
 
 # Force CPU-only (for testing)
 TAURI_GPU_FEATURE="" ./dev-gpu.sh
 TAURI_GPU_FEATURE="" ./build-gpu.sh
-
-# Force OpenBLAS (CPU-optimized)
-TAURI_GPU_FEATURE=openblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=openblas ./build-gpu.sh
 ```
+
+`TAURI_GPU_FEATURE` is passed straight through to cargo as `--features <value>`
+(`frontend/scripts/tauri-auto.js`), so only a feature this crate declares works. `openblas` and
+`hipblas` are not among them — they were whisper-rs features and asking for either fails the
+build outright. A system BLAS needs no flag: transcribe.cpp links one when it is installed.
 
 ### Build Output Location
 
@@ -255,10 +255,14 @@ src-tauri/target/release/bundle/appimage/Conversationaly_<version>_amd64.AppImag
 | Mode     | Feature Flag          | Requirements                                      | Acceleration  | Speed Boost   |
 | -------- | --------------------- | ------------------------------------------------- | ------------- | ------------- |
 | CUDA     | `--features cuda`     | `nvidia-smi` + (`CUDA_PATH` or `nvcc`)            | GPU           | 5-10x         |
-| ROCm     | `--features hipblas`  | `rocm-smi` + (`ROCM_PATH` or `hipcc`)             | GPU           | 4-8x          |
+| ROCm     | `--features rocm`     | `rocm-smi` + (`ROCM_PATH` or `hipcc`)             | GPU           | 4-8x          |
 | Vulkan   | `--features vulkan`   | `vulkaninfo` + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` | GPU           | 3-6x          |
-| OpenBLAS | `--features openblas` | `BLAS_INCLUDE_DIRS`                               | CPU-optimized | 1.5-2x        |
 | CPU      | (none)                | (none)                                            | CPU-only      | 1x (baseline) |
+
+There is no OpenBLAS row: `openblas` is not a feature of this crate or of
+`transcribe-cpp`. A system BLAS, when installed, is picked up by transcribe.cpp's
+own CMake probe (`TRANSCRIBE_USE_SYSTEM_BLAS`, default ON) and accelerates the host
+decoder; no build flag requests it.
 
 ### Build Scripts Internals
 

@@ -2,6 +2,14 @@
 
 This document explains the hardware acceleration configuration for all CI/CD workflows.
 
+> **Note (#3).** The Linux sections below asked cargo for an `openblas` feature that no longer
+> exists. It was a feature of `whisper-rs`; after the migration to `transcribe.cpp` neither this
+> crate nor `transcribe-cpp` declares it, so passing it was a hard cargo error and no Linux bundle
+> could be built in CI. Those parts have been corrected. A system BLAS is still used when it is
+> installed — transcribe.cpp's CMake probe (`TRANSCRIBE_USE_SYSTEM_BLAS`, default ON) links it for
+> the host-side decoder — but nothing requests it from cargo, and `GGML_BLAS` is forced OFF
+> upstream, so it does not accelerate ggml.
+
 ## Overview
 
 All workflows now build with optimal hardware acceleration based on the platform:
@@ -10,7 +18,7 @@ All workflows now build with optimal hardware acceleration based on the platform
 |----------|-------------|------------|------------------|
 | **macOS** | GPU | Metal (default) | ~10-15x faster than CPU |
 | **Windows** | GPU | Vulkan | ~5-10x faster than CPU |
-| **Linux** | CPU Optimized | OpenBLAS | ~2-3x faster than vanilla CPU |
+| **Linux** | CPU | system BLAS, linked by CMake when installed | decoder path only, not ggml |
 
 ## Previous Configuration (REMOVED)
 
@@ -55,26 +63,28 @@ args: --target x86_64-pc-windows-msvc --features vulkan
 - Whisper.cpp compiled with Vulkan backend
 - GPU automatically used for inference
 
-#### 2. Linux Builds (OpenBLAS CPU)
+#### 2. Linux Builds (CPU)
 ```yaml
-args: --target x86_64-unknown-linux-gnu --features openblas
+args: --target x86_64-unknown-linux-gnu
 ```
 
-**Benefits:**
-- Optimized BLAS (Basic Linear Algebra Subprograms)
-- Hardware-optimized CPU operations
-- 2-3x faster than vanilla CPU
-- No GPU required (works on GitHub Actions runners)
+No acceleration feature is passed, and none is available: `openblas` is not declared by this crate
+or by `transcribe-cpp`, and asking cargo for it fails the build.
+
+**What the `libopenblas-dev` apt step still buys:**
+- transcribe.cpp's CMake probe finds it and links it into the host-side decoder
+- no GPU required (works on GitHub Actions runners)
+- it does not reach ggml, which uses tinyBLAS (`GGML_BLAS` is forced OFF)
 
 **Why not Vulkan on Linux?**
 - GitHub Actions runners don't have GPUs
-- OpenBLAS provides best performance for CPU-only
-- More reliable than trying to use virtual GPU
+- Vulkan without a GPU gives minimal benefit
+- The CPU backend is what actually runs there
 
 **How it works:**
-- OpenBLAS libraries installed (`libopenblas-dev`)
-- Whisper.cpp linked against OpenBLAS
-- Optimized matrix operations for transcription
+- `libopenblas-dev` is installed by the apt step
+- transcribe.cpp's CMake probe finds it and links it into the host-side decoder
+- no cargo feature is involved, and ggml still uses tinyBLAS
 
 #### 3. macOS Builds (Metal GPU)
 ```yaml
@@ -111,10 +121,9 @@ args: --target x86_64-unknown-linux-gnu --features openblas
       echo "Windows build with Vulkan GPU acceleration"
     fi
 
-    # Linux: Use OpenBLAS for optimized CPU performance
+    # Linux: no acceleration feature; a system BLAS is linked by CMake when present
     if [[ "${{ inputs.platform }}" == *"ubuntu"* ]]; then
-      FEATURES="--features openblas"
-      echo "Linux build with OpenBLAS CPU optimization"
+      echo "Linux build: CPU backend; system BLAS linked by CMake when present"
     fi
 
     # macOS: Uses Metal by default
@@ -155,12 +164,14 @@ Now explicitly enables Vulkan acceleration.
 
 ### 4. `build-linux.yml` (Linux Standalone)
 
-**Build command updated:**
+**Build command:**
 ```yaml
-args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }}
+args: --target x86_64-unknown-linux-gnu ${{ steps.build-profile.outputs.args }} ${{ steps.updater-signing.outputs.args }}
 ```
 
-Now explicitly enables OpenBLAS optimization.
+No acceleration feature. The second expansion is `--no-sign`, added only when the repository has no
+`TAURI_SIGNING_PRIVATE_KEY`: `tauri.conf.json` enables updater artifacts with a pubkey, so without
+that secret the bundle step fails instead of producing a `.deb` or AppImage.
 
 ### 5. `build-macos.yml` (macOS Standalone)
 
@@ -183,7 +194,7 @@ For a **10-minute meeting recording** (Whisper `base` model):
 | Configuration | Time to Transcribe | Real-time Factor |
 |--------------|-------------------|------------------|
 | **Old Linux (no AVX)** | ~15 minutes | 1.5x slower than real-time ⚠️ |
-| **New Linux (OpenBLAS)** | ~5 minutes | 2x faster than real-time ✅ |
+| **New Linux (CPU)** | not measured on this fork | not measured |
 | **Old Windows (CPU)** | ~10 minutes | Same as real-time ⚠️ |
 | **New Windows (Vulkan)** | ~2 minutes | 5x faster than real-time ✅ |
 | **macOS (Metal)** | ~1 minute | 10x faster than real-time ✅ |
@@ -192,7 +203,7 @@ For a **10-minute meeting recording** (Whisper `base` model):
 
 The acceleration changes **do not significantly increase build time**:
 - Vulkan SDK: Already being installed
-- OpenBLAS: Lightweight library
+- `libopenblas-dev`: lightweight library
 - Compilation time: ~same (30-45 minutes total)
 
 ## Verification
@@ -209,8 +220,7 @@ Windows build with Vulkan GPU acceleration
 ```
 
 ```
-Linux build with OpenBLAS CPU optimization
-✓ Linux build with OpenBLAS CPU optimization
+Linux build: CPU backend; system BLAS linked by CMake when present
 ```
 
 ```
@@ -226,8 +236,8 @@ In the "Build with Tauri" step, verify the command includes:
 # Windows
 tauri build --target x86_64-pc-windows-msvc --features vulkan
 
-# Linux
-tauri build --target x86_64-unknown-linux-gnu --features openblas
+# Linux (no acceleration feature)
+tauri build --target x86_64-unknown-linux-gnu
 
 # macOS (features implicit)
 tauri build --target aarch64-apple-darwin
@@ -248,8 +258,8 @@ You can verify the features locally:
 # Windows (from frontend directory)
 pnpm run tauri build -- --features vulkan
 
-# Linux
-pnpm run tauri build -- --features openblas
+# Linux (no acceleration feature)
+pnpm run tauri build
 
 # macOS (Metal is default)
 pnpm run tauri build
@@ -257,18 +267,23 @@ pnpm run tauri build
 
 ## Technical Details
 
-### Whisper.cpp Features
+### Acceleration Features
 
-The `whisper-rs` crate (which wraps whisper.cpp) supports these features:
+`whisper-rs` was replaced by `transcribe-cpp`. The features this crate actually declares
+(`frontend/src-tauri/Cargo.toml`) are:
 
 ```toml
 [features]
-metal = ["whisper-rs/metal"]       # macOS Metal
-cuda = ["whisper-rs/cuda"]          # NVIDIA CUDA
-vulkan = ["whisper-rs/vulkan"]      # Cross-platform Vulkan
-hipblas = ["whisper-rs/hipblas"]    # AMD ROCm
-openblas = ["whisper-rs/openblas"]  # Optimized CPU BLAS
+metal = ["transcribe-cpp/metal"]   # macOS Metal
+cuda = ["transcribe-cpp/cuda"]     # NVIDIA CUDA
+vulkan = ["transcribe-cpp/vulkan"] # AMD/Intel Vulkan
+rocm = ["transcribe-cpp/rocm"]     # AMD ROCm (was `hipblas` under whisper-rs)
+openmp = ["transcribe-cpp/openmp"] # CPU threading
 ```
+
+There is no BLAS feature. The whisper-rs era had `openblas = ["whisper-rs/openblas"]`; nothing
+replaced it, because BLAS is now a CMake-level decision inside transcribe.cpp rather than a cargo
+one.
 
 ### Why Not CUDA?
 
@@ -286,14 +301,16 @@ openblas = ["whisper-rs/openblas"]  # Optimized CPU BLAS
 - Works without dedicated GPU hardware
 - Broader compatibility
 
-### OpenBLAS vs Vulkan on Linux
+### CPU vs Vulkan on Linux
 
-We chose **OpenBLAS** over Vulkan for Linux because:
+CI builds Linux for CPU rather than Vulkan because:
 - ✅ More reliable on CI runners
-- ✅ Better CPU optimization
 - ✅ No GPU hardware needed
 - ✅ Consistent performance
 - ⚠️ Vulkan without GPU gives minimal benefit
+
+A system BLAS rides along when `libopenblas-dev` is installed, but it is not something the build
+asks for and it is not why CPU was chosen.
 
 For **local Linux development with GPU**, users can manually build with:
 ```bash
@@ -314,17 +331,18 @@ error: failed to compile whisper-rs with Vulkan support
 - Check the "Install Vulkan SDK" step output
 - Verify Vulkan version matches (VULKAN_VERSION in the workflow)
 
-### Build Fails with OpenBLAS Error (Linux)
+### Build Fails with an `openblas` Feature Error (Linux)
 
 **Error:**
 ```
-error: could not find OpenBLAS library
+error: the package 'conversationaly' does not contain this feature: openblas
 ```
 
 **Solution:**
-- Ensure `libopenblas-dev` is in apt install list
-- Check dependency installation step completed
-- Verify OpenBLAS package is available for Ubuntu version
+- Do not ask cargo for an `openblas` feature, by flag or through `TAURI_GPU_FEATURE`. It does not
+  exist: it was a whisper-rs feature and nothing replaced it (#3).
+- If you want the system BLAS, install `libopenblas-dev` and build normally; transcribe.cpp's CMake
+  probe picks it up on its own.
 
 ### Performance Still Slow
 
@@ -374,7 +392,7 @@ error: could not find OpenBLAS library
 
 ✅ **All CI/CD workflows now use hardware acceleration**
 - Windows: Vulkan GPU
-- Linux: OpenBLAS CPU optimization
+- Linux: CPU (system BLAS linked by CMake when installed)
 - macOS: Metal GPU (default)
 
 ✅ **Performance improvements**

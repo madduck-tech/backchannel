@@ -323,6 +323,8 @@ jobs:
       - name: Determine build features
         id: build-features
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           FEATURES=""
 
@@ -332,10 +334,12 @@ jobs:
             echo "Windows build with Vulkan GPU acceleration"
           fi
 
-          # Linux: Use OpenBLAS for optimized CPU performance
+          # Linux: no acceleration feature. `openblas` is not a feature of this crate
+          # or of transcribe-cpp, and asking for it is a hard cargo error, not a no-op.
+          # A system BLAS, when installed, is linked by transcribe.cpp's own CMake
+          # probe (TRANSCRIBE_USE_SYSTEM_BLAS, default ON) with no flag from us.
           if [[ "${{ matrix.platform }}" == *"ubuntu"* ]]; then
-            FEATURES="--features openblas"
-            echo "Linux build with OpenBLAS CPU optimization"
+            echo "Linux build: CPU backend; system BLAS linked by CMake when present"
           fi
 
           # macOS: Uses Metal by default, no additional features needed
@@ -344,6 +348,19 @@ jobs:
           fi
 
           echo "features=$FEATURES" >> "$GITHUB_OUTPUT"
+
+          # Updater signing. tauri.conf.json enables updater artifacts and carries a
+          # pubkey, so `tauri build` requires TAURI_SIGNING_PRIVATE_KEY for
+          # deb/AppImage/rpm/nsis/msi and fails the bundle without it; an unset
+          # variable and an empty one fail alike. Skip signing when there is no key.
+          # Linux only: on macOS and Windows --no-sign would also skip platform code
+          # signing, and neither platform can be verified from this project (ADR 0005).
+          SIGN_ARGS=""
+          if [[ "${{ matrix.platform }}" == *"ubuntu"* ]] && [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            SIGN_ARGS="--no-sign"
+            echo "No updater signing key: bundling with --no-sign (no .sig files)"
+          fi
+          echo "sign-args=$SIGN_ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Build llama-helper sidecar
         shell: bash
@@ -400,7 +417,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }}
+          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }} ${{ steps.build-features.outputs.sign-args }}
 
       # Build step (without code signing - updater signing only)
       - name: Build Tauri app (unsigned)
@@ -416,7 +433,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }}
+          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }} ${{ steps.build-features.outputs.sign-args }}
 
       # Linux post-build processing
       - name: Remove libwayland-client.so from AppImage

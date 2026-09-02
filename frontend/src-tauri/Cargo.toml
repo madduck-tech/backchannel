@@ -35,7 +35,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 #   .\build-gpu.ps1 (Windows PowerShell)
 #
 # Dropped vs the whisper-rs era: `coreml` (transcribe.cpp has no CoreML path;
-# Metal covers Apple Silicon) and `openblas` (its CPU path uses tinyBLAS).
+# Metal covers Apple Silicon) and `openblas`. There is no BLAS feature to declare:
+# ggml's CPU path uses tinyBLAS (`GGML_BLAS` is forced OFF upstream), and the host
+# decoder links a system BLAS on its own when one is installed, via CMake's
+# `TRANSCRIBE_USE_SYSTEM_BLAS`, which defaults to ON. Asking cargo for that feature
+# is an error, not a no-op — it broke every Linux CI build until #3.
 [features]
 default = ["platform-default"]  # Automatically enables best backend per platform
 
@@ -156,7 +160,7 @@ transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev
 # Users can enable features manually:
 #   --features cuda     (NVIDIA GPUs)
 #   --features vulkan   (AMD/Intel GPUs)
-#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
+#   --features openmp   (CPU threading)
 [target.'cfg(target_os = "windows")'.dependencies]
 futures-channel = "0.3.31"
 
@@ -170,8 +174,8 @@ transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev
 # Users can enable features manually:
 #   --features cuda     (NVIDIA GPUs)
 #   --features vulkan   (AMD/Intel GPUs)
-#   --features hipblas  (AMD ROCm)
-#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
+#   --features rocm     (AMD ROCm)
+#   --features openmp   (CPU threading)
 [target.'cfg(target_os = "linux")'.dependencies]
 futures-channel = "0.3.31"
 
