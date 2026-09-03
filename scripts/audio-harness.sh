@@ -104,7 +104,12 @@ cmd_up() {
   fi
   [ -r "$sample" ] || die "sample not readable: $sample"
 
+  # From here on the machine is being changed, so any failure has to put it back.
+  # Without this, a refusal — the silence check below, most likely — leaves the
+  # developer's default input pointing at a harness node and then removes it.
   mkdir -p "$STATE_DIR"
+  UP_COMPLETED=0
+  trap 'if [ "$UP_COMPLETED" != 1 ]; then note "bringing the machine back after a failed up"; cmd_down >/dev/null 2>&1 || true; fi' EXIT
   current_default_source > "$STATE_DIR/original-default-source"
   [ -s "$STATE_DIR/original-default-source" ] || die "could not read the current default input; refusing to change it"
   cp -f "$WP_STATE" "$STATE_DIR/wireplumber-default-nodes.before" 2>/dev/null || : > "$STATE_DIR/wireplumber-default-nodes.before"
@@ -150,6 +155,7 @@ cmd_up() {
     note "up — source '$SRC_NAME' is the default input (level unverified: ffmpeg missing or probe empty)"
   fi
   rm -f "$probe"
+  UP_COMPLETED=1
 }
 
 cmd_down() {
