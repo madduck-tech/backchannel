@@ -5,7 +5,8 @@
     "stage1": [
       "cd frontend && pnpm test",
       "cd frontend && pnpm typecheck",
-      "cargo test --workspace"
+      "cargo test --workspace",
+      "cargo test -p conversationaly --lib cpal_capture -- --ignored --nocapture"
     ],
     "stage2": [
       "test -z \"$(git status --porcelain)\" || { echo 'working tree is not clean: the artifact would not be the revision under test'; exit 1; }",
@@ -27,7 +28,8 @@
     "surfaces": [
       "desktop-app"
     ],
-    "//stage2": "The boundary is the installed desktop application: the AppImage built from the tree under test, launched natively on Wayland on a clean profile (fresh HOME/XDG dirs) as a first-time user would. Evidence comes through Orca's computer-use CLI (`orca-ide`; the `orca` shim is broken on this machine, and bare `orca` is the GNOME screen reader) reading the app's AT-SPI accessibility tree: the process is alive, it is listed as an app, it has one top-level window with the configured title, and the first-launch screen exposes a 'Welcome to …' heading and a 'Get Started' push button; the stdout log reports setup complete without a panic. The Linux computer-use provider takes no screenshots, so there is no pixel evidence yet. Real audio flows are not covered: the PipeWire virtual-device harness is a separate issue; until then a verdict names audio as not proven."
+    "//stage2": "The boundary is the installed desktop application: the AppImage built from the tree under test, launched natively on Wayland on a clean profile (fresh HOME/XDG dirs) as a first-time user would. Evidence comes through Orca's computer-use CLI (`orca-ide`; the `orca` shim is broken on this machine, and bare `orca` is the GNOME screen reader) reading the app's AT-SPI accessibility tree: the process is alive, it is listed as an app, it has one top-level window with the configured title, and the first-launch screen exposes a 'Welcome to …' heading and a 'Get Started' push button; the stdout log reports setup complete without a panic. The Linux computer-use provider takes no screenshots, so there is no pixel evidence yet. Real audio flows are not covered: the PipeWire virtual-device harness is a separate issue; until then a verdict names audio as not proven.",
+    "//stage1-ignored": "cpal_capture_round_trip stays #[ignore]d because it needs a real input device and microphone permission, which GitHub runners do not have — the CI suites must keep passing without it. It runs here instead, where the machine does have one. It is the guard for the class where enumeration and lookup disagree about a device's identity (#9, #10); it was written, ignored, and therefore did not catch #9. Note it asserts a sample count, not signal: on this machine the capture path returns exact zeros, so a full count of silence passes it."
   },
   "language": "en"
 }
