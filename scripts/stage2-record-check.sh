@@ -101,15 +101,20 @@ kill -0 "$(cat "$PIDFILE")" 2>/dev/null || die "the application exited during st
 
 # A clean profile starts at onboarding. On a profile that already has the models these
 # steps are absent, so a missing button is not a failure here.
-click_labelled "Get Started" 20 || say "no onboarding (profile already set up)"
-click_labelled "Let's Go" 20 || true
-
-# Recording is hard-gated on the transcription model, so this wait is not optional.
-# A clean profile pulls ~4.3 GB in total: the transcription model plus a summary model
-# that starts on the same screen and is not gated by Continue.
-say "waiting for the transcription model (it gates recording)"
-if ! click_labelled "Continue" 900; then
-  die "the transcription model did not finish downloading in 15 minutes"
+if click_labelled "Get Started" 20; then
+  click_labelled "Let's Go" 20 || true
+  # Recording is hard-gated on the transcription model, so this wait is not optional.
+  # An unseeded profile pulls about 4.3 GB here: the transcription model, plus a summary
+  # model that starts on the same screen and is not gated by Continue.
+  say "waiting for the transcription model (it gates recording)"
+  if ! click_labelled "Continue" 900; then
+    die "the transcription model did not finish downloading in 15 minutes"
+  fi
+else
+  # A seeded profile already has the models and the onboarding marker, so none of those
+  # controls exist. Waiting for Continue here would burn the full fifteen-minute timeout
+  # and then fail on a profile that is in better shape than the one that passes.
+  say "no onboarding (profile already set up) - going straight to recording"
 fi
 
 click_labelled "Start recording" 60 || die "no 'Start recording' control appeared"
