@@ -59,6 +59,18 @@ for line in sys.stdin:
 
 say "launching $APP on $PROFILE"
 mkdir -p "$PROFILE/home"
+
+# Optional: pin a system-audio device before the first launch. The application resolves
+# preferred_system_device through AudioDevice::from_name, which insists on an "(output)"
+# suffix, and the store lives in the *data* directory rather than the config one -- both
+# settled by experiment, both easy to get wrong.
+if [ -n "${BC_PREFERRED_SYSTEM_DEVICE:-}" ]; then
+  store="$PROFILE/home/.local/share/com.conversationaly.ai"
+  mkdir -p "$store" "$PROFILE/rec"
+  printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":null,"preferred_system_device":"%s"}}' \
+    "$PROFILE/rec" "$BC_PREFERRED_SYSTEM_DEVICE" > "$store/recording_preferences.json"
+  say "pinned system audio to '$BC_PREFERRED_SYSTEM_DEVICE'"
+fi
 ( HOME="$PROFILE/home" XDG_CONFIG_HOME="$PROFILE/home/.config" \
   XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" \
   nohup "$APP" > "$LOG" 2>&1 & echo $! > "$PIDFILE" )
