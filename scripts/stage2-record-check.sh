@@ -10,6 +10,13 @@
 # stream was created" are proxies, and a harness feeding silence passes both of them —
 # which is exactly the failure this check exists to catch.
 #
+# A clean profile downloads about 4.3 GB before it can record — the transcription model
+# gates recording, and a summary model starts on the same screen without being gated. That
+# is once, not once per run: models are cached in BC_MODELS_CACHE (default
+# ~/.cache/backchannel-gate-models) and seeded into each fresh profile, along with the
+# onboarding marker, so later runs skip onboarding entirely and download nothing. Delete
+# that directory to force a real first-run.
+#
 # It drives the UI through Orca's computer-use CLI against the accessibility tree. There
 # are no screenshots on the Linux provider, so the tree is the only thing to steer by, and
 # **element indices are positional**: they shift after every interaction, so each click
@@ -57,8 +64,23 @@ for line in sys.stdin:
   sleep 3
 }
 
+CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
+APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+
 say "launching $APP on $PROFILE"
 mkdir -p "$PROFILE/home"
+
+# Seed models and the onboarding marker from the cache, so a "clean" profile is clean in
+# every way that matters to the gate without re-downloading gigabytes. Nothing here fakes
+# application state beyond what a second launch on a real machine would already have.
+if [ -d "$CACHE/models" ]; then
+  mkdir -p "$APPDATA"
+  cp -a --reflink=auto "$CACHE/models" "$APPDATA/models" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/models"
+  [ -f "$CACHE/onboarding-status.json" ] && cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
+  say "seeded models from $CACHE — no downloads this run"
+else
+  say "no model cache at $CACHE — this run downloads them (about 4.3 GB) and fills it"
+fi
 
 # Optional: pin a system-audio device before the first launch. The application resolves
 # preferred_system_device through AudioDevice::from_name, which insists on an "(output)"
@@ -105,6 +127,12 @@ while [ $SECONDS -lt $deadline ]; do
   done
   if [ "$missing" -eq 0 ]; then
     say "transcript contains: ${EXPECTED[*]}"
+    if [ ! -d "$CACHE/models" ] && [ -d "$APPDATA/models" ]; then
+      mkdir -p "$CACHE"
+      cp -a --reflink=auto "$APPDATA/models" "$CACHE/models" 2>/dev/null || cp -a "$APPDATA/models" "$CACHE/models"
+      [ -f "$APPDATA/onboarding-status.json" ] && cp -a "$APPDATA/onboarding-status.json" "$CACHE/"
+      say "cached models to $CACHE — later runs will not download them"
+    fi
     printf '%s' "$text" | grep -io -- "${EXPECTED[0]}[^,]*" | head -2 | sed 's/^/    /'
     exit 0
   fi
