@@ -35,10 +35,14 @@ record and `main` never disagrees with it.
    evidence are posted to the issue. `NOT READY` means fix and a fresh round on the new revision.
    Stage 2 for this product is the built application on a clean profile: UI flows are driven
    with the `computer-use` skill (real window, accessibility tree, screenshots); audio flows use
-   the PipeWire virtual-device harness (a null sink fed with a recording as the system channel,
-   a virtual source as the microphone). Until the harness exists, audio verdicts are narrowed and
-   name what is not proven; merging on a narrowed verdict is the maintainer's per-issue decision,
-   recorded as a comment.
+   the PipeWire virtual-device harness: `scripts/audio-harness.sh` makes a virtual source the
+   default input and loops a recording into it, and `scripts/stage2-record-check.sh` drives the
+   built application through a recording and asserts the sample's words come back as a transcript.
+   Both are wired into `gopnik.json`; the system-audio side (`--system-only --system-home`) is
+   verified but run by hand, because each application run costs about ten minutes. The audio pass
+   needs a live PipeWire session and so does not run in CI. Audio verdicts are no longer narrowed
+   by default; where a verdict still cannot reach something — both channels at once, transcription
+   quality, macOS and Windows — it names what is not proven.
 6. **Pull request** with `Closes #N` and a link to the verdict. On a `READY` verdict engineering
    merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by
    a later fix is not merged on.
