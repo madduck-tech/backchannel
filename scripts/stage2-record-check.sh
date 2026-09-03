@@ -17,6 +17,12 @@
 # onboarding marker, so later runs skip onboarding entirely and download nothing. Delete
 # that directory to force a real first-run.
 #
+# One trap in that cache, deliberate and worth knowing: the snapshot is taken as soon as
+# recording becomes possible, so the summary model in it is usually *partial* while the
+# onboarding marker says it is downloaded. The gate never summarises, so this costs it
+# nothing. Anyone testing summaries must delete the cache first and let a real download
+# finish.
+#
 # It drives the UI through Orca's computer-use CLI against the accessibility tree. There
 # are no screenshots on the Linux provider, so the tree is the only thing to steer by, and
 # **element indices are positional**: they shift after every interaction, so each click
@@ -93,9 +99,12 @@ if [ -n "${BC_PREFERRED_SYSTEM_DEVICE:-}" ]; then
     "$PROFILE/rec" "$BC_PREFERRED_SYSTEM_DEVICE" > "$store/recording_preferences.json"
   say "pinned system audio to '$BC_PREFERRED_SYSTEM_DEVICE'"
 fi
+# setsid, so the application leads its own process group and the caller can stop the
+# whole tree at once. Killing only the parent leaves WebKit's helper processes to die
+# on their own, which the desktop reports to the user as a crash.
 ( HOME="$PROFILE/home" XDG_CONFIG_HOME="$PROFILE/home/.config" \
   XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" \
-  nohup "$APP" > "$LOG" 2>&1 & echo $! > "$PIDFILE" )
+  setsid nohup "$APP" > "$LOG" 2>&1 & echo $! > "$PIDFILE" )
 sleep 20
 kill -0 "$(cat "$PIDFILE")" 2>/dev/null || die "the application exited during startup; see $LOG"
 
@@ -117,7 +126,12 @@ else
   say "no onboarding (profile already set up) - going straight to recording"
 fi
 
-click_labelled "Start recording" 60 || die "no 'Start recording' control appeared"
+if ! click_labelled "Start recording" 60; then
+  # Say what was on screen instead. A driver that reports only "the control was not
+  # there" makes every failure look the same, and most of them are not.
+  say "the tree at that moment was:"; tree | sed 's/^/    /' | head -40
+  die "no 'Start recording' control appeared"
+fi
 
 grep -q 'Failed to create microphone stream' "$LOG" \
   && die "the microphone stream could not be created; see $LOG"
