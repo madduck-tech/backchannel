@@ -146,6 +146,35 @@ pub async fn get_device_and_config(
                         }
                     }
                 }
+
+                // The default input device does not round-trip through its own name on every
+                // host. cpal's ALSA backend answers `default_input_device()` with a synthetic
+                // device described "Default Audio Device", and `input_devices()` never yields
+                // that description — it enumerates ALSA hints. So on Linux a recording started
+                // with no stored preference used to die here with "Device not found" before any
+                // audio was touched.
+                //
+                // Fall back to the device object itself, and *only* when the name we were asked
+                // for is the default's own. A stale stored preference naming a device that has
+                // gone away must keep erroring: silently recording a different microphone than
+                // the one the user picked is worse than failing to start. Where the round-trip
+                // already works (macOS, and any host whose default appears in its enumeration)
+                // the loop above matches first and this is dead code.
+                if let Some(default_device) = host.default_input_device() {
+                    let is_default_by_name = device_name(&default_device)
+                        .map(|name| name == audio_device.name)
+                        .unwrap_or(false);
+                    if is_default_by_name {
+                        let default_config = default_device.default_input_config().map_err(|e| {
+                            anyhow!("Failed to get default input config: {}", e)
+                        })?;
+                        log::info!(
+                            "Default input device '{}' is not in the enumeration; using it directly",
+                            audio_device.name
+                        );
+                        return Ok((default_device, default_config));
+                    }
+                }
             }
             DeviceType::Output => {
                 #[cfg(target_os = "macos")]
