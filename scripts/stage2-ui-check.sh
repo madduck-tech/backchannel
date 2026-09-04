@@ -153,7 +153,11 @@ js() { curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/
 find_el() { curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/json' -d "$1" \
         | python3 -c 'import json,sys
 v=json.load(sys.stdin).get("value")
-print(list(v.values())[0] if isinstance(v,dict) and v else "")'; }
+# Only a real element reference, never the error object. WebDriver answers a miss with
+# {"value":{"error":"no such element",...}}, and taking its first value yields the *string*
+# "no such element" -- non-empty, so every `[ -n "$X" ] || die` guard silently passes and the
+# next click goes to a nonsense id. Found when this harness died with no message at all.
+print(next((x for k,x in v.items() if k.startswith("element-")), "") if isinstance(v,dict) else "")'; }
 click() { curl -s -m 20 -X POST "$BASE/element/$1/click" -H 'Content-Type: application/json' -d '{}' >/dev/null; }
 by_text() { find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$1\\\"]\"}"; }
 
