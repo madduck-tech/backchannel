@@ -23,5 +23,8 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
 - Product terminology: "share protection", never "stealth", "invisible", "undetectable" (ADR 0009).
 - `/usr/bin/od` is GNU coreutils and must not be shadowed. OpenDesign is `opendesign start|open|od …`
   or the `open-design` MCP server; prototype runs pass `project: "backchannel-prototypes"`.
+- Testing is not optional and not vibes: `.claude/rules/testing.md` and ADR 0016. A change that
+  executes ships with a test shown red without it; a bug is red-first with the failure output in the
+  pull request.
 - Report outcomes faithfully: failed checks, skipped steps and unverified platforms are stated,
   never implied. A readiness claim without a gopnik verdict is not made.

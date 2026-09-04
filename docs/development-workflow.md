@@ -51,6 +51,64 @@ That is the whole cycle. It applies to every executable change without exception
 for a verified change is the accepted cost. Documentation-only changes skip steps 2–5 and go
 straight to `main`.
 
+## The quality cycle
+
+ADR 0016. The cycle above asks whether the work does what is claimed; this asks whether the next
+change will be caught.
+
+None of the five items below has a failure mode: no tool reads a pull request body or a verdict. They
+are conventions the gate and the critic enforce by being run, not by being automated. What *is*
+automated is the table underneath.
+
+1. **A change that executes ships with a test that fails without it.** Not "is covered" — a test
+   demonstrated red on the code as it was. A bug is **red-first**: the failing test, its output pasted
+   in the pull request, then the fix. A feature ships with a negative control — break the behaviour,
+   show red, restore.
+2. **The control is shown, not asserted.** The mutation and its output go in the pull request. Mutate
+   by line number, or re-read the anchor: both known cases of a control that silently did nothing came
+   from an anchor that did not match the file, and a control that does nothing reads exactly like a
+   check that passes.
+3. **When a check has several conditions, say how many controls are owed.** Three checks with five
+   conditions owe five.
+4. **A `READY` verdict on an executable change carries the control table.** This is a rule for
+   whoever writes the verdict, recorded in `gopnik.json` where the gate reads it. Nothing mechanically
+   refuses a verdict without one — no tool parses a verdict — so it rests on the same honesty as the
+   rest of this section.
+5. **Verify claims against the artifact, not the intent to produce it.** Re-read what was published.
+
+What is machine-enforced rather than asked for, and the check that does it:
+
+| rule | check |
+|---|---|
+| an `#[ignore]`d test is run by the gate or excused with a reason, and the excuse cannot go stale | `frontend/tests/lib/ignored-tests-are-run.test.mjs` |
+| a file under `tests/` that the runner's glob would skip | the same test |
+| a registered command invoked from nowhere, or an invoke naming a command that does not exist | `command-reachability.test.mjs` |
+| a modal key nothing can open, and the four declarations of that key list agreeing | `modal-reachability.test.mjs` |
+| a component unreachable from any page | `component-reachability.test.mjs` |
+| the string the device picker stores, against the Rust that parses it | `device-preference-string.test.mjs` |
+| the device picker's two lists and two handlers, rendered | `device-selection.test.mjs` |
+
+The three reachability checks — and only those three — hold their allowlists under **set equality**,
+so wiring a thing up, deleting it, or adding a new unreached one all force an edit. The other four
+rows are literal pins with no allowlist. The table lists the checks that guard *reachability and
+contracts*; it is not the whole suite, which has 13 test files.
+
+They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
+turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
+its reason — the record the check exists to build. Matching on string literals rather than bare
+identifiers narrows this; it does not close it, and closing it needs a lint step this repository does
+not have.
+
+Not covered, and named so the absence is a decision: no lint runs in CI, and a backend that
+fabricates a value a correct component renders is caught by nothing.
+
+Stage 2's **accessibility-tree** driver reaches only top-level push buttons — a `page tab` exposes no
+action to it, and neither keyboard nor coordinate input reaches the webview. That is a limit of that
+instrument, not of the application: measured on 2026-09-04, a WebDriver session through `tauri-driver`
+opens the settings tabs, lists the audio devices and selects one with real pointer events, against the
+**bundled AppImage**, in about ten seconds on a profile with no models. #20 is the work of putting that
+in the gate.
+
 ## Decisions
 
 A decision that someone would otherwise have to rediscover from code is recorded as an ADR in
