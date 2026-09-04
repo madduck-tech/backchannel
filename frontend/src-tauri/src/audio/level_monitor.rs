@@ -61,7 +61,7 @@ impl AudioLevelMonitor {
             streams.clear();
         }
 
-        let host = cpal::default_host();
+        let host = crate::audio::devices::host::audio_host();
         let level_data = Arc::new(Mutex::new(Vec::<AudioLevelData>::new()));
 
         // Create audio streams for each device

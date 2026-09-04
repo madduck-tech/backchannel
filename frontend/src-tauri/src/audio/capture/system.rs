@@ -20,12 +20,12 @@ pub struct SystemAudioCapture {
 
 impl SystemAudioCapture {
     pub fn new() -> Result<Self> {
-        let host = cpal::default_host();
+        let host = crate::audio::devices::host::audio_host();
         Ok(Self { _host: host })
     }
 
     pub fn list_system_devices() -> Result<Vec<String>> {
-        let host = cpal::default_host();
+        let host = crate::audio::devices::host::audio_host();
         let devices = host.output_devices()
             .map_err(|e| anyhow::anyhow!("Failed to enumerate output devices: {}", e))?;
 
@@ -86,7 +86,7 @@ impl SystemAudioCapture {
 
     pub fn check_system_audio_permissions() -> bool {
         // Check if we can enumerate audio devices
-        match cpal::default_host().output_devices() {
+        match crate::audio::devices::host::audio_host().output_devices() {
             Ok(_) => true,
             Err(_) => false,
         }
