@@ -41,7 +41,8 @@
 set -euo pipefail
 
 APP="${1:?usage: stage2-ui-check.sh <AppImage> [profile-dir]}"
-if [ -n "${2:-}" ]; then PROFILE="$2"; else PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1; fi
+PROFILE="${2:-}"   # created below, after the preconditions: a die() between mktemp and the
+                   # EXIT trap leaks the directory, which is how the F10 fix was incomplete.
 PORT="${BC_WD_PORT:-14444}"
 NATIVE_PORT="${BC_WD_NATIVE_PORT:-14445}"
 CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
@@ -67,8 +68,11 @@ for pid in $(ls /proc | grep -E '^[0-9]+$'); do
   [ "$pid" = "$$" ] && continue
   [ "$pid" = "$PPID" ] && continue
   exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+  # Basename, not the AppImage mount path: `target/release/conversationaly` -- what a local
+  # build and `pnpm tauri:dev` produce, and what a developer is most likely to have open --
+  # takes the same single-instance lock and produced the same silent 2m40s hang.
   case "$exe" in
-    */.mount_conver*/usr/bin/conversationaly) RUNNING="$pid"; break ;;
+    */conversationaly) RUNNING="$pid"; break ;;
   esac
 done
 [ -z "$RUNNING" ] || die "another copy of the application is already running (pid $RUNNING).
@@ -77,6 +81,7 @@ done
     to that one and exits, and the WebDriver handshake then times out with 'IncompleteMessage'.
     Stop it and re-run."
 
+if [ -z "$PROFILE" ]; then PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1; fi
 APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
 mkdir -p "$APPDATA"
 # The onboarding marker alone -- no models. This pass never records, so it does not need them,
@@ -98,7 +103,13 @@ cleanup() {
   [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
-  [ -n "${OWN_PROFILE:-}" ] && rm -rf "$PROFILE" || true
+  # Kept on failure: the application's own logs/ live in there, and the driver log alone does
+  # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
+  if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
+    rm -rf "$PROFILE"
+  elif [ -n "${OWN_PROFILE:-}" ]; then
+    printf 'stage2-ui-check: profile kept for inspection: %s\n' "$PROFILE" >&2
+  fi
 }
 trap cleanup EXIT
 
@@ -182,14 +193,23 @@ click "$S"
 await "document.querySelectorAll('[role=tab]').length > 0" 'the settings screen to render its tabs'
 T=$(by_text "Recordings"); [ -n "$T" ] || die "no Recordings tab in the DOM"
 click "$T"
-await "[...document.querySelectorAll('[role=tab]')].some(t=>t.getAttribute('data-state')==='active')" \
-      'a tab to report itself active'
+# Name the tab. "some tab is active" is true before the click -- General already is -- so the
+# earlier form returned instantly and the race it was added to close stayed open, surfacing as
+# "the Recordings tab did not open", which reads exactly like the product regression this
+# harness exists to detect.
+await "[...document.querySelectorAll('[role=tab]')].some(t=>t.textContent.trim()==='Recordings'&&t.getAttribute('data-state')==='active')" \
+      'the Recordings tab to become active'
 TABS=$(js '"return [...document.querySelectorAll(\"[role=tab]\")].map(t=>t.textContent.trim()+\":\"+t.getAttribute(\"data-state\")).join(\", \")"')
 say "tabs: $TABS"
 printf '%s' "$TABS" | grep -q 'Recordings:active' \
   || die "the Recordings tab did not open: $TABS"
 
 # --- the system-audio picker lists something a person could choose ----------------------
+# Note what this does and does not assert: that there is more than the default entry, not
+# that the entries are monitors. Only monitors enter the list as DeviceType::Output
+# (configure_linux_audio), so monitor-ness is warranted by that code rather than by anything
+# observed here -- and asserting the string "Monitor of" would be the display-string class
+# #9 and #10 are about.
 TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}')
 [ -n "$TRIG" ] || die "no #system-selection trigger behind the Recordings tab"
 click "$TRIG"
@@ -212,8 +232,14 @@ OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role=\\\"option\\\"][normal
 [ -n "$OPT" ] || die "could not locate the option element for $FIRST"
 click "$OPT"
 # The preference is written by the Rust side, so the wait is on the file rather than the DOM.
+# Poll for the field, not for a non-empty file: the store writes the file and fills it in two
+# steps, so `-s` can be true while preferred_system_device is still absent.
 for _ in $(seq 1 30); do
-  [ -s "$APPDATA/recording_preferences.json" ] && break
+  [ -n "$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+    print((d.get("preferences") or d).get("preferred_system_device") or "")
+except Exception: print("")' "$APPDATA/recording_preferences.json" 2>/dev/null)" ] && break
   sleep 0.5
 done
 STORED=$(python3 -c 'import json,sys
@@ -230,4 +256,5 @@ say "stored preference: ${STORED:-<none>}"
 [ "$STORED" = "$FIRST (output)" ] \
   || die "selected '$FIRST' and the app stored '$STORED'; it must store exactly '$FIRST (output)'"
 
+PASSED=1
 say "PASS - tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"
