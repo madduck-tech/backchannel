@@ -17,6 +17,7 @@
 | [0013](0013-single-cycle-with-gopnik.md) | One cycle: issue → critic → design → implementation → gopnik gate → PR | accepted; merge gate superseded by 0014 |
 | [0014](0014-product-owner-and-engineering-roles.md) | Product owner and engineering: engineering merges on READY; product gates only | accepted |
 | [0015](0015-linux-system-audio-via-cpal-pulseaudio-host.md) | Linux system audio through cpal's PulseAudio host, not a new capture path | accepted; supersedes decision 2 of 0005 |
+| [0016](0016-quality-cycle-tests-and-red-first.md) | The quality cycle: a change ships with the test that would have caught it | accepted; extends 0013 |
 
 ## Deferred questions
 
