@@ -19,6 +19,11 @@ critic and the gate are run, not because anything fails when they are broken.*
   control silently did nothing and read as a pass — once because two string replacements cancelled
   out, once because `open(path, 'w')` truncated the file before throwing, so the test ran against an
   empty component. A control that does nothing is indistinguishable from a check that passes.
+- **A call that returns success is not evidence it did anything.** Measured on 2026-09-04: with
+  the application's window minimized, a W3C Element Click returns `{"value":null}` — the WebDriver
+  success response — and the page does not change. The accessibility driver does the same on a
+  settings tab: `ok: true`, nothing delivered. So assert the state after an interaction, never the
+  interaction's own return value. Same class as a control that silently does nothing.
 - **Mutate by line number or by an anchor you re-read.** Both silent controls above came from
   anchors that did not match what was in the file.
 - **State the count of controls when a check has more than one condition.** Three checks with five
