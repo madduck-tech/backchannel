@@ -1,0 +1,82 @@
+// Load a .ts/.tsx module and its local imports, with nothing this repository does not
+// already have: `typescript` (a pinned devDependency), React, and node:vm. Same
+// transpile-and-run technique as blocknote-markdown.test.mjs, extended to JSX and to
+// following relative and `@/` imports.
+//
+// Deliberately not a bundler. It resolves exactly two kinds of specifier — local files, by
+// the same rules tsconfig declares, and bare package names, through Node's own resolver —
+// and it lets the caller override any of them. A component that grows a dependency the test
+// has not accounted for fails loudly here rather than silently pulling half the application
+// into the run.
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import ts from 'typescript';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+export const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const nodeRequire = createRequire(import.meta.url);
+const srcDir = path.join(root, 'src');
+
+function resolveLocal(spec, fromFile) {
+  let base;
+  if (spec.startsWith('@/')) base = path.join(srcDir, spec.slice(2));
+  else if (spec.startsWith('.')) base = path.resolve(path.dirname(fromFile), spec);
+  else return null;
+  for (const c of [`${base}.tsx`, `${base}.ts`, path.join(base, 'index.tsx'), path.join(base, 'index.ts')]) {
+    if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
+  }
+  return null;
+}
+
+/**
+ * @param entry     path relative to the frontend package
+ * @param overrides map of specifier -> module object, consulted before anything else
+ */
+export function loadTsx(entry, overrides = {}) {
+  const cache = new Map();
+
+  function load(file) {
+    if (cache.has(file)) return cache.get(file);
+    const compiled = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        jsx: ts.JsxEmit.ReactJSX,
+        esModuleInterop: true,
+      },
+    }).outputText;
+    const module = { exports: {} };
+    cache.set(file, module.exports);
+    vm.runInNewContext(compiled, {
+      exports: module.exports,
+      module,
+      require: (spec) => {
+        if (Object.prototype.hasOwnProperty.call(overrides, spec)) return overrides[spec];
+        const local = resolveLocal(spec, file);
+        if (local) return load(local);
+        return nodeRequire(spec);
+      },
+      console,
+      globalThis,
+      window: globalThis.window,
+      document: globalThis.document,
+      React,
+    });
+    cache.set(file, module.exports);
+    return module.exports;
+  }
+
+  return load(path.join(root, entry));
+}
+
+export const renderStatic = (element) => renderToStaticMarkup(element);
+
+/** Attribute value of the first element carrying `name`, or null. */
+export function attr(markup, name) {
+  const m = markup.match(new RegExp(`${name}="([^"]*)"`));
+  return m ? m[1] : null;
+}
