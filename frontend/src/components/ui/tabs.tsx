@@ -47,36 +47,12 @@ TabsList.displayName = TabsPrimitive.List.displayName
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
->(({ className, onClick, ...props }, ref) => {
+>(({ className, ...props }, ref) => {
   const variant = React.useContext(TabsVariantContext)
-
-  /**
-   * Radix activates a tab on `mousedown`, `keydown` and `focus`, and handles no
-   * `click` at all (`@radix-ui/react-tabs` composes exactly those three). Assistive
-   * technology does not send any of them: an accessibility API's "click" action
-   * dispatches a plain DOM `click`, which the primitive ignores. The tab strip is
-   * therefore inert to a screen reader and to anything driving the app through
-   * AT-SPI — the settings tabs cannot be switched at all.
-   *
-   * `detail` is 0 only for a click that no pointer produced, which is what an
-   * assistive click looks like. A real mouse click already fired `mousedown` and
-   * must not be given a second one, or the tab activates twice.
-   */
-  const activateWithoutAPointer = React.useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      onClick?.(event)
-      if (event.defaultPrevented || event.detail !== 0) return
-      event.currentTarget.dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })
-      )
-    },
-    [onClick]
-  )
 
   return (
     <TabsPrimitive.Trigger
       ref={ref}
-      onClick={activateWithoutAPointer}
       className={cn(
         "inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium",
         "transition-colors duration-fast",
