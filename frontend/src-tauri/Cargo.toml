@@ -179,6 +179,14 @@ transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev
 [target.'cfg(target_os = "linux")'.dependencies]
 futures-channel = "0.3.31"
 
+# cpal's PulseAudio host, enabled on Linux only (#13). Without it cpal falls back to its
+# ALSA host, which on a PipeWire machine enumerates no sink monitor at all -- so system
+# audio has nothing to select -- and returns one identical description for every input of
+# a card, which is #10. The crate behind the feature (`pulseaudio`) is pure Rust and links
+# no system library; at runtime it needs a PulseAudio-protocol socket, which pipewire-pulse
+# provides, and cpal falls back to ALSA when there is none.
+cpal = { version = "0.18.1", features = ["pulseaudio"] }
+
 # See the Windows block for why default-features is off.
 transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "553f1099a2b3a5bc4421894be171f09960fc0f3a", default-features = false }
 

@@ -3,10 +3,11 @@ use cpal::traits::HostTrait;
 use log::{info, warn};
 
 use super::configuration::{device_name, AudioDevice, DeviceType};
+use super::host::audio_host;
 
 /// Get the default input (microphone) device for the system
 pub fn default_input_device() -> Result<AudioDevice> {
-    let host = cpal::default_host();
+    let host = audio_host();
     let device = host
         .default_input_device()
         .ok_or_else(|| anyhow!("No default input device found"))?;
@@ -23,7 +24,7 @@ pub fn default_input_device() -> Result<AudioDevice> {
 ///
 /// Returns None if no built-in microphone found
 pub fn find_builtin_input_device() -> Result<Option<AudioDevice>> {
-    let host = cpal::default_host();
+    let host = audio_host();
 
     // Built-in microphone name patterns (platform-specific)
     let builtin_patterns = [

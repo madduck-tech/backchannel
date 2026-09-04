@@ -132,7 +132,7 @@ pub async fn get_device_and_config(
     {
         use cpal::traits::{DeviceTrait, HostTrait};
 
-        let host = cpal::default_host();
+        let host = super::host::audio_host();
 
         match audio_device.device_type {
             DeviceType::Input => {
@@ -195,16 +195,21 @@ pub async fn get_device_and_config(
 
                 #[cfg(target_os = "linux")]
                 {
-                    // For Linux, we use PulseAudio monitor sources for system audio
-                    if let Ok(pulse_host) = cpal::host_from_id(cpal::HostId::Alsa) {
-                        for device in pulse_host.input_devices()? {
-                            if let Ok(name) = device_name(&device) {
-                                if name == audio_device.name {
-                                    let default_config = device
-                                        .default_input_config()
-                                        .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
-                                    return Ok((device, default_config));
-                                }
+                    // System audio on Linux is a sink's monitor, and a monitor is a *source*:
+                    // it is opened as an input stream, which is why this arm searches
+                    // `input_devices()` while the device is typed as an Output.
+                    //
+                    // It used to open its own `host_from_id(HostId::Alsa)` regardless of which
+                    // host enumerated the device, so a monitor listed by the PulseAudio host
+                    // could never be found again here (#13). It now uses the same host as the
+                    // enumeration.
+                    for device in host.input_devices()? {
+                        if let Ok(name) = device_name(&device) {
+                            if name == audio_device.name {
+                                let default_config = device
+                                    .default_input_config()
+                                    .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
+                                return Ok((device, default_config));
                             }
                         }
                     }

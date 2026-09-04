@@ -36,7 +36,7 @@ async fn get_macos_output() -> Result<AudioOutputInfo> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     // Get default output device using cpal
-    let host = cpal::default_host();
+    let host = crate::audio::devices::host::audio_host();
     let device = host.default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No default output device found"))?;
 
@@ -82,7 +82,7 @@ async fn get_macos_output() -> Result<AudioOutputInfo> {
 async fn get_windows_output() -> Result<AudioOutputInfo> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
-    let host = cpal::default_host();
+    let host = crate::audio::devices::host::audio_host();
     let device = host.default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No default output device found"))?;
 
@@ -121,7 +121,7 @@ async fn get_windows_output() -> Result<AudioOutputInfo> {
 async fn get_linux_output() -> Result<AudioOutputInfo> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
-    let host = cpal::default_host();
+    let host = crate::audio::devices::host::audio_host();
     let device = host.default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No default output device found"))?;
 

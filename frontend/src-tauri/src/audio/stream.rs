@@ -505,4 +505,131 @@ mod tests {
         println!("captured {captured} samples in 500ms");
         assert!(captured > 0, "stream produced no samples in 500ms");
     }
+
+    /// The Linux system-audio path, end to end through the same lookup the UI uses.
+    ///
+    /// Ignored by default for the same reason as the test above: it needs a real audio
+    /// server. Run it with
+    /// `cargo test -p conversationaly --lib system_audio_monitor -- --ignored --nocapture`
+    ///
+    /// What it guards, all of it observed broken before #13:
+    ///
+    /// * `list_audio_devices()` returning **no** system-audio device at all, because the
+    ///   monitor filter was a case-sensitive `contains("monitor")` against a description
+    ///   that reads "Monitor of …".
+    /// * Monitors offered in the **microphone** list, because enumeration typed every
+    ///   input as `Input` before classifying.
+    /// * A device that lists but cannot be selected: the enumeration used to advertise
+    ///   `"<name> (System Audio)"` while every lookup compared the unsuffixed description,
+    ///   so `get_device_and_config` could never find it again. That is what
+    ///   `assert!(round_trips)` below is for, and it is the failure the Stage 2 harness
+    ///   could not see, because it wrote the preference file by hand.
+    ///
+    /// It deliberately asserts nothing about *signal*: a monitor of a silent sink is
+    /// legitimately silent, and asserting a sample count would be the same mistake as
+    /// `cpal_capture_round_trip`'s, which counts samples of digital zeros. Signal is
+    /// Stage 2's job, with something playing.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore]
+    async fn system_audio_monitor_round_trip() {
+        let devices = super::super::devices::list_audio_devices()
+            .await
+            .expect("device enumeration failed");
+
+        for d in &devices {
+            println!("{:?}  {}", d.device_type, d.name);
+        }
+
+        let monitors: Vec<_> = devices
+            .iter()
+            .filter(|d| d.device_type == super::super::devices::DeviceType::Output)
+            .collect();
+        assert!(
+            !monitors.is_empty(),
+            "no system-audio device was enumerated; on a PipeWire machine at least one \
+             sink monitor is expected"
+        );
+
+        // A monitor must never be offered as a microphone.
+        let monitors_in_mic_list: Vec<_> = devices
+            .iter()
+            .filter(|d| d.device_type == super::super::devices::DeviceType::Input)
+            .filter(|d| d.name.to_ascii_lowercase().contains("monitor"))
+            .collect();
+        assert!(
+            monitors_in_mic_list.is_empty(),
+            "monitors leaked into the microphone list: {:?}",
+            monitors_in_mic_list.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+
+        // Every enumerated system-audio device must survive the round trip the UI makes:
+        // enumerate -> display string -> stored preference -> lookup.
+        for m in &monitors {
+            let stored = format!("{} (output)", m.name);
+            let parsed = super::super::devices::AudioDevice::from_name(&stored)
+                .unwrap_or_else(|e| panic!("stored form {stored:?} did not parse back: {e}"));
+            let (_device, config) = super::super::devices::get_device_and_config(&parsed)
+                .await
+                .unwrap_or_else(|e| panic!("{:?} did not round-trip through its own name: {e}", m.name));
+            println!(
+                "round-tripped {:?}: {} Hz, {} ch, {:?}",
+                m.name,
+                config.sample_rate(),
+                config.channels(),
+                config.sample_format()
+            );
+        }
+
+        // The no-preference path: recording with nothing stored must still find system
+        // audio. This used to return the default *sink*, which no lookup could resolve
+        // because capture opens a source — a silent no-op behind a `warn!`.
+        let default_sys = super::super::devices::default_output_device()
+            .expect("no default system audio device");
+        println!("default system audio: {:?}", default_sys.name);
+        assert!(
+            monitors.iter().any(|m| m.name == default_sys.name),
+            "the default system-audio device {:?} is not one of the enumerated monitors {:?}",
+            default_sys.name,
+            monitors.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+        super::super::devices::get_device_and_config(&default_sys)
+            .await
+            .expect("the default system-audio device did not round-trip through its own name");
+    }
+
+    /// A preference written by a build from before the host change must fail loudly.
+    ///
+    /// Switching hosts rewrites every Linux display string, so every stored
+    /// `recording_preferences.json` stops matching on upgrade. The requirement is not that
+    /// it keeps working — it cannot — but that it does not *silently* resolve to some other
+    /// device. `"sof-hda-dsp, "` is what cpal's ALSA host called eleven different inputs on
+    /// the development machine (#10); under the PulseAudio host it names nothing.
+    ///
+    /// The guard that makes this hold is `is_default_by_name` in `get_device_and_config`'s
+    /// Input arm: the default-device fallback fires only when the name asked for is the
+    /// default's own. Without it the fallback would hand back the default microphone for
+    /// any unknown name, which is exactly the silent substitution #9's body forbids.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore]
+    async fn stale_preference_from_the_alsa_era_does_not_silently_resolve() {
+        let stale = super::super::devices::AudioDevice::from_name("sof-hda-dsp,  (input)")
+            .expect("the stored form should still parse");
+
+        match super::super::devices::get_device_and_config(&stale).await {
+            Err(e) => println!("stale preference correctly refused: {e}"),
+            Ok((device, _)) => {
+                use cpal::traits::DeviceTrait;
+                let got = device
+                    .description()
+                    .map(|d| d.name().to_string())
+                    .unwrap_or_default();
+                panic!(
+                    "a stale ALSA-era preference silently resolved to {got:?}; it must error \
+                     instead of recording a device the user never picked"
+                );
+            }
+        }
+    }
 }

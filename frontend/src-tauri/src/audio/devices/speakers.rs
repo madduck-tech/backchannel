@@ -3,6 +3,7 @@ use cpal::traits::HostTrait;
 use log::{info, warn};
 
 use super::configuration::{device_name, AudioDevice, DeviceType};
+use super::host::audio_host;
 
 /// Get the default output (speaker/system audio) device for the system
 pub fn default_output_device() -> Result<AudioDevice> {
@@ -10,7 +11,7 @@ pub fn default_output_device() -> Result<AudioDevice> {
     {
         // Use default host for all macOS devices
         // Core Audio backend uses direct cidre API for system capture, not cpal
-        let host = cpal::default_host();
+        let host = audio_host();
         let device = host
             .default_output_device()
             .ok_or_else(|| anyhow!("No default output device found"))?;
@@ -28,7 +29,7 @@ pub fn default_output_device() -> Result<AudioDevice> {
             }
         }
         // Fallback to default host if WASAPI fails
-        let host = cpal::default_host();
+        let host = audio_host();
         let device = host
             .default_output_device()
             .ok_or_else(|| anyhow!("No default output device found"))?;
@@ -37,12 +38,61 @@ pub fn default_output_device() -> Result<AudioDevice> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("No default output device found"))?;
-        return Ok(AudioDevice::new(device_name(&device)?, DeviceType::Output));
+        return default_system_audio_linux();
     }
+}
+
+/// The default system-audio device on Linux: the **monitor of** the default sink.
+///
+/// Returning the sink itself is what the previous code did, and it could not work: a sink
+/// is an output, capture opens an input, and cpal's PulseAudio backend builds an input
+/// stream from a source index. `get_device_and_config`'s Output arm therefore searched the
+/// input list for the sink's own name, never found it, and the failure was swallowed by the
+/// `warn!` at `stream.rs:376` — so a recording started with no stored system-audio
+/// preference silently captured nothing (#13, matrix cell 2.6).
+///
+/// The sink and its monitor are paired by **node id**, not by display name:
+/// PulseAudio names the monitor source `<sink node name>.monitor`, while the descriptions
+/// ("Speaker + Headphones" and "Monitor of Speaker + Headphones") are free text that follows
+/// whatever the sink is called. Falling back to a name match would reintroduce the class
+/// that #9 and #10 are about.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn default_system_audio_linux() -> Result<AudioDevice> {
+    use cpal::traits::DeviceTrait;
+
+    let host = audio_host();
+    let sink = host
+        .default_output_device()
+        .ok_or_else(|| anyhow!("No default output device found"))?;
+
+    let sink_id = sink
+        .id()
+        .map_err(|e| anyhow!("Default output device has no id: {}", e))?;
+    let monitor_id = format!("{}.monitor", sink_id.id());
+
+    for device in host.input_devices()? {
+        if let Ok(id) = device.id() {
+            if id.id() == monitor_id {
+                let name = device_name(&device)?;
+                info!("🔊 Default system audio resolved to the default sink's monitor: '{}'", name);
+                return Ok(AudioDevice::new(name, DeviceType::Output));
+            }
+        }
+    }
+
+    // Not an error worth failing a recording over: system audio is optional, and the
+    // microphone half must still start. Say precisely what was looked for, because the
+    // symptom otherwise is a meeting that records only one side with nothing in the log
+    // that names the reason.
+    warn!(
+        "⚠️ No monitor source for the default sink; system audio will not be captured. \
+         Looked for a source with id '{}'. On a machine with no PulseAudio-protocol \
+         socket cpal falls back to its ALSA host, which exposes no monitors at all.",
+        monitor_id
+    );
+    Err(anyhow!(
+        "No system audio monitor found for the default output device"
+    ))
 }
 
 /// Find the built-in speaker/output device (wired, stable, consistent sample rate)
@@ -59,7 +109,7 @@ pub fn default_output_device() -> Result<AudioDevice> {
 ///
 /// Returns None if no built-in speaker found
 pub fn find_builtin_output_device() -> Result<Option<AudioDevice>> {
-    let host = cpal::default_host();
+    let host = audio_host();
 
     // Built-in speaker name patterns (platform-specific)
     let builtin_patterns = [

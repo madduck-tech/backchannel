@@ -2,14 +2,20 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use log::error;
 
-use super::configuration::{device_name, AudioDevice, DeviceType};
+use super::configuration::AudioDevice;
+// Only the non-Linux branch below still resolves devices by display name; on Linux
+// `configure_linux_audio` returns both roles and nothing is appended after it.
+#[cfg(not(target_os = "linux"))]
+use super::configuration::{device_name, DeviceType};
+use super::host::audio_host;
 use super::platform;
 
 /// List all available audio devices on the system
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
-    let host = cpal::default_host();
+    let host = audio_host();
 
     // Platform-specific device enumeration
+    #[cfg_attr(target_os = "linux", allow(unused_mut))]
     let mut devices = {
         #[cfg(target_os = "windows")]
         {
@@ -27,7 +33,15 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         }
     };
 
-    // Add any additional devices from the default host
+    // Add any additional devices from the default host.
+    //
+    // Not on Linux: `configure_linux_audio` already enumerates both roles from this same
+    // host, and `host.devices()` there also yields the sinks. A sink is an output, and
+    // cpal's PulseAudio backend can only build an input stream from a source
+    // (`build_input_stream_raw` passes a `source_index`), so adding sinks to the
+    // system-audio list would offer entries that cannot be recorded. What *can* be
+    // recorded is the sink's monitor, which the enumeration above already returns.
+    #[cfg(not(target_os = "linux"))]
     if let Ok(other_devices) = host.devices() {
         for device in other_devices {
             if let Ok(name) = device_name(&device) {
@@ -46,7 +60,7 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
 pub fn trigger_audio_permission() -> Result<bool> {
     use log::info;
 
-    let host = cpal::default_host();
+    let host = audio_host();
     let device = match host.default_input_device() {
         Some(d) => d,
         None => {
