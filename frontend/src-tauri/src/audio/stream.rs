@@ -597,4 +597,39 @@ mod tests {
             .await
             .expect("the default system-audio device did not round-trip through its own name");
     }
+
+    /// A preference written by a build from before the host change must fail loudly.
+    ///
+    /// Switching hosts rewrites every Linux display string, so every stored
+    /// `recording_preferences.json` stops matching on upgrade. The requirement is not that
+    /// it keeps working — it cannot — but that it does not *silently* resolve to some other
+    /// device. `"sof-hda-dsp, "` is what cpal's ALSA host called eleven different inputs on
+    /// the development machine (#10); under the PulseAudio host it names nothing.
+    ///
+    /// The guard that makes this hold is `is_default_by_name` in `get_device_and_config`'s
+    /// Input arm: the default-device fallback fires only when the name asked for is the
+    /// default's own. Without it the fallback would hand back the default microphone for
+    /// any unknown name, which is exactly the silent substitution #9's body forbids.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore]
+    async fn stale_preference_from_the_alsa_era_does_not_silently_resolve() {
+        let stale = super::super::devices::AudioDevice::from_name("sof-hda-dsp,  (input)")
+            .expect("the stored form should still parse");
+
+        match super::super::devices::get_device_and_config(&stale).await {
+            Err(e) => println!("stale preference correctly refused: {e}"),
+            Ok((device, _)) => {
+                use cpal::traits::DeviceTrait;
+                let got = device
+                    .description()
+                    .map(|d| d.name().to_string())
+                    .unwrap_or_default();
+                panic!(
+                    "a stale ALSA-era preference silently resolved to {got:?}; it must error \
+                     instead of recording a device the user never picked"
+                );
+            }
+        }
+    }
 }
