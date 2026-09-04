@@ -31,6 +31,12 @@ Facts (2026-09-01):
 2. **Milestone 0, item 1** gains a sub-item: Linux system audio via the PulseAudio protocol
    (`libpulse-binding` through pipewire-pulse / PulseAudio, opening `<sink>.monitor`).
    The native `pipewire` crate is the alternative if libpulse proves insufficient. Without this, Linux does not pass Milestone 0.
+
+   > **Superseded by [ADR 0015](0015-linux-system-audio-via-cpal-pulseaudio-host.md) (2026-09-04).**
+   > The finding above stands; the decision was heavier than it required. Both dependencies named here
+   > are already inside the pinned cpal as optional cargo features, so no capture path had to be built —
+   > only the host selected and the identity round-trip fixed. Left in place rather than rewritten, per
+   > the repository's rule to supersede and never rewrite.
 3. **macOS:** keep the Core Audio tap as the default with ScreenCaptureKit as fallback.
 4. **Windows:** content protection is enabled at runtime.
 5. **The development environment is this Linux machine only.** Consequences:

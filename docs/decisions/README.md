@@ -6,7 +6,7 @@
 | [0002](0002-stt-russian-recommendation.md) | STT for Russian: catalog as is, recommendation by meeting language | accepted |
 | [0003](0003-two-stt-streams-resource-budget.md) | Two STT streams: model instances and resource budget | accepted |
 | [0004](0004-echo-cancellation-scope.md) | Echo: no AEC in the MVP, speaker warning, gate if time permits | accepted |
-| [0005](0005-platform-support-tiers.md) | Platform support tiers; development on Linux only | accepted |
+| [0005](0005-platform-support-tiers.md) | Platform support tiers; development on Linux only | accepted; decision 2 superseded by 0015 |
 | [0006](0006-proactive-mode-design.md) | Proactive mode: mechanics of the intervention levels | accepted |
 | [0007](0007-observation-schema-versioning.md) | Versioning of the observation schema | accepted |
 | [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted |
@@ -16,6 +16,7 @@
 | [0012](0012-development-workflow.md) | Development workflow: approval gates, conventions | partly superseded by 0013 |
 | [0013](0013-single-cycle-with-gopnik.md) | One cycle: issue → critic → design → implementation → gopnik gate → PR | accepted; merge gate superseded by 0014 |
 | [0014](0014-product-owner-and-engineering-roles.md) | Product owner and engineering: engineering merges on READY; product gates only | accepted |
+| [0015](0015-linux-system-audio-via-cpal-pulseaudio-host.md) | Linux system audio through cpal's PulseAudio host, not a new capture path | accepted; supersedes decision 2 of 0005 |
 
 ## Deferred questions
 
