@@ -25,6 +25,18 @@ pub struct IncrementalAudioSaver {
     sample_rate: u32,
 }
 
+/// Whether the buffered audio has reached the checkpoint threshold.
+///
+/// One line, and it is split out because everything around it shells out to ffmpeg. The
+/// only test this rule had drove it through `add_chunk` -> `save_checkpoint` ->
+/// `encode_single_audio`, so "does the arithmetic cut two checkpoints out of 60 s"
+/// could not be answered on a machine without a video encoder — and a required CI check
+/// therefore depended on a binary CI does not install (#29). The arithmetic needs
+/// nothing.
+fn should_cut_checkpoint(buffered_samples: usize, interval_samples: usize) -> bool {
+    buffered_samples >= interval_samples
+}
+
 impl IncrementalAudioSaver {
     /// Create a new incremental saver
     ///
@@ -66,7 +78,7 @@ impl IncrementalAudioSaver {
             .sum();
 
         // Save checkpoint when buffer reaches threshold (30 seconds)
-        if total_samples >= self.checkpoint_interval_samples {
+        if should_cut_checkpoint(total_samples, self.checkpoint_interval_samples) {
             self.save_checkpoint()?;
             self.checkpoint_buffer.clear();
         }
@@ -419,7 +431,46 @@ mod tests {
     use tempfile::tempdir;
     use super::super::recording_state::DeviceType;
 
+    /// The checkpoint rule, with no encoder anywhere near it.
+    ///
+    /// 120 chunks of 0.5 s at 48 kHz is 60 s against a 30 s interval, which is the case the
+    /// old `test_checkpoint_creation` was really about — and it could only observe it by
+    /// encoding two MP4s, so it needed ffmpeg to answer a question about integers.
+    #[test]
+    fn sixty_seconds_of_audio_cuts_two_checkpoints() {
+        let interval = 30 * 48_000; // 30 s at 48 kHz
+        let chunk = 24_000; // 0.5 s
+
+        let mut buffered = 0usize;
+        let mut cuts = 0usize;
+        for _ in 0..120 {
+            buffered += chunk;
+            if should_cut_checkpoint(buffered, interval) {
+                cuts += 1;
+                buffered = 0;
+            }
+        }
+
+        assert_eq!(cuts, 2, "60s of audio against a 30s interval must cut twice");
+        assert_eq!(buffered, 0, "nothing should be left buffered on an exact multiple");
+    }
+
+    #[test]
+    fn a_partial_buffer_is_not_cut_and_is_not_lost() {
+        let interval = 30 * 48_000;
+        assert!(!should_cut_checkpoint(interval - 1, interval), "one sample short must not cut");
+        assert!(should_cut_checkpoint(interval, interval), "exactly the interval must cut");
+        assert!(should_cut_checkpoint(interval + 1, interval), "past the interval must cut");
+    }
+
+    /// The same scenario end to end, through the real encoder.
+    ///
+    /// `#[ignore]`d and named in `gopnik.json` stage 1, because it shells out to ffmpeg and
+    /// CI installs none. It used to be a required check, and it failed once in CI and passed
+    /// on a rerun of the identical tree (#29) — a red gate for a reason unrelated to the
+    /// diff, which is the thing this repository spends its rules on avoiding.
     #[tokio::test]
+    #[ignore = "needs a real ffmpeg on the machine; run by gopnik.json stage 1"]
     async fn test_checkpoint_creation() {
         // Create temp meeting folder
         let temp_dir = tempdir().unwrap();

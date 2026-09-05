@@ -121,7 +121,11 @@ ringbuf = "0.5"
 tempfile = "3.3.0"
 whatlang = "0.18"
 
-ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", branch = "main" }
+# Pinned to a revision, like every other git dependency here — `.claude/rules/platform-code.md`
+# requires it, and this was the only one floating on a branch. It is also the crate that can
+# fetch and unpack an executable from a third-party host, so an unpinned `main` on it is the
+# worst place in the manifest to leave one (#29).
+ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", rev = "a1216c3" }
 
 sqlx = { version = "0.9", features = [ "runtime-tokio", "sqlite", "chrono"] }
 
