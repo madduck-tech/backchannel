@@ -287,16 +287,20 @@ pub fn log_performance_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::devices::DeviceType;
-    use cpal::SampleFormat;
 
+    /// A smoke test, and only that.
+    ///
+    /// It proves the four logging functions do not panic on ordinary arguments. It proves
+    /// nothing about what they log, because they only log and nothing here captures that.
+    /// Said plainly rather than left to be inferred: unlike the `len() >= 0` assertion this
+    /// change also removed, "does not panic" *can* fail, so this is a weak test rather than
+    /// a fake one. Making it a real one needs a log-capture harness this repository does
+    /// not have, and that is not #34's scope.
+    ///
+    /// It used to build an `AudioDevice` it never used, and import `cpal::SampleFormat`
+    /// for a config it never built — rustc reported both, and both are gone.
     #[test]
-    fn test_diagnostics_dont_panic() {
-        // Create mock device and config
-        let device = AudioDevice::new("Test Device".to_string(), DeviceType::Input);
-
-        // Create a mock config (this is simplified - real configs are more complex)
-        // Just ensure the diagnostic functions don't panic
+    fn the_diagnostic_logging_functions_do_not_panic() {
         let detected_kind = InputDeviceKind::Wired;
 
         log_detection_summary("Test Device", detected_kind, 512, 48000);

@@ -76,5 +76,20 @@ jobs:
           mkdir -p frontend/src-tauri/binaries
           cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
 
+      # Deny rustc's own warnings. A separate step on purpose: a lint failure and a test
+      # failure must not look the same in the log. `RUSTFLAGS` is set here rather than at
+      # workflow or job `env:` level so a later step (a clippy adoption, #36) does not
+      # inherit it and turn its own warnings into errors all at once.
+      #
+      # Note the cost this accepts: `dtolnay/rust-toolchain@stable` is unpinned and there is
+      # no `rust-toolchain.toml`, so a future rustc that adds or widens a default lint turns
+      # `main` red with no code change. `build.rs`'s `unexpected_cfgs` — which this change
+      # had to fix first, because it stopped the deny reaching the crate at all — is a lint
+      # rustc turned on by itself, so the precedent is already in this tree. Accepted rather
+      # than hidden: a warning nobody is forced to read is a warning nobody reads, which is
+      # what #34 measured. If it becomes a nuisance, pin the toolchain — do not delete this.
+      - name: Rust lints (deny warnings)
+        run: RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
+
       - name: Rust workspace tests
         run: cargo test --workspace

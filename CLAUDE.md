@@ -222,7 +222,7 @@ pub async fn load_model(&self, model_name: &str) -> Result<()> {
 ```
 
 **GPU Acceleration**:
-- **macOS**: Metal + CoreML (automatically enabled)
+- **macOS**: Metal (automatically enabled). Not CoreML — `coreml` was dropped as a feature because transcribe.cpp has no CoreML path; see `frontend/src-tauri/Cargo.toml`.
 - **Windows/Linux**: CUDA (NVIDIA), Vulkan (AMD/Intel), or CPU
 - Configure via Cargo features: `--features cuda`, `--features vulkan`
 
@@ -358,7 +358,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 ### macOS
 - **Audio Capture**: Uses ScreenCaptureKit for system audio (macOS 13+)
-- **GPU**: Metal + CoreML automatically enabled
+- **GPU**: Metal, automatically enabled (not CoreML — see above)
 - **Permissions**: Requires microphone + screen recording permissions
 - **System Audio**: Requires virtual audio device (BlackHole) for system capture
 

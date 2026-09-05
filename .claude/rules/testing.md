@@ -62,9 +62,17 @@ critic and the gate are run, not because anything fails when they are broken.*
 
 Named here so their absence is a decision rather than a silence:
 
-- No lint runs in CI. `eslint.config.mjs` exists, `package.json` declares no `lint` script, and no
-  workflow calls one. So an unused import cannot be caught, which is one way a reachability check can
-  be turned green without fixing anything.
+- **Rust warnings are denied in CI as of ADR 0017** (`RUSTFLAGS="-D warnings" cargo check --workspace
+  --all-targets`, a step of its own in `test.yml` and in `gopnik.json` stage 1). So an unused import
+  in Rust is caught. **JavaScript is not linted at all** — `eslint.config.mjs` exists, is not
+  installed behind (`@eslint/eslintrc` is absent, so it throws on import), and no workflow calls one.
+  That half is #35, and until it lands an unused TypeScript import is still one way a reachability
+  check can be turned green without fixing anything.
+- `-D warnings` reaches a crate only if everything before it compiles. `build.rs`'s `unexpected_cfgs`
+  made the deny report 2 of 18 for as long as it existed, and the sixteen it never reached were
+  invisible to the very command meant to surface them. When adding a deny, prove it reaches the code
+  by introducing a warning there and watching it fail — a deny that exits non-zero for some other
+  reason looks exactly like one that works.
 - Stage 2's **accessibility-tree** driver reaches only top-level push buttons; a `page tab` exposes no
   action to it. Not a limit of the application: a `tauri-driver` WebDriver session drives the settings
   tabs and the device pickers against the bundled AppImage in about ten seconds (measured 2026-09-04).

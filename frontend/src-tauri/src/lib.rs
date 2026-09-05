@@ -17,6 +17,7 @@ macro_rules! perf_debug {
 }
 
 #[cfg(debug_assertions)]
+#[allow(unused_macros)]
 macro_rules! perf_trace {
     ($($arg:tt)*) => {
         log::trace!($($arg)*)
@@ -24,12 +25,21 @@ macro_rules! perf_trace {
 }
 
 #[cfg(not(debug_assertions))]
+#[allow(unused_macros)]
 macro_rules! perf_trace {
     ($($arg:tt)*) => {};
 }
 
-// Make these macros available to other modules
+// Make these macros available to other modules.
+//
+// `perf_trace` has no caller today and `perf_debug` has one (`audio/pipeline.rs`). Both are
+// kept because CLAUDE.md instructs contributors to use them for hot-path logging and both
+// compile to nothing in release; deleting the unused half would make that instruction false
+// and would have to be paid back the first time someone follows it. The allow is on the
+// definition and the re-export, and it is deliberate rather than an oversight.
+#[allow(unused_imports)]
 pub(crate) use perf_debug;
+#[allow(unused_imports)]
 pub(crate) use perf_trace;
 
 // Re-export async logging macros for external use (removed due to macro conflicts)

@@ -114,19 +114,42 @@ pub struct SystemAudioStoppedPayload;
 mod tests {
     use super::*;
 
+    /// What this used to be, and why it is `#[ignore]`d now.
+    ///
+    /// It asserted `device_list.len() >= 0` on a `usize` — true for every possible list,
+    /// forever — and its `Err` arm printed the error and passed. So it could not fail on
+    /// either branch: two controls that did nothing, in one test, on a path nothing else
+    /// covers. rustc had been reporting the first half on every pull request
+    /// (`comparison is useless due to type limits`) and nothing failed on it.
+    ///
+    /// The mapping it was really about is now a unit test with no hardware
+    /// (`audio/capture/system.rs`, `readable_names`). What is left here genuinely needs a
+    /// machine with audio devices, so it is ignored by default and selected by name in
+    /// `gopnik.json` Stage 1, like `cpal_capture_round_trip`.
     #[tokio::test]
-    async fn test_list_system_audio_devices() {
-        let devices = list_system_audio_devices_command().await;
-        match devices {
-            Ok(device_list) => {
-                println!("System audio devices: {:?}", device_list);
-                assert!(device_list.len() >= 0); // Should at least not crash
-            }
-            Err(e) => {
-                println!("Error listing devices: {}", e);
-                // This might fail on CI or systems without audio
-            }
-        }
+    #[ignore = "needs a machine with real output devices; run by gopnik.json stage 1"]
+    async fn listing_system_audio_devices_returns_usable_names() {
+        let device_list = list_system_audio_devices_command()
+            .await
+            .expect("enumerating output devices failed on a machine that has them");
+
+        assert!(
+            !device_list.is_empty(),
+            "no output devices on a machine expected to have them"
+        );
+        assert!(
+            device_list.iter().all(|name| !name.trim().is_empty()),
+            "an empty device name cannot be shown in the picker or stored as a preference: {device_list:?}"
+        );
+
+        let mut unique = device_list.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            device_list.len(),
+            "duplicate names make a stored preference ambiguous (#10): {device_list:?}"
+        );
     }
 
     #[tokio::test]

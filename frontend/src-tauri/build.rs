@@ -54,9 +54,13 @@ fn detect_and_report_gpu_capabilities() {
 
     match target_os.as_str() {
         "macos" => {
+            // No CoreML line: `coreml` was dropped as a feature (Cargo.toml, "Dropped vs
+            // the whisper-rs era") because transcribe.cpp has no CoreML path and Metal
+            // covers Apple Silicon. The `#[cfg(feature = "coreml")]` that used to guard a
+            // message here named a feature nothing declares, so rustc reported it as
+            // `unexpected_cfgs` on every build — and that one warning is what stopped
+            // `-D warnings` from ever reaching the rest of the crate.
             println!("cargo:warning=✅ macOS: Metal GPU acceleration ENABLED by default");
-            #[cfg(feature = "coreml")]
-            println!("cargo:warning=✅ CoreML acceleration ENABLED");
         }
         "windows" => {
             if cfg!(feature = "cuda") {

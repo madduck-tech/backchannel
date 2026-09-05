@@ -203,8 +203,9 @@ fn detect_vram_gb() -> f32 {
         }
     }
 
-    /// TODO: Vulkan VRAM detection
-
+    // Vulkan VRAM detection is not implemented. `///` here documented nothing —
+    // rustdoc generates no documentation for a statement, which is what rustc was
+    // reporting.
     eprintln!("VRAM detection not available, using conservative estimate");
     4.0 // Conservative fallback
 }
