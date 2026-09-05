@@ -248,36 +248,6 @@ async fn save_transcript(file_path: String, content: String) -> Result<(), Strin
 }
 
 // Audio level monitoring commands
-#[tauri::command]
-async fn start_audio_level_monitoring<R: Runtime>(
-    app: AppHandle<R>,
-    device_names: Vec<String>,
-) -> Result<(), String> {
-    log_info!(
-        "Starting audio level monitoring for devices: {:?}",
-        device_names
-    );
-
-    audio::simple_level_monitor::start_monitoring(app, device_names)
-        .await
-        .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
-}
-
-#[tauri::command]
-async fn stop_audio_level_monitoring() -> Result<(), String> {
-    log_info!("Stopping audio level monitoring");
-
-    audio::simple_level_monitor::stop_monitoring()
-        .await
-        .map_err(|e| format!("Failed to stop audio level monitoring: {}", e))
-}
-
-#[tauri::command]
-async fn is_audio_level_monitoring() -> bool {
-    audio::simple_level_monitor::is_monitoring()
-}
-
-
 // Transcription commands are handled by transcribe_engine::commands
 
 #[tauri::command]
@@ -605,9 +575,6 @@ pub fn run() {
             trigger_microphone_permission,
             start_recording_with_devices,
             start_recording_with_devices_and_meeting,
-            start_audio_level_monitoring,
-            stop_audio_level_monitoring,
-            is_audio_level_monitoring,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,

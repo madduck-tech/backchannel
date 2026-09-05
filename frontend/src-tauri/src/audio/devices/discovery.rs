@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use log::error;
+use log::{error, warn};
 
 use super::configuration::AudioDevice;
 // Only the non-Linux branch below still resolves devices by display name; on Linux
@@ -77,11 +77,29 @@ pub fn trigger_audio_permission() -> Result<bool> {
         }
     };
 
-    // Build and start an input stream to trigger the permission request
+    // Measure while the stream runs, rather than discarding the samples.
+    //
+    // This callback used to be empty: the probe opened the device, slept, and reported
+    // "permission granted" -- which onboarding renders as "Microphone: authorized". On a
+    // machine whose default source delivers digital zeros, and this one does, that is a
+    // report about half a second of silence. The samples are already arriving; summing them
+    // costs nothing and turns the probe into an answer to the question the user is being
+    // asked, which is whether the microphone works.
+    let peak = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let peak_in_cb = peak.clone();
     let stream = match device.build_input_stream(
         config.into(),
-        |_data: &[f32], _: &cpal::InputCallbackInfo| {
-            // Do nothing, we just want to trigger the permission request
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            let mut local = 0.0f32;
+            for sample in data {
+                let magnitude = sample.abs();
+                if magnitude > local {
+                    local = magnitude;
+                }
+            }
+            // Stored as bits because there is no AtomicF32; only ever compared as f32.
+            let scaled = (local * 1_000_000.0) as u32;
+            peak_in_cb.fetch_max(scaled, std::sync::atomic::Ordering::Relaxed);
         },
         |err| error!("Error in audio stream: {}", err),
         None,
@@ -102,8 +120,21 @@ pub fn trigger_audio_permission() -> Result<bool> {
     // Sleep briefly to allow the permission dialog to appear and for stream to actually work
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // If we got here, permission was granted
-    info!("[trigger_audio_permission] Stream played successfully - permission granted");
+    // Permission is granted -- the stream opened and ran. Whether the device is delivering
+    // anything is a different question, and the log now answers it instead of implying it.
+    let measured = peak.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1_000_000.0;
+    if measured > 0.0 {
+        info!(
+            "[trigger_audio_permission] Stream played successfully - permission granted, peak {:.6}",
+            measured
+        );
+    } else {
+        warn!(
+            "[trigger_audio_permission] Permission granted, but the device delivered digital \
+             silence for 500 ms (peak 0.0). The microphone may be muted, unplugged, or routed \
+             elsewhere -- a recording started now would capture nothing."
+        );
+    }
 
     // Stop the stream
     drop(stream);
