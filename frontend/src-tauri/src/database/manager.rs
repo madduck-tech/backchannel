@@ -43,7 +43,12 @@ impl DatabaseManager {
             // directory they have no reason to know about. Remove it, so a failed import costs the
             // import and nothing else — including for collisions nobody has found yet.
             log::error!("Migrations failed on {tauri_db_path}: {error}. Removing the partial database.");
-            drop(pool);
+            // `close()` and not `drop()`: it waits for every connection to be returned and shut
+            // down. `drop` only marks the pool closed, and on Windows a file with an open handle
+            // cannot be removed — so the cleanup below failed silently there and the partial
+            // database stayed, which is the whole defect. Caught by #46's Windows job on its
+            // first run against this fix; Linux and macOS both passed.
+            pool.close().await;
             if let Err(cleanup) = fs::remove_file(tauri_db_path) {
                 log::error!("Could not remove {tauri_db_path}: {cleanup}");
             }
