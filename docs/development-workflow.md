@@ -88,7 +88,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the string the device picker stores, against the Rust that parses it | `device-preference-string.test.mjs` |
 | the device picker's two lists and two handlers, rendered | `device-selection.test.mjs` |
 | the picker instructing the user to click a control it does not render | `device-selection-instructions.test.mjs` |
-| the rustc deny being removed, switched off at step or job level, defanged with `\|\| true`, or left in a workflow that no longer runs on pull requests | `lint-step-is-enforced.test.mjs`, over the reader in `workflow-yaml.test.mjs` |
+| either lint step (rustc's deny, eslint) being removed, switched off at step or job level, defanged with `\|\| true`, or left in a workflow that no longer runs on pull requests; and `eslint.config.mjs` importing something that is not installed | `lint-step-is-enforced.test.mjs`, over the reader in `workflow-yaml.test.mjs` |
 | a transcript row's capture channel, across the Rust enum, the event, both TypeScript interfaces, the column and its migration — and the diarization pass leaving it alone | `transcript-channel.test.mjs` |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,

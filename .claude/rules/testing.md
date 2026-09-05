@@ -64,10 +64,12 @@ Named here so their absence is a decision rather than a silence:
 
 - **Rust warnings are denied in CI as of ADR 0017** (`RUSTFLAGS="-D warnings" cargo check --workspace
   --all-targets`, a step of its own in `test.yml` and in `gopnik.json` stage 1). So an unused import
-  in Rust is caught. **JavaScript is not linted at all** — `eslint.config.mjs` exists, is not
-  installed behind (`@eslint/eslintrc` is absent, so it throws on import), and no workflow calls one.
-  That half is #35, and until it lands an unused TypeScript import is still one way a reachability
-  check can be turned green without fixing anything.
+  in Rust is caught. **JavaScript is linted as of #35** (`pnpm lint`, `eslint src --max-warnings=0`)
+  — but eleven rules the tree violates are switched off with their counts and reasons, and
+  `no-unused-vars` is one of them, so an unused TypeScript import is *still* a way a reachability
+  check can be turned green without fixing anything. That is #38, one rule per pull request.
+- `--max-warnings=0` is not optional for eslint. It exits 0 on warnings, so a rule set to `warn`
+  reports and passes — the same reported-and-ignored shape the rustc deny was raised to fix.
 - `-D warnings` reaches a crate only if everything before it compiles. `build.rs`'s `unexpected_cfgs`
   made the deny report 2 of 18 for as long as it existed, and the sixteen it never reached were
   invisible to the very command meant to surface them. When adding a deny, prove it reaches the code

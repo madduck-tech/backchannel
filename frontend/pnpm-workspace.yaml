@@ -13,3 +13,16 @@ overrides:
   prosemirror-view: 1.42.2
   prosemirror-transform: 1.12.0
   prosemirror-tables: 1.8.5
+
+# pnpm 11 will not run a dependency's install-time build script until it is answered for
+# here, and until every one is answered `pnpm run <script>` fails its dependency check.
+# This is the setting's home as of pnpm 11; package.json's `pnpm` key is read no longer.
+#
+# `unrs-resolver` is the native module resolver behind eslint-import-resolver-typescript,
+# pulled in by eslint-config-next (#35). Answered **false**: measured on 2026-09-05,
+# `pnpm run lint` reports the same findings with its build script not run, so there is no
+# reason to let it execute code at install time. If a future version genuinely needs the
+# native binding, this becomes `true` and that is a decision to state, not a default to
+# drift into.
+allowBuilds:
+  unrs-resolver: false

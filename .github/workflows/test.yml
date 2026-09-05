@@ -68,6 +68,15 @@ jobs:
         working-directory: frontend
         run: pnpm typecheck
 
+      # eslint, with `--max-warnings=0` inside the script: eslint exits 0 on warnings, so a
+      # rule set to `warn` would report and pass — reported and ignored, which is what #34
+      # fixed for rustc and #35 must not reintroduce for JavaScript. A step of its own for
+      # the same reason as the Rust deny: a lint failure and a test failure must not look
+      # the same in a log.
+      - name: Frontend lint
+        working-directory: frontend
+        run: pnpm lint
+
       # Same step as build-linux.yml: the app's build script copies the sidecar
       # as an external binary and fails when it is missing.
       - name: Build llama-helper sidecar

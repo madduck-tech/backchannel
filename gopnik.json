@@ -5,6 +5,7 @@
     "stage1": [
       "cd frontend && pnpm test",
       "cd frontend && pnpm typecheck",
+      "cd frontend && pnpm lint",
       "cargo test --workspace",
       "RUSTFLAGS=\"-D warnings\" cargo check --workspace --all-targets",
       "cargo test -p conversationaly --lib cpal_capture -- --ignored --nocapture",
