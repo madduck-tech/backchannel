@@ -345,6 +345,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             audio_end_time: update.audio_end_time,
             duration: update.duration,
             speaker: update.speaker,
+            channel: update.channel,
           };
 
           // Add to buffer
@@ -414,6 +415,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             audio_end_time: segment.audio_end_time,
             duration: segment.duration,
             speaker: segment.speaker,
+            channel: segment.channel,
           }));
 
           transcriptsRef.current = formattedTranscripts;
@@ -457,6 +459,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       audio_end_time: update.audio_end_time,
       duration: update.duration,
       speaker: update.speaker,
+      channel: update.channel,
     };
 
     setTranscripts(prev => {

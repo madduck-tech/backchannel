@@ -36,6 +36,9 @@ pub struct Transcript {
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
     pub speaker: Option<String>,
+    /// The capture channel, `"you"` or `"others"`. Its own column so a
+    /// diarization pass, which rewrites `speaker` on every row, cannot erase it.
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

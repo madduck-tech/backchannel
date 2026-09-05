@@ -47,8 +47,8 @@ impl TranscriptsRepository {
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, channel)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -58,6 +58,7 @@ impl TranscriptsRepository {
             .bind(segment.audio_end_time)
             .bind(segment.duration)
             .bind(&segment.speaker)
+            .bind(&segment.channel)
             .execute(&mut *transaction)
             .await;
 
@@ -161,6 +162,7 @@ fn to_fts_query(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::models::Transcript;
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[test]
@@ -193,6 +195,63 @@ mod tests {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         pool
+    }
+
+    fn segment(id: &str, text: &str, channel: Option<&str>) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: text.to_string(),
+            timestamp: "2026-09-05T10:00:00Z".to_string(),
+            audio_start_time: Some(0.0),
+            audio_end_time: Some(1.0),
+            duration: Some(1.0),
+            speaker: None,
+            channel: channel.map(str::to_string),
+        }
+    }
+
+    /// The channel a decoder knew has to still be there when the meeting is
+    /// reopened. This is the hop where it would be lost silently: an INSERT that
+    /// omits the column succeeds, and every row simply reads back NULL.
+    #[tokio::test]
+    async fn a_saved_row_keeps_the_channel_it_was_captured_on() {
+        let pool = migrated_pool().await;
+
+        let meeting_id = TranscriptsRepository::save_transcript(
+            &pool,
+            "Standup",
+            &[
+                segment("s1", "my own words", Some("you")),
+                segment("s2", "what they said", Some("others")),
+                segment("s3", "summed, so unknown", None),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows: Vec<Transcript> = sqlx::query_as(
+            "SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY transcript",
+        )
+        .bind(&meeting_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        let stored: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.transcript.as_str(), r.channel.as_deref()))
+            .collect();
+        assert_eq!(
+            stored,
+            vec![
+                ("my own words", Some("you")),
+                ("summed, so unknown", None),
+                ("what they said", Some("others")),
+            ],
+            "each row must read back the channel it was saved with, and an unknown one must stay \
+             unknown rather than defaulting to a side"
+        );
     }
 
     #[tokio::test]

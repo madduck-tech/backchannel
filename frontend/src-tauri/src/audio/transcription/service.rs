@@ -8,7 +8,8 @@
 // device, which is the point — every bug this module used to hide was in code
 // that could only be exercised by holding a real meeting.
 
-use super::ports::{Transcriber, TranscriptSink};
+use super::ports::{Channel, Transcriber, TranscriptSink};
+use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
 use log::info;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -31,7 +32,14 @@ pub fn run(
         // decoder is usually fine on the next one, and ending a recording's
         // transcript over one bad buffer is the worse failure by far.
         transcriber.note_levels(chunk.timestamp, chunk.mic_rms, chunk.sys_rms);
-        if let Err(e) = transcriber.feed(&chunk.data, &mut sink) {
+        // The chunk's own capture channel, not a guess about its contents. The
+        // pipeline forwards one chunk per channel per window and tags each with
+        // the device it came from, so this is a reading, not an inference.
+        let channel = match chunk.device_type {
+            DeviceType::Microphone => Channel::You,
+            DeviceType::System => Channel::Others,
+        };
+        if let Err(e) = transcriber.feed(channel, &chunk.data, &mut sink) {
             sink.warn(&e.to_string());
         }
     }
@@ -55,7 +63,6 @@ pub fn run(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::audio::recording_state::DeviceType;
     use crate::audio::transcription::ports::TranscriptChunk;
     use anyhow::Result;
 
@@ -96,7 +103,7 @@ pub(crate) mod tests {
     }
 
     impl Transcriber for FakeTranscriber {
-        fn feed(&mut self, _pcm: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
+        fn feed(&mut self, _channel: Channel, _pcm: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
             self.fed += 1;
             if self.fail_on == Some(self.fed) {
                 anyhow::bail!("decoder exploded");
@@ -107,6 +114,7 @@ pub(crate) mod tests {
                 audio_end: 1.0,
                 confidence: None,
                 speaker: None,
+                channel: None,
             });
             Ok(())
         }
@@ -119,6 +127,7 @@ pub(crate) mod tests {
                 audio_end: 2.0,
                 confidence: None,
                 speaker: None,
+                channel: None,
             });
             Ok(())
         }

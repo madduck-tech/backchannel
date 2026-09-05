@@ -108,6 +108,16 @@ impl ContinuousVadProcessor {
     /// Input must already be 16kHz — every caller resamples before this point,
     /// so the resampling branch that used to live here was dead code wrapped
     /// around the app's worst resampler.
+    /// How much audio this processor has consumed.
+    ///
+    /// Exposed for the live transcription adapter's tests, which need to show
+    /// that audio fed on one capture channel reaches that channel's segmenter
+    /// and no other. Asserting on emitted segments cannot show it: whether a
+    /// buffer becomes a segment is Silero's verdict, not this routing's.
+    pub fn processed_samples(&self) -> usize {
+        self.processed_samples
+    }
+
     pub fn process_audio(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>> {
         self.buffer.extend_from_slice(samples);
 

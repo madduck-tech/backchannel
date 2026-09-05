@@ -11,7 +11,7 @@
 // Because committed text can only grow, nothing downstream needs revision or
 // reconciliation logic.
 
-use crate::audio::transcription::ports::{Transcriber, TranscriptChunk, TranscriptSink};
+use crate::audio::transcription::ports::{Channel, Transcriber, TranscriptChunk, TranscriptSink};
 use anyhow::Result;
 use log::{info, warn};
 use std::time::{Duration, Instant};
@@ -162,12 +162,16 @@ impl CommittedCursor {
             // carried the same number anyway.
             confidence: None,
             speaker: None,
+            // This path is fed the two channels summed (`adapters::summed`), so
+            // it genuinely cannot tell which one spoke. Saying `None` is the
+            // difference between "unknown" and a coin flip on a transcript row.
+            channel: None,
         })
     }
 }
 
 impl Transcriber for StreamingTranscriber<'_> {
-    fn feed(&mut self, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
+    fn feed(&mut self, _channel: Channel, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
         // Timed around the call rather than after the `?`, so a decode that
         // ends in an error still costs what it cost. Instant, not wall clock:
         // an RTF computed across a clock adjustment is a fiction.

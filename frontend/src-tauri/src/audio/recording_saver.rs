@@ -24,6 +24,9 @@ pub struct TranscriptSegment {
     pub sequence_id: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// The capture channel, `"you"` or `"others"`. See `TranscriptUpdate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// Meeting metadata structure
@@ -181,6 +184,7 @@ impl RecordingSaver {
             confidence: 1.0,
             sequence_id: 0,
             speaker: None,
+            channel: None,
         };
         self.add_transcript_segment(segment);
     }

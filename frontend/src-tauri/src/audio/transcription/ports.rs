@@ -13,6 +13,30 @@
 
 use anyhow::Result;
 
+/// Which capture channel a slice of audio came from.
+///
+/// A fact of capture, not a guess. It used to be absent: the two channels were summed before
+/// transcription and what survived was a pair of RMS values, from which a heuristic guessed a
+/// speaker by loudness. That guess was also off unless the model happened to diarize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// The microphone: the person using this machine.
+    You,
+    /// System audio: everyone else, as the machine plays them.
+    Others,
+}
+
+impl Channel {
+    /// The label a transcript row carries. `"you"` is what the UI already renders as "You"
+    /// (`speaker.ts`), so the microphone side keeps the string it has always had.
+    pub fn label(self) -> &'static str {
+        match self {
+            Channel::You => "you",
+            Channel::Others => "others",
+        }
+    }
+}
+
 /// A piece of transcript the decoder considers final.
 ///
 /// Final is the important word. Everything that reaches a sink through
@@ -33,6 +57,16 @@ pub struct TranscriptChunk {
     /// painting a made-up number on real text.
     pub confidence: Option<f32>,
     pub speaker: Option<String>,
+    /// Which capture channel carried these words.
+    ///
+    /// `None` is "this decoder cannot say", not "neither channel". Today that
+    /// is the streaming path, which holds one open stream and so must be fed
+    /// the two channels summed (`adapters::summed`) until the engine can load a
+    /// second model. Separate from [`speaker`](Self::speaker) on purpose: a
+    /// diarization pass rewrites every row's `speaker`
+    /// (`audio/diarization.rs`), and a fact of capture must not be erased by a
+    /// model's guess.
+    pub channel: Option<Channel>,
 }
 
 impl TranscriptChunk {
@@ -66,9 +100,9 @@ pub trait TranscriptSink: Send {
 /// backend which produces several chunks, or a warning and no chunks, needs no
 /// special shape.
 pub trait Transcriber: Send {
-    /// Take the next slice of audio. Must not block longer than it takes to
-    /// decode: the caller is the only thing draining the audio channel.
-    fn feed(&mut self, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()>;
+    /// Take the next slice of audio from one channel. Must not block longer than it takes
+    /// to decode: the caller is the only thing draining the audio channel.
+    fn feed(&mut self, channel: Channel, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()>;
 
     /// Input has ended. Emit whatever is still held back.
     fn finish(&mut self, sink: &mut dyn TranscriptSink) -> Result<()>;

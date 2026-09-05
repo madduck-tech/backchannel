@@ -16,11 +16,18 @@
 // Model, so a second concurrent `run()` fails with `Error::Busy`. The sidecar
 // has the same constraint for a different reason — one process, one loaded
 // model.
+//
+// One decoder, two channels. `Error::Busy` forbids *concurrent* compute on a
+// `Model`, not serial use of it, and `Session::run()` decodes a whole utterance
+// carrying no state between calls — so YOU and OTHERS can share one model by
+// taking turns, and this path needs no second `Model::load`. What they cannot
+// share is the segmentation: `ContinuousVadProcessor` is stateful across calls,
+// so each channel keeps its own VAD and its own queue.
 
 use crate::audio::common::{
     split_segment_at_silence, DIARIZED_MAX_SEGMENT_SAMPLES, LIVE_MAX_SEGMENT_SAMPLES,
 };
-use crate::audio::transcription::ports::{Transcriber, TranscriptChunk, TranscriptSink};
+use crate::audio::transcription::ports::{Channel, Transcriber, TranscriptChunk, TranscriptSink};
 use crate::audio::vad::{ContinuousVadProcessor, SpeechSegment};
 use crate::transcribe_engine::{keep_partial_on_truncation, mean_token_confidence, speaker_turns};
 use anyhow::Result;
@@ -39,9 +46,13 @@ const VAD_REDEMPTION_MS: u32 = 2_000;
 /// Most un-transcribed audio to hold before dropping the oldest segments. A
 /// model slower than real time otherwise grows this queue for the whole
 /// meeting, and the transcript falls further behind the longer it runs.
+///
+/// **Applied per channel, not to the two of them together.** A single shared
+/// budget makes the busier side evict the quieter one: a long stretch of OTHERS
+/// would push out the user's own words, which are the rows they can actually
+/// check. The ceiling that matters to a listener is how far behind *their*
+/// channel may fall, and that stays 30s whatever the other side is doing.
 const MAX_BACKLOG_SAMPLES: usize = 30 * SAMPLE_RATE as usize;
-
-const LEVELS_SLACK_SAMPLES: usize = 5 * SAMPLE_RATE as usize;
 
 /// How a segment becomes text.
 pub enum Decoder {
@@ -53,6 +64,13 @@ pub enum Decoder {
         app_data_dir: std::path::PathBuf,
         model: String,
     },
+    /// Returns one turn per segment, naming the segment's length.
+    ///
+    /// Test-only, and it is what makes this adapter's own logic — which channel
+    /// a segment came from, what order the two queues drain in, what the
+    /// backlog cap sheds — observable without loading a model.
+    #[cfg(test)]
+    Fake { speaker_id: i32 },
 }
 
 pub struct DecodedTurn {
@@ -118,186 +136,209 @@ impl Decoder {
                     confidence: None,
                 }])
             }
+            #[cfg(test)]
+            Decoder::Fake { speaker_id } => Ok(vec![DecodedTurn {
+                text: format!("{} samples", samples.len()),
+                speaker_id: *speaker_id,
+                start_ms: 0.0,
+                end_ms: 0.0,
+                confidence: None,
+            }]),
         }
     }
 }
 
-#[derive(Default)]
-struct SourceLevels {
-    entries: VecDeque<(f64, f32, f32)>,
+/// The diarizing model's own cluster id, when it produced one.
+///
+/// This used to decide the *channel* too, by summing `mic_rms` against
+/// `sys_rms` over the turn's span and calling the louder side the speaker. That
+/// guess is gone: the channel is now a fact of capture carried on the chunk,
+/// and it is right whoever is louder. What remains here is genuinely a guess —
+/// the model's clustering *within* what it heard — so it stays in `speaker`.
+fn label(speaker_id: i32) -> Option<String> {
+    (speaker_id > 0).then(|| speaker_id.to_string())
 }
 
-impl SourceLevels {
-    fn note(&mut self, start_s: f64, mic_rms: f32, sys_rms: f32) {
-        self.entries.push_back((start_s, mic_rms, sys_rms));
-        let cutoff = start_s - (MAX_BACKLOG_SAMPLES + LEVELS_SLACK_SAMPLES) as f64
-            / SAMPLE_RATE as f64;
-        while self.entries.front().is_some_and(|&(t, _, _)| t < cutoff) {
-            self.entries.pop_front();
-        }
+/// Everything that has to be kept apart for one capture channel.
+struct ChannelState {
+    channel: Channel,
+    vad: ContinuousVadProcessor,
+    pending: VecDeque<SpeechSegment>,
+    /// Said once per channel per recording: a slow model backlogs whichever
+    /// side is speaking, and the point is to tell the user to change models,
+    /// not to bury the UI in toasts.
+    backlog_warned: bool,
+}
+
+impl ChannelState {
+    fn new(channel: Channel) -> Result<Self> {
+        Ok(Self {
+            channel,
+            vad: ContinuousVadProcessor::new(SAMPLE_RATE, VAD_REDEMPTION_MS)?,
+            pending: VecDeque::new(),
+            backlog_warned: false,
+        })
     }
 
-    fn dominant(&self, start_s: f64, end_s: f64) -> Option<Side> {
-        let (mic, sys) = self
-            .entries
-            .iter()
-            .filter(|&&(t, _, _)| t >= start_s && t < end_s)
-            .fold((0.0f64, 0.0f64), |(m, s), &(_, mic, sys)| {
-                (m + mic as f64, s + sys as f64)
-            });
-
-        if mic <= 0.0 && sys <= 0.0 {
-            return None;
+    /// Drop the oldest queued speech on this channel if the decoder has fallen
+    /// too far behind to catch up, and say so once.
+    fn shed_backlog(&mut self, sink: &mut dyn TranscriptSink) {
+        let dropped = trim_backlog(&mut self.pending);
+        if dropped == 0 {
+            return;
         }
-        Some(if mic > sys { Side::Mic } else { Side::System })
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum Side {
-    Mic,
-    System,
-}
-
-fn attribute(
-    levels: &SourceLevels,
-    owns_its_span: bool,
-    start: f64,
-    end: f64,
-    speaker_id: i32,
-) -> Option<String> {
-    let side = owns_its_span.then(|| levels.dominant(start, end)).flatten();
-    label(side, speaker_id)
-}
-
-fn label(side: Option<Side>, speaker_id: i32) -> Option<String> {
-    match side {
-        Some(Side::Mic) => Some("you".to_string()),
-        _ if speaker_id > 0 => Some(speaker_id.to_string()),
-        _ => None,
+        let secs = dropped as f64 / SAMPLE_RATE as f64;
+        let channel = self.channel.label();
+        warn!(
+            "Transcription of the {channel} channel is behind real time; dropped {secs:.1}s of \
+             audio to stay within the {}s per-channel backlog cap",
+            MAX_BACKLOG_SAMPLES / SAMPLE_RATE as usize
+        );
+        if !self.backlog_warned {
+            self.backlog_warned = true;
+            sink.warn(&format!(
+                "This model is transcribing slower than the {channel} channel is speaking, so \
+                 some audio is being skipped. Pick a faster or streaming model in settings. \
+                 ({secs:.0}s skipped so far)"
+            ));
+        }
     }
 }
 
 pub struct SegmentedTranscriber {
     decoder: Decoder,
-    vad: ContinuousVadProcessor,
-    pending: VecDeque<SpeechSegment>,
-    backlog_warned: bool,
+    /// One per capture channel. An array rather than two named fields so the
+    /// drain below can pick between them by index without duplicating itself.
+    channels: [ChannelState; 2],
     max_segment_samples: usize,
-    attribute_speakers: bool,
-    levels: SourceLevels,
 }
 
 impl SegmentedTranscriber {
     pub fn new(decoder: Decoder) -> Result<Self> {
-        Self::with_attribution(decoder, false)
+        Self::with_diarization(decoder, false)
     }
 
-    pub fn with_attribution(decoder: Decoder, attribute_speakers: bool) -> Result<Self> {
+    pub fn with_diarization(decoder: Decoder, diarizes: bool) -> Result<Self> {
         Ok(Self {
             decoder,
-            vad: ContinuousVadProcessor::new(SAMPLE_RATE, VAD_REDEMPTION_MS)?,
-            pending: VecDeque::new(),
-            backlog_warned: false,
-            max_segment_samples: if attribute_speakers {
+            channels: [
+                ChannelState::new(Channel::You)?,
+                ChannelState::new(Channel::Others)?,
+            ],
+            max_segment_samples: if diarizes {
                 DIARIZED_MAX_SEGMENT_SAMPLES
             } else {
                 LIVE_MAX_SEGMENT_SAMPLES
             },
-            attribute_speakers,
-            levels: SourceLevels::default(),
         })
     }
 
-    /// Decode everything queued, shedding backlog first if the decoder has
-    /// fallen too far behind to catch up.
+    fn slot(&mut self, channel: Channel) -> &mut ChannelState {
+        // Two elements: find is cheaper to read than an index convention that
+        // has to be kept true in three places.
+        self.channels
+            .iter_mut()
+            .find(|state| state.channel == channel)
+            .expect("every Channel variant has a ChannelState")
+    }
+
+    /// Whichever channel is holding the oldest queued speech, so the two drain
+    /// as one conversation. Without this the transcript would order rows by
+    /// which queue happened to be serviced, not by when the words were said.
+    fn oldest_queued(&self) -> Option<usize> {
+        self.channels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, state)| state.pending.front().map(|s| (i, s.start_timestamp_ms)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// Decode everything queued on both channels, shedding backlog first.
     fn drain(&mut self, sink: &mut dyn TranscriptSink) {
-        let dropped = trim_backlog(&mut self.pending);
-        if dropped > 0 {
-            let secs = dropped as f64 / SAMPLE_RATE as f64;
-            warn!(
-                "Transcription is behind real time; dropped {secs:.1}s of audio to stay \
-                 within the {}s backlog cap",
-                MAX_BACKLOG_SAMPLES / SAMPLE_RATE as usize
-            );
-            // Once per recording: this fires repeatedly on a slow model, and
-            // the point is to tell the user to switch models, not to bury the
-            // UI in toasts.
-            if !self.backlog_warned {
-                self.backlog_warned = true;
-                sink.warn(&format!(
-                    "This model is transcribing slower than you are speaking, so some audio \
-                     is being skipped. Pick a faster or streaming model in settings. \
-                     ({secs:.0}s skipped so far)"
-                ));
-            }
+        for state in self.channels.iter_mut() {
+            state.shed_backlog(sink);
         }
 
-        while let Some(segment) = self.pending.pop_front() {
-            let segment_start = segment.start_timestamp_ms / 1000.0;
-            let segment_end = segment.end_timestamp_ms / 1000.0;
+        while let Some(i) = self.oldest_queued() {
+            let channel = self.channels[i].channel;
+            let Some(segment) = self.channels[i].pending.pop_front() else { break };
+            self.decode_segment(channel, segment, sink);
+        }
+    }
 
-            match self.decoder.decode(&segment.samples) {
-                Ok(turns) => {
-                    let alone = turns.len() == 1;
-                    for turn in turns {
-                        let timed = turn.end_ms > turn.start_ms;
-                        let (start, end) = if timed {
-                            (
-                                segment_start + turn.start_ms / 1000.0,
-                                segment_start + turn.end_ms / 1000.0,
-                            )
-                        } else {
-                            (segment_start, segment_end)
-                        };
+    fn decode_segment(
+        &mut self,
+        channel: Channel,
+        segment: SpeechSegment,
+        sink: &mut dyn TranscriptSink,
+    ) {
+        let segment_start = segment.start_timestamp_ms / 1000.0;
+        let segment_end = segment.end_timestamp_ms / 1000.0;
 
-                        let speaker = self.attribute_speakers.then(|| {
-                            attribute(&self.levels, timed || alone, start, end, turn.speaker_id)
-                        });
+        match self.decoder.decode(&segment.samples) {
+            Ok(turns) => {
+                for turn in turns {
+                    let timed = turn.end_ms > turn.start_ms;
+                    let (start, end) = if timed {
+                        (
+                            segment_start + turn.start_ms / 1000.0,
+                            segment_start + turn.end_ms / 1000.0,
+                        )
+                    } else {
+                        (segment_start, segment_end)
+                    };
 
-                        sink.committed(TranscriptChunk {
-                            text: turn.text,
-                            audio_start: start,
-                            audio_end: end,
-                            confidence: turn.confidence,
-                            speaker: speaker.flatten(),
-                        });
-                    }
+                    sink.committed(TranscriptChunk {
+                        text: turn.text,
+                        audio_start: start,
+                        audio_end: end,
+                        confidence: turn.confidence,
+                        speaker: label(turn.speaker_id),
+                        // The channel this audio was captured on, not a verdict
+                        // about it. Every row on this path carries one, whether
+                        // or not the model diarizes.
+                        channel: Some(channel),
+                    });
                 }
-                Err(e) => {
-                    warn!("Batch transcription of a segment failed: {e}");
-                    sink.warn(&e.to_string());
-                }
+            }
+            Err(e) => {
+                warn!("Batch transcription of a segment failed: {e}");
+                sink.warn(&e.to_string());
             }
         }
     }
 }
 
 impl Transcriber for SegmentedTranscriber {
-    fn feed(&mut self, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
+    fn feed(
+        &mut self,
+        channel: Channel,
+        pcm_16k: &[f32],
+        sink: &mut dyn TranscriptSink,
+    ) -> Result<()> {
+        let cap = self.max_segment_samples;
+        let state = self.slot(channel);
         // Losing a chunk to VAD is recoverable; ending the meeting's transcript
         // over it is not.
-        match self.vad.process_audio(pcm_16k) {
-            Ok(segments) => enqueue(segments, &mut self.pending, self.max_segment_samples),
-            Err(e) => warn!("VAD processing failed: {e}"),
+        match state.vad.process_audio(pcm_16k) {
+            Ok(segments) => enqueue(segments, &mut state.pending, cap),
+            Err(e) => warn!("VAD processing failed on the {} channel: {e}", channel.label()),
         }
         self.drain(sink);
         Ok(())
     }
 
     fn finish(&mut self, sink: &mut dyn TranscriptSink) -> Result<()> {
-        match self.vad.flush() {
-            Ok(segments) => enqueue(segments, &mut self.pending, self.max_segment_samples),
-            Err(e) => warn!("VAD flush failed: {e}"),
+        let cap = self.max_segment_samples;
+        for state in self.channels.iter_mut() {
+            match state.vad.flush() {
+                Ok(segments) => enqueue(segments, &mut state.pending, cap),
+                Err(e) => warn!("VAD flush failed on the {} channel: {e}", state.channel.label()),
+            }
         }
         self.drain(sink);
         Ok(())
-    }
-
-    fn note_levels(&mut self, start_s: f64, mic_rms: f32, sys_rms: f32) {
-        if self.attribute_speakers {
-            self.levels.note(start_s, mic_rms, sys_rms);
-        }
     }
 }
 
@@ -342,89 +383,156 @@ mod tests {
         }
     }
 
-    fn levels(entries: &[(f64, f32, f32)]) -> SourceLevels {
-        let mut l = SourceLevels::default();
-        for &(t, mic, sys) in entries {
-            l.note(t, mic, sys);
+    /// Silero consumes whole 30ms frames and buffers the remainder, so audio
+    /// for these tests is counted in frames — otherwise the assertion is about
+    /// that leftover rather than about routing.
+    const FRAME: usize = (SAMPLE_RATE as usize * 30) / 1000;
+
+    fn audio(frames: usize) -> Vec<f32> {
+        vec![0.01; frames * FRAME]
+    }
+
+    fn transcriber() -> SegmentedTranscriber {
+        SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0 }).unwrap()
+    }
+
+    /// What a sink was told, with the channel each row claimed.
+    #[derive(Default)]
+    struct Rows(Vec<TranscriptChunk>);
+
+    impl TranscriptSink for Rows {
+        fn committed(&mut self, chunk: TranscriptChunk) {
+            self.0.push(chunk);
         }
-        l
+        fn tentative(&mut self, _text: &str) {}
+        fn warn(&mut self, _message: &str) {}
     }
 
-    #[test]
-    fn the_microphone_side_outranks_the_model() {
-        let l = levels(&[(0.0, 0.4, 0.01), (1.0, 0.5, 0.02)]);
-        assert_eq!(l.dominant(0.0, 2.0), Some(Side::Mic));
-        assert_eq!(
-            label(l.dominant(0.0, 2.0), 3),
-            Some("you".to_string()),
-            "the mic is known to be this user; a cluster id is only a guess"
-        );
-    }
-
-    #[test]
-    fn the_far_side_keeps_the_models_cluster_id() {
-        let l = levels(&[(0.0, 0.01, 0.6)]);
-        assert_eq!(l.dominant(0.0, 1.0), Some(Side::System));
-        assert_eq!(label(l.dominant(0.0, 1.0), 2), Some("2".to_string()));
-    }
-
-    #[test]
-    fn unattributed_far_side_speech_gets_no_label() {
-        let l = levels(&[(0.0, 0.01, 0.6)]);
-        assert_eq!(
-            label(l.dominant(0.0, 1.0), 0),
-            None,
-            "a row nothing attributed must not render a prefix claiming otherwise"
-        );
-    }
-
-    #[test]
-    fn a_turn_only_weighs_the_levels_inside_its_own_span() {
-        let l = levels(&[(0.0, 0.9, 0.0), (1.0, 0.9, 0.0), (2.0, 0.0, 0.5), (3.0, 0.0, 0.5)]);
-        assert_eq!(l.dominant(2.0, 4.0), Some(Side::System));
-        assert_eq!(label(l.dominant(2.0, 4.0), 1), Some("1".to_string()));
-    }
-
-    #[test]
-    fn untimed_turns_do_not_inherit_one_loudness_verdict() {
-        // Granite attributes speakers but reports no turn timing, so several
-        // turns land on one span. The mic being louder across it says nothing
-        // about which of them the mic owner spoke.
-        let l = levels(&[(0.0, 0.9, 0.2), (1.0, 0.9, 0.2)]);
-
-        assert_eq!(
-            attribute(&l, false, 0.0, 2.0, 2),
-            Some("2".to_string()),
-            "a shared span must not stamp the mic owner onto another speaker"
-        );
-        assert_eq!(
-            attribute(&l, true, 0.0, 2.0, 2),
-            Some("you".to_string()),
-            "a turn that owns its span is still resolved by loudness"
-        );
-    }
-
-    #[test]
-    fn silence_on_both_sides_falls_through_to_the_model() {
-        let l = levels(&[(0.0, 0.0, 0.0)]);
-        assert_eq!(l.dominant(0.0, 1.0), None);
-        assert_eq!(label(None, 2), Some("2".to_string()));
-        assert_eq!(label(None, 0), None);
-    }
-
-    #[test]
-    fn level_history_does_not_grow_for_the_whole_meeting() {
-        let mut l = SourceLevels::default();
-        for i in 0..4000 {
-            l.note(i as f64, 0.1, 0.1);
+    impl Rows {
+        fn channels(&self) -> Vec<Option<Channel>> {
+            self.0.iter().map(|c| c.channel).collect()
         }
-        let span = (MAX_BACKLOG_SAMPLES + LEVELS_SLACK_SAMPLES) / SAMPLE_RATE as usize;
+    }
+
+    /// Whether a buffer becomes a segment is Silero's verdict, so these tests
+    /// assert on where the audio *went* and on what the queues produce — never
+    /// on a synthetic waveform being recognised as speech. Matrix cells 1.1-1.4
+    /// (real speech on each side, correctly labelled) are Stage 2's, on the
+    /// built application with real audio.
+    #[test]
+    fn audio_is_segmented_by_the_channel_it_arrived_on() {
+        let mut t = transcriber();
+        let mut rows = Rows::default();
+
+        t.feed(Channel::Others, &audio(33), &mut rows).unwrap();
+
+        assert_eq!(
+            t.slot(Channel::Others).vad.processed_samples(),
+            33 * FRAME,
+            "the system channel's segmenter must have seen the audio sent to it"
+        );
+        assert_eq!(
+            t.slot(Channel::You).vad.processed_samples(),
+            0,
+            "nothing was captured on the microphone, so its segmenter must have seen nothing"
+        );
+    }
+
+    #[test]
+    fn the_two_channels_do_not_share_one_segmenter() {
+        // The defect this guards: one `ContinuousVadProcessor` for both sides.
+        // A shared segmenter would see YOU's speech and OTHERS' silence as one
+        // alternating stream, cutting utterances at every switch and crediting
+        // each segment to whichever channel fed last.
+        let mut t = transcriber();
+        let mut rows = Rows::default();
+
+        for _ in 0..4 {
+            t.feed(Channel::You, &audio(10), &mut rows).unwrap();
+            t.feed(Channel::Others, &audio(5), &mut rows).unwrap();
+        }
+
+        // Deliberately unequal: one shared segmenter would report the same
+        // number on both sides -- the sum -- and that is the failure this
+        // guards against.
+        assert_eq!(t.slot(Channel::You).vad.processed_samples(), 40 * FRAME);
+        assert_eq!(t.slot(Channel::Others).vad.processed_samples(), 20 * FRAME);
+    }
+
+    #[test]
+    fn a_row_carries_the_channel_its_audio_was_captured_on() {
+        let mut t = transcriber();
+        let mut rows = Rows::default();
+
+        t.slot(Channel::Others).pending.push_back(segment(1.0, 0.0));
+        t.slot(Channel::You).pending.push_back(segment(1.0, 2_000.0));
+        t.drain(&mut rows);
+
+        assert_eq!(
+            rows.channels(),
+            vec![Some(Channel::Others), Some(Channel::You)],
+            "each row must name the queue its audio came off, not a fixed side"
+        );
+    }
+
+    #[test]
+    fn the_queues_drain_in_the_order_the_words_were_said() {
+        let mut t = transcriber();
+        let mut rows = Rows::default();
+
+        // Queued directly: VAD timing is not what is under test here, the
+        // choice between two non-empty queues is.
+        // OTHERS speaks first on purpose. YOU is `channels[0]`, so a drain that
+        // simply prefers the first queue would produce the right order for any
+        // fixture where the microphone also happened to speak first.
+        t.slot(Channel::You).pending.push_back(segment(1.0, 3_000.0));
+        t.slot(Channel::Others).pending.push_back(segment(1.0, 1_000.0));
+        t.slot(Channel::Others).pending.push_back(segment(1.0, 5_000.0));
+        t.drain(&mut rows);
+
+        assert_eq!(
+            rows.channels(),
+            vec![Some(Channel::Others), Some(Channel::You), Some(Channel::Others)],
+            "rows must follow the clock, not whichever queue was serviced first"
+        );
+        let starts: Vec<f64> = rows.0.iter().map(|c| c.audio_start).collect();
+        assert_eq!(starts, vec![1.0, 3.0, 5.0]);
+    }
+
+    #[test]
+    fn a_backlogged_channel_does_not_evict_the_other() {
+        // The cap is per channel. Under one shared 30s budget, 50s queued on
+        // OTHERS would shed YOU's speech as well -- the rows the user is in the
+        // best position to check.
+        let mut t = transcriber();
+        let mut rows = Rows::default();
+
+        // 50s queued on OTHERS against a 30s cap, and one second on YOU that is
+        // the oldest thing in the meeting -- so a single shared budget shedding
+        // oldest-first would throw the user's own words away first.
+        for i in 0..10 {
+            t.slot(Channel::Others).pending.push_back(segment(5.0, i as f64 * 5_000.0));
+        }
+        t.slot(Channel::You).pending.push_back(segment(1.0, 0.0));
+
+        t.drain(&mut rows);
+
         assert!(
-            l.entries.len() <= span + 1,
-            "kept {} entries for a {}s window",
-            l.entries.len(),
-            span
+            rows.channels().contains(&Some(Channel::You)),
+            "the quiet channel's speech must survive the other's backlog, got {:?}",
+            rows.channels()
         );
+        assert_eq!(
+            rows.channels().iter().filter(|c| **c == Some(Channel::Others)).count(),
+            6,
+            "the busy channel must be trimmed to its own 30s cap, not to a shared one"
+        );
+    }
+
+    #[test]
+    fn a_cluster_id_is_the_only_thing_left_in_speaker() {
+        assert_eq!(label(0), None, "a row nothing attributed must claim nothing");
+        assert_eq!(label(2), Some("2".to_string()));
     }
 
     #[test]
