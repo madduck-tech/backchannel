@@ -1,3 +1,20 @@
+//! Finding ffmpeg, and — separately, and only when asked — installing it.
+//!
+//! **Three different files are called "ffmpeg" in a checkout of this repository, and
+//! confusing them cost #29 three wrong diagnoses.** They are:
+//!
+//! | path | who writes it | when |
+//! |---|---|---|
+//! | `frontend/src-tauri/binaries/ffmpeg-<target-triple>` | `build/ffmpeg.rs` | every build, downloaded from `github.com/Zackriya-Solutions/ffmpeg-binaries` if absent |
+//! | `target/<profile>/ffmpeg` | `tauri-build`'s `externalBin` copy of the row above (`tauri.conf.json`) | every build script run |
+//! | `ffmpeg_sidecar::paths::sidecar_dir()/ffmpeg` — i.e. **beside `current_exe()`** | `ensure_ffmpeg_installed` below | only when a caller asks |
+//!
+//! For `cargo test --lib`, `current_exe()` is `target/debug/deps/app_lib-<hash>`, so the third
+//! location is `target/debug/deps/` — *not* `target/debug/`. Watching `target/debug/ffmpeg` to
+//! decide whether something downloaded is therefore meaningless: it is rewritten by every build
+//! whether or not anything was fetched. The file that answers that question is
+//! `target/debug/deps/ffmpeg`, and its sibling `ffprobe`, which the install writes as a pair.
+
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
     download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
@@ -31,9 +48,10 @@ fn cache_path(path: Option<PathBuf>) {
 /// Where ffmpeg is, if it is anywhere this machine can already see.
 ///
 /// **Discovery only. This never downloads anything.** It used to: the search fell through
-/// into an installer that fetches ~80 MB from a third-party host, so any test touching an
-/// encode or decode path performed a network download and a required CI check became a coin
-/// flip (#29). Installing is `ensure_ffmpeg_installed`, and a caller has to ask for it.
+/// into an installer that fetches 41,888,096 bytes from a third-party host and unpacks two
+/// binaries totalling 159,492,064 bytes, so any test touching an encode or decode path
+/// performed a network download and a required CI check became a coin flip (#29).
+/// Installing is `ensure_ffmpeg_installed`, and a caller has to ask for it.
 pub fn find_ffmpeg_path() -> Option<PathBuf> {
     if let Ok(slot) = FFMPEG_PATH.read() {
         if let Some(cached) = slot.as_ref() {

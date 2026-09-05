@@ -100,6 +100,13 @@ const stage1 = JSON.parse(fs.readFileSync(path.join(repo, 'gopnik.json'), 'utf8'
 // than trusted. `cargo test … -- --ignored --list` is the ground truth if this ever needs to
 // be exact.
 const selected = new Set();
+// The walk is deliberately in both directions. Ignored -> stage 1 catches a test nothing
+// runs. Stage 1 -> ignored catches the opposite and quieter failure: a gate line whose
+// filter selects *nothing* — a renamed test, a typo, or an `#[ignore]` removed while the
+// line stayed. `cargo test <filter> -- --ignored` exits 0 having run zero tests, so such a
+// line is green forever and certifies a test that is not being run. Found by review, not by
+// a failure: before this loop existed, only the first direction was checked.
+const selectsNothing = [];
 for (const cmd of stage1) {
   if (!cmd.includes('--ignored')) continue;
   assert.ok(
@@ -111,8 +118,24 @@ for (const cmd of stage1) {
   const before = cmd.split(' -- ')[0].trim().split(/\s+/);
   const filter = before[before.length - 1];
   if (!filter || filter.startsWith('-')) continue;
-  for (const [key, name] of ignored) if (name.includes(filter)) selected.add(key);
+  let hit = 0;
+  for (const [key, name] of ignored) {
+    if (name.includes(filter)) {
+      selected.add(key);
+      hit += 1;
+    }
+  }
+  if (hit === 0) selectsNothing.push({ cmd, filter });
 }
+
+assert.deepEqual(
+  selectsNothing.map((s) => s.filter),
+  [],
+  'these gopnik.json stage1 lines pass `--ignored` a filter that matches no #[ignore]d test, ' +
+    'so cargo runs zero tests and the line is green forever:\n  ' +
+    selectsNothing.map((s) => `${s.filter}  <-  ${s.cmd}`).join('\n  ') +
+    '\n\n  Either the test was renamed, or its #[ignore] was removed and the gate line should go.'
+);
 
 const nameOf = (key) => ignored.get(key);
 const unaccounted = [...ignored.keys()].filter((k) => !selected.has(k) && !NOT_RUN_BY_THE_GATE.has(k));
