@@ -8,7 +8,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
-use encoding_rs;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -164,7 +163,7 @@ fn audio_from_b64(encoded: &str) -> Result<Vec<f32>> {
         );
     }
     Ok(bytes
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }
@@ -542,7 +541,7 @@ impl ModelState {
                 eprintln!("📝 Tokenized prompt: {} tokens", tokens_list.len());
 
                 let last_index: i32 = (tokens_list.len() - 1) as i32;
-                for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
+                for (i, token) in (0_i32..).zip(tokens_list) {
                     let is_last = i == last_index;
                     batch
                         .add(token, i, &[0], is_last)

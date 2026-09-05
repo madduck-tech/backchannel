@@ -269,7 +269,7 @@ pub async fn generate_summary(
             result = request_future => {
                 result.map_err(|e| {
                     if e.is_timeout() {
-                        format!("LLM request timed out after 60 seconds")
+                        "LLM request timed out after 60 seconds".to_string()
                     } else {
                         format!("Failed to send request to LLM: {}", e)
                     }
@@ -282,7 +282,7 @@ pub async fn generate_summary(
     } else {
         request_future.await.map_err(|e| {
             if e.is_timeout() {
-                format!("LLM request timed out after 60 seconds")
+                "LLM request timed out after 60 seconds".to_string()
             } else {
                 format!("Failed to send request to LLM: {}", e)
             }
@@ -307,8 +307,7 @@ pub async fn generate_summary(
         info!("🐞 LLM Response received from Claude");
 
         let content = chat_response
-            .content
-            .get(0)
+            .content.first()
             .ok_or("No content in LLM response")?
             .text
             .trim();
@@ -322,8 +321,7 @@ pub async fn generate_summary(
         info!("🐞 LLM Response received from {}", provider_name(provider));
 
         let content = chat_response
-            .choices
-            .get(0)
+            .choices.first()
             .ok_or("No content in LLM response")?
             .message
             .content

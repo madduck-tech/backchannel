@@ -737,7 +737,7 @@ impl AudioCapture {
 
             // Log resampling only occasionally to avoid spam
             let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-            if chunk_id % 100 == 0 && has_resampled_output {
+            if chunk_id.is_multiple_of(100) && has_resampled_output {
                 let after_len = mono_data.len();
                 let after_rms = if !mono_data.is_empty() {
                     (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt()
@@ -792,7 +792,7 @@ impl AudioCapture {
 
                         // CRITICAL MONITORING: Track buffer health
                         let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-                        if chunk_id % 100 == 0 {
+                        if chunk_id.is_multiple_of(100) {
                             let buffered = suppressor.buffered_samples();
                             let length_delta = (before_len as i32 - after_len as i32).abs();
 
@@ -825,7 +825,7 @@ impl AudioCapture {
 
                     // Log normalization occasionally for debugging
                     let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-                    if chunk_id % 200 == 0 && !mono_data.is_empty() {
+                    if chunk_id.is_multiple_of(200) && !mono_data.is_empty() {
                         let rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
                         let peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
                         debug!("🎤 After normalization chunk {}: RMS={:.4}, Peak={:.4}", chunk_id, rms, peak);
@@ -1084,7 +1084,7 @@ impl AudioPipeline {
                     // CRITICAL: Log summary only every 200 chunks OR every 60 seconds (99.5% reduction)
                     // This eliminates I/O overhead in the audio processing hot path
                     // Use performance-optimized debug macro that compiles to nothing in release builds
-                    if self.processed_chunks % 200 == 0 || self.last_summary_time.elapsed().as_secs() >= 60 {
+                    if self.processed_chunks.is_multiple_of(200) || self.last_summary_time.elapsed().as_secs() >= 60 {
                         perf_debug!("Pipeline processed {} chunks, current chunk: {} ({} samples)",
                                    self.processed_chunks, chunk.chunk_id, chunk.data.len());
                         self.last_summary_time = std::time::Instant::now();

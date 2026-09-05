@@ -50,7 +50,7 @@ fn transcript_api_key_column(
         "openai" => Some("openaiApiKey"),
         _ => {
             return Err(sqlx::Error::Protocol(
-                format!("Invalid provider: {}", provider).into(),
+                format!("Invalid provider: {}", provider),
             ))
         }
     })
@@ -122,7 +122,7 @@ impl SettingsRepository {
             "builtin-ai" => return Ok(()), // No API key needed
             _ => {
                 return Err(sqlx::Error::Protocol(
-                    format!("Invalid provider: {}", provider).into(),
+                    format!("Invalid provider: {}", provider),
                 ))
             }
         };
@@ -160,7 +160,7 @@ impl SettingsRepository {
             "builtin-ai" => return Ok(None), // No API key needed
             _ => {
                 return Err(sqlx::Error::Protocol(
-                    format!("Invalid provider: {}", provider).into(),
+                    format!("Invalid provider: {}", provider),
                 ))
             }
         };
@@ -269,7 +269,7 @@ impl SettingsRepository {
             "builtin-ai" => return Ok(()), // No API key needed
             _ => {
                 return Err(sqlx::Error::Protocol(
-                    format!("Invalid provider: {}", provider).into(),
+                    format!("Invalid provider: {}", provider),
                 ))
             }
         };
@@ -315,7 +315,7 @@ impl SettingsRepository {
                     // Parse JSON into CustomOpenAIConfig
                     let config: CustomOpenAIConfig = serde_json::from_str(&json)
                         .map_err(|e| sqlx::Error::Protocol(
-                            format!("Invalid JSON in customOpenAIConfig: {}", e).into()
+                            format!("Invalid JSON in customOpenAIConfig: {}", e)
                         ))?;
 
                     Ok(Some(config))
@@ -343,7 +343,7 @@ impl SettingsRepository {
         // Serialize config to JSON
         let config_json = serde_json::to_string(config)
             .map_err(|e| sqlx::Error::Protocol(
-                format!("Failed to serialize config to JSON: {}", e).into()
+                format!("Failed to serialize config to JSON: {}", e)
             ))?;
 
         // Upsert into settings table

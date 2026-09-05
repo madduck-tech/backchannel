@@ -48,3 +48,51 @@ tokio = { version = "1.32.0", features = ["full"] }
 [profile.release.package.llama-helper]
 opt-level = "s"
 codegen-units = 1
+
+# Clippy, adopted 2026-09-05 (#36, ADR 0018). Declared here rather than through
+# RUSTFLAGS on purpose: RUSTFLAGS changes every unit's fingerprint, so a denying
+# step would recompile the whole dependency tree on every cache-cold CI run and
+# could not share the existing rust-cache key. `[workspace.lints]` is part of the
+# crate graph instead, and members opt in with `[lints] workspace = true`.
+#
+# The first clippy run on this tree reported 91 findings across 44 files. 46 were
+# machine-applicable (`cargo clippy --fix`), 7 were fixed by hand, and the rest
+# are allowed here. Every allow says what it would cost to fix, because an
+# adoption that allows more than it fixes is a decision and must read as one.
+[workspace.lints.clippy]
+# 11. `&Vec<T>` and `&String` parameters. Fixing them is right and mechanical, but
+# it changes signatures across eleven call graphs in the audio path, which is a
+# refactor to review on its own rather than freight in a lint adoption.
+ptr_arg = "allow"
+
+# 8. Long parameter lists, four of which the tree already `#[allow]`s individually.
+# Every one is a constructor or a pipeline entry point where the arguments are
+# genuinely independent; shortening them means introducing parameter structs, which
+# is a design change.
+too_many_arguments = "allow"
+
+# 7. `mod audio { mod audio }` and friends. Fixing means renaming modules and every
+# path that references them — a large, purely mechanical diff with a real chance of
+# a bad merge, for no behavioural gain.
+module_inception = "allow"
+
+# 3. `as_ref`, `as_mut` (`audio/buffer_pool.rs`) and `from_str` (`summary/llm_client.rs`)
+# shadow standard traits by name. Implementing the traits is the right fix and is
+# small; it is allowed here only because the *fourth* instance of this lint was not
+# a naming nit at all — see ADR 0018 — and separating the two deserves its own change.
+should_implement_trait = "allow"
+
+# 2. Return types that want an alias. Cosmetic.
+type_complexity = "allow"
+
+# 1. `llama-helper`'s request enum repeats the type name in its variants. Renaming
+# them changes the sidecar's JSON-line protocol, which the app speaks.
+enum_variant_names = "allow"
+
+# 1, and the lint is WRONG here. `audio/diarization.rs` guards with
+# `if !(end_s > start_s)`, which rejects NaN; clippy's suggested `end_s <= start_s`
+# is false for NaN and would let it through into the speaker-overlap arithmetic.
+# Allowed with the reason rather than "fixed" into a defect. Kept workspace-wide
+# rather than as a local attribute so this note is next to the other decisions;
+# if a second site ever appears, move it local.
+neg_cmp_op_on_partial_ord = "allow"

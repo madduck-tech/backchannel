@@ -51,12 +51,22 @@ impl AudioCaptureBackend {
         }
     }
 
-    /// Convert to string (lowercase)
-    pub fn to_string(&self) -> String {
+    /// The stored identifier: lowercase, stable, and what [`from_string`] parses.
+    ///
+    /// It used to be an inherent `to_string`, which shadowed this type's own `Display`
+    /// (`clippy::inherent_to_string_shadow_display`, deny-by-default). The two were not the
+    /// same string and were never meant to be — `Display` writes the human label
+    /// ("ScreenCaptureKit"), this writes the id that goes in `recording_preferences.json`
+    /// ("screencapturekit") — so a caller reaching one instead of the other silently got the
+    /// wrong one. Renamed rather than allowed, because the round trip below is the thing
+    /// that must hold.
+    ///
+    /// [`from_string`]: Self::from_string
+    pub fn id(&self) -> &'static str {
         match self {
-            AudioCaptureBackend::ScreenCaptureKit => "screencapturekit".to_string(),
+            AudioCaptureBackend::ScreenCaptureKit => "screencapturekit",
             #[cfg(target_os = "macos")]
-            AudioCaptureBackend::CoreAudio => "coreaudio".to_string(),
+            AudioCaptureBackend::CoreAudio => "coreaudio",
         }
     }
 
@@ -73,8 +83,16 @@ impl AudioCaptureBackend {
         }
     }
 
-    /// Get default backend for current platform
-    pub fn default() -> Self {
+    /// The backend this platform uses when nothing is stored.
+    ///
+    /// Named `for_platform` rather than `default`, which is what it used to be called.
+    /// `impl Default for AudioCaptureBackend` below reads `Self::default()`, and that
+    /// resolved to *this* method only because Rust prefers an inherent method to a trait
+    /// one. Renaming this — which is exactly what `clippy::should_implement_trait`
+    /// suggests — would have turned that line into unbounded recursion and a stack overflow
+    /// at runtime, with nothing in the type system to say so. So the rename and the caller
+    /// move together, and `Default` now names what it calls.
+    pub fn for_platform() -> Self {
         #[cfg(target_os = "macos")]
         return AudioCaptureBackend::CoreAudio;
 
@@ -85,7 +103,7 @@ impl AudioCaptureBackend {
 
 impl Default for AudioCaptureBackend {
     fn default() -> Self {
-        Self::default()
+        Self::for_platform()
     }
 }
 
@@ -103,7 +121,7 @@ pub struct BackendConfig {
 impl BackendConfig {
     fn new() -> Self {
         Self {
-            current_backend: RwLock::new(AudioCaptureBackend::default()),
+            current_backend: RwLock::new(AudioCaptureBackend::for_platform()),
         }
     }
 
@@ -125,7 +143,7 @@ impl BackendConfig {
 
     /// Reset to default
     pub fn reset(&self) {
-        self.set(AudioCaptureBackend::default());
+        self.set(AudioCaptureBackend::for_platform());
     }
 }
 
@@ -153,11 +171,43 @@ pub fn get_available_backends() -> Vec<AudioCaptureBackend> {
 mod tests {
     use super::*;
 
+    /// The round trip the rename exists to protect.
+    ///
+    /// `id()` is what goes into `recording_preferences.json` and what `from_string` parses
+    /// back; `Display` is the human label. They are deliberately different strings, and
+    /// while an inherent `to_string` shadowed `Display` nobody could tell from a call site
+    /// which of the two they were getting. Two call sites in
+    /// `recording_preferences.rs` were writing `id: X.to_string()` — correct only by the
+    /// shadow, and silently wrong the moment it was removed.
+    #[test]
+    fn the_stored_id_round_trips_and_is_not_the_display_label() {
+        let backends = [
+            AudioCaptureBackend::ScreenCaptureKit,
+            #[cfg(target_os = "macos")]
+            AudioCaptureBackend::CoreAudio,
+        ];
+
+        for backend in backends {
+            assert_eq!(
+                AudioCaptureBackend::from_string(backend.id()),
+                Some(backend),
+                "the stored id {:?} must parse back to the backend that wrote it",
+                backend.id()
+            );
+            assert_ne!(
+                backend.id(),
+                backend.to_string(),
+                "the id and the Display label are different strings by design; if they ever \
+                 become equal, a call site reaching the wrong one stops being detectable"
+            );
+        }
+    }
+
     #[test]
     fn test_backend_to_string() {
-        assert_eq!(AudioCaptureBackend::ScreenCaptureKit.to_string(), "screencapturekit");
+        assert_eq!(AudioCaptureBackend::ScreenCaptureKit.id(), "screencapturekit");
         #[cfg(target_os = "macos")]
-        assert_eq!(AudioCaptureBackend::CoreAudio.to_string(), "coreaudio");
+        assert_eq!(AudioCaptureBackend::CoreAudio.id(), "coreaudio");
     }
 
     #[test]
@@ -191,10 +241,10 @@ mod tests {
     #[test]
     fn test_default_backend() {
         #[cfg(target_os = "macos")]
-        assert_eq!(AudioCaptureBackend::default(), AudioCaptureBackend::CoreAudio);
+        assert_eq!(AudioCaptureBackend::for_platform(), AudioCaptureBackend::CoreAudio);
 
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(AudioCaptureBackend::default(), AudioCaptureBackend::ScreenCaptureKit);
+        assert_eq!(AudioCaptureBackend::for_platform(), AudioCaptureBackend::ScreenCaptureKit);
     }
 
     #[test]

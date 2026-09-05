@@ -225,7 +225,6 @@ pub(crate) fn speaker_label(speaker: &str) -> String {
 }
 
 /// Segments in the (start seconds, text) shape [`write_transcript_md`] takes.
-
 pub(crate) fn markdown_segments(segments: &[TranscriptSegment]) -> Vec<(f64, String)> {
     segments
         .iter()

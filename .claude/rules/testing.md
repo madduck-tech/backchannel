@@ -62,12 +62,18 @@ critic and the gate are run, not because anything fails when they are broken.*
 
 Named here so their absence is a decision rather than a silence:
 
-- **Rust warnings are denied in CI as of ADR 0017** (`RUSTFLAGS="-D warnings" cargo check --workspace
-  --all-targets`, a step of its own in `test.yml` and in `gopnik.json` stage 1). So an unused import
+- **Rust is linted in CI as of ADR 0017 (rustc) and ADR 0018 (clippy)** (`RUSTFLAGS="-D warnings" cargo check --workspace
+  --all-targets` and `cargo clippy --workspace --all-targets -- -D warnings`, each a step of its own
+  in `test.yml` and in `gopnik.json` stage 1). So an unused import
   in Rust is caught. **JavaScript is linted as of #35** (`pnpm lint`, `eslint src --max-warnings=0`)
   — but eleven rules the tree violates are switched off with their counts and reasons, and
   `no-unused-vars` is one of them, so an unused TypeScript import is *still* a way a reachability
   check can be turned green without fixing anything. That is #38, one rule per pull request.
+- **A lint's suggestion is not exempt from judgement.** ADR 0018 records one clippy lint that was
+  wrong (`neg_cmp_op_on_partial_ord` on a NaN guard — the suggested rewrite lets NaN through) and one
+  whose suggested rename would have produced unbounded recursion. ADR 0017 records six rustc warnings
+  whose obvious fix would have deleted macOS and Windows code paths. Read what the fix does, not what
+  the tool proposes.
 - `--max-warnings=0` is not optional for eslint. It exits 0 on warnings, so a rule set to `warn`
   reports and passes — the same reported-and-ignored shape the rustc deny was raised to fix.
 - `-D warnings` reaches a crate only if everything before it compiles. `build.rs`'s `unexpected_cfgs`

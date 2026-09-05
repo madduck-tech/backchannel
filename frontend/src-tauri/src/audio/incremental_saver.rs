@@ -178,7 +178,7 @@ impl IncrementalAudioSaver {
         
         let mut command = std::process::Command::new(ffmpeg_path);
         
-        command.args(&[
+        command.args([
             "-f", "concat",          // Use concat demuxer
             "-safe", "0",            // Allow absolute paths
             "-i", list_file.to_str().unwrap(),
@@ -312,7 +312,7 @@ pub async fn recover_audio_from_checkpoints(
 
     let mut command = std::process::Command::new(ffmpeg_path);
 
-    command.args(&[
+    command.args([
         "-f", "concat",
         "-safe", "0",
         "-i", concat_file_path.to_str().unwrap(),

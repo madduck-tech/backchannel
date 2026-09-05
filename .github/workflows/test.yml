@@ -33,9 +33,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # No `@stable` here: `rust-toolchain.toml` pins the version and rustup honours it, so
+      # CI and a developer's machine lint with the same ruler. They did not, once — see that
+      # file — and a lint verdict measured with a different compiler than CI runs is a
+      # verdict about the wrong thing.
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.98.1
+          components: clippy
           targets: x86_64-unknown-linux-gnu
 
       - name: Rust cache
@@ -99,6 +105,13 @@ jobs:
       # what #34 measured. If it becomes a nuisance, pin the toolchain — do not delete this.
       - name: Rust lints (deny warnings)
         run: RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
+
+      # clippy, denied (#36, ADR 0018). Its policy lives in `[workspace.lints.clippy]` in
+      # the root Cargo.toml rather than in flags here, so it is part of the crate graph and
+      # does not bust the cargo cache the way a second RUSTFLAGS set would. `-D warnings`
+      # on the command line is what turns the remaining lints into failures.
+      - name: Rust clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Rust workspace tests
         run: cargo test --workspace

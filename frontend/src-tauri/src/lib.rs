@@ -495,7 +495,7 @@ pub fn run() {
             });
 
             // Set models directory to use app_data_dir (unified storage location)
-            transcribe_engine::commands::set_models_directory(&_app.handle());
+            transcribe_engine::commands::set_models_directory(_app.handle());
 
             // Initialize the transcription engine on startup. This only builds
             // the engine struct; no model is loaded until one is needed.
@@ -530,7 +530,7 @@ pub fn run() {
 
             // Initialize database (handles first launch detection and conditional setup)
             tauri::async_runtime::block_on(async {
-                database::setup::initialize_database_on_startup(&_app.handle()).await
+                database::setup::initialize_database_on_startup(_app.handle()).await
             })
             .expect("Failed to initialize database");
 

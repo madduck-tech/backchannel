@@ -380,14 +380,14 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
 
         let backends = vec![
             BackendInfo {
-                id: AudioCaptureBackend::ScreenCaptureKit.to_string(),
+                id: AudioCaptureBackend::ScreenCaptureKit.id().to_string(),
                 name: AudioCaptureBackend::ScreenCaptureKit.name().to_string(),
                 description: AudioCaptureBackend::ScreenCaptureKit
                     .description()
                     .to_string(),
             },
             BackendInfo {
-                id: AudioCaptureBackend::CoreAudio.to_string(),
+                id: AudioCaptureBackend::CoreAudio.id().to_string(),
                 name: AudioCaptureBackend::CoreAudio.name().to_string(),
                 description: AudioCaptureBackend::CoreAudio.description().to_string(),
             },
@@ -397,11 +397,52 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        use crate::audio::capture::AudioCaptureBackend;
+
+        // Read off the enum rather than written out again. This branch used to hardcode
+        // "screencapturekit" / "ScreenCaptureKit" / a description — a fourth copy of strings
+        // the enum already owns, on the only platform this repository can run, so a change
+        // to `id()` would have gone unnoticed here.
+        let backend = AudioCaptureBackend::ScreenCaptureKit;
         Ok(vec![BackendInfo {
-            id: "screencapturekit".to_string(),
-            name: "ScreenCaptureKit".to_string(),
-            description: "Default system audio capture".to_string(),
+            id: backend.id().to_string(),
+            name: backend.name().to_string(),
+            description: backend.description().to_string(),
         }])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every id this command hands the frontend must parse back into the backend it names.
+    ///
+    /// It is the pair to `the_stored_id_round_trips_and_is_not_the_display_label` in
+    /// `capture/backend_config.rs`, and it exists because the call sites here were the ones
+    /// actually at risk: while an inherent `to_string` shadowed `Display`, `id: X.to_string()`
+    /// was correct only by that shadow, and **no test covered these lines at all**. The lint
+    /// found them; nothing else would have.
+    #[tokio::test]
+    async fn every_backend_id_parses_back_to_its_backend() {
+        use crate::audio::capture::AudioCaptureBackend;
+
+        let backends = get_audio_backend_info().await.expect("backend info");
+        assert!(!backends.is_empty(), "at least one backend must be offered");
+
+        for info in backends {
+            assert_eq!(
+                AudioCaptureBackend::from_string(&info.id).map(|b| b.id().to_string()),
+                Some(info.id.clone()),
+                "the id {:?} handed to the frontend does not parse back; a stored preference \
+                 written from it would resolve to nothing",
+                info.id
+            );
+            assert_ne!(
+                info.id, info.name,
+                "the stored id and the human label must stay distinguishable"
+            );
+        }
     }
 }
 
