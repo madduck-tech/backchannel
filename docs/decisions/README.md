@@ -18,6 +18,7 @@
 | [0014](0014-product-owner-and-engineering-roles.md) | Product owner and engineering: engineering merges on READY; product gates only | accepted |
 | [0015](0015-linux-system-audio-via-cpal-pulseaudio-host.md) | Linux system audio through cpal's PulseAudio host, not a new capture path | accepted; supersedes decision 2 of 0005 |
 | [0016](0016-quality-cycle-tests-and-red-first.md) | The quality cycle: a change ships with the test that would have caught it | accepted; extends 0013 |
+| [0017](0017-deny-rustc-warnings.md) | rustc warnings are denied, and the deny is held in place | accepted; supersedes 0016's "no lint in CI" for Rust |
 
 ## Deferred questions
 

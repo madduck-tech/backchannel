@@ -6,9 +6,11 @@
       "cd frontend && pnpm test",
       "cd frontend && pnpm typecheck",
       "cargo test --workspace",
+      "RUSTFLAGS=\"-D warnings\" cargo check --workspace --all-targets",
       "cargo test -p conversationaly --lib cpal_capture -- --ignored --nocapture",
       "cargo test -p conversationaly --lib system_audio_monitor_round_trip -- --ignored --nocapture",
-      "cargo test -p conversationaly --lib stale_preference_from_the_alsa_era -- --ignored --nocapture"
+      "cargo test -p conversationaly --lib stale_preference_from_the_alsa_era -- --ignored --nocapture",
+      "cargo test -p conversationaly --lib listing_system_audio_devices_returns_usable_names -- --ignored --nocapture"
     ],
     "stage2": [
       "test -z \"$(git status --porcelain)\" || { echo 'working tree is not clean: the artifact would not be the revision under test'; exit 1; }",

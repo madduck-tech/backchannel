@@ -19,12 +19,22 @@
 // captures via stable wired path (built-in mic + ScreenCaptureKit from built-in).
 
 use anyhow::Result;
-use log::{info, warn};
+use log::info;
 
 use super::configuration::AudioDevice;
-use super::microphone::{default_input_device, find_builtin_input_device};
+use super::microphone::default_input_device;
 use super::speakers::default_output_device;
+
+// Used only by `get_safe_recording_devices_macos` below, which is
+// `#[cfg(target_os = "macos")]`. Gated with the same cfg rather than deleted: on Linux
+// rustc reports them as unused, and taking that at face value would delete three imports
+// a platform this repository cannot build here still needs (ADR 0005).
+#[cfg(target_os = "macos")]
+use super::microphone::find_builtin_input_device;
+#[cfg(target_os = "macos")]
 use crate::audio::device_detection::InputDeviceKind;
+#[cfg(target_os = "macos")]
+use log::warn;
 
 /// Get safe recording devices with automatic Bluetooth fallback (macOS-specific)
 ///
@@ -170,6 +180,9 @@ pub fn get_safe_recording_devices() -> Result<(Option<AudioDevice>, Option<Audio
 
 #[cfg(test)]
 mod tests {
+    // Same cfg as the only test below: on every other platform this module is empty and
+    // the glob import has nothing to import.
+    #[cfg(target_os = "macos")]
     use super::*;
 
     #[test]

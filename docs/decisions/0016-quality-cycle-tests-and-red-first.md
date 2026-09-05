@@ -1,7 +1,7 @@
 # ADR 0016: The quality cycle — a change ships with the test that would have caught it
 
 Date: 2026-09-04
-Status: accepted (extends ADR 0013's cycle; supersedes nothing)
+Status: accepted (extends ADR 0013's cycle; supersedes nothing). Its "no lint runs in CI" clause is superseded **for Rust** by [ADR 0017](0017-deny-rustc-warnings.md) on 2026-09-05; the JavaScript half of that clause stands until #35. The body below is left as written.
 
 ## Context
 

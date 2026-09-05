@@ -196,6 +196,11 @@ impl HardwareProfile {
         Self::has_windows_vulkan_loader(Path::new(r"C:\Windows"))
     }
 
+    /// Called by `has_windows_vulkan_runtime` above, which is
+    /// `#[cfg(target_os = "windows")]`, and by tests on every platform. In a non-test
+    /// build on anything but Windows it genuinely has no caller — hence the allow, rather
+    /// than a deletion that would remove a Windows code path from a Linux machine.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     fn has_windows_vulkan_loader(system_root: &Path) -> bool {
         system_root.join("System32").join("vulkan-1.dll").is_file()
     }

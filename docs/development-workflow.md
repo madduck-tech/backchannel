@@ -88,21 +88,23 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the string the device picker stores, against the Rust that parses it | `device-preference-string.test.mjs` |
 | the device picker's two lists and two handlers, rendered | `device-selection.test.mjs` |
 | the picker instructing the user to click a control it does not render | `device-selection-instructions.test.mjs` |
+| the rustc deny being removed, switched off at step or job level, defanged with `\|\| true`, or left in a workflow that no longer runs on pull requests | `lint-step-is-enforced.test.mjs`, over the reader in `workflow-yaml.test.mjs` |
 | a transcript row's capture channel, across the Rust enum, the event, both TypeScript interfaces, the column and its migration — and the diarization pass leaving it alone | `transcript-channel.test.mjs` |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
-so wiring a thing up, deleting it, or adding a new unreached one all force an edit. The other five
+so wiring a thing up, deleting it, or adding a new unreached one all force an edit. The other six
 rows are literal pins with no allowlist. The table lists the checks that guard *reachability and
-contracts*; it is not the whole suite, which has 15 test files.
+contracts*; it is not the whole suite, which has 17 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
 its reason — the record the check exists to build. Matching on string literals rather than bare
-identifiers narrows this; it does not close it, and closing it needs a lint step this repository does
-not have.
+identifiers narrows this; it does not close it. Closing it needs a lint that reads TypeScript, which
+is #35; the Rust half of that gap is closed (ADR 0017).
 
-Not covered, and named so the absence is a decision: no lint runs in CI, and a backend that
-fabricates a value a correct component renders is caught by nothing.
+Not covered, and named so the absence is a decision: **JavaScript** is not linted (#35 — the Rust
+half is denied in CI as of ADR 0017), and a backend that fabricates a value a correct component
+renders is caught by nothing.
 
 Stage 2's **accessibility-tree** driver reaches only top-level push buttons — a `page tab` exposes no
 action to it, and neither keyboard nor coordinate input reaches the webview. That is a limit of that

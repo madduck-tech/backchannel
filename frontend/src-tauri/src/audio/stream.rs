@@ -449,7 +449,6 @@ impl Drop for AudioStreamManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cpal::traits::HostTrait;
 
     /// End-to-end check of the cpal 0.18 migration against real hardware.
     ///

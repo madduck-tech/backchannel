@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn test_chunked_resample_downsamples_correctly() {
         // 48kHz to 16kHz = 3x downsampling with a 2-second signal
-        let input: Vec<f32> = (0..96000).map(|i| (i as f32 / 96000.0)).collect();
+        let input: Vec<f32> = (0..96000).map(|i| i as f32 / 96000.0).collect();
         let result = chunked_resample_with_progress(&input, 48000, 16000, None);
 
         // Output should be approximately 1/3 the length
@@ -801,7 +801,6 @@ mod tests {
         assert!((result[2] - (-0.3)).abs() < 0.001); // preserved
     }
 
-    #[test]
     /// Decodes a real file end to end through symphonia. Everything else in
     /// this module tests helpers that run on samples already in memory, so
     /// without this the probe/decode loop itself had no coverage at all — a

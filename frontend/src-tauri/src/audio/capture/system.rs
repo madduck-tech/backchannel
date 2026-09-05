@@ -13,6 +13,31 @@ use super::core_audio::CoreAudioCapture;
 #[cfg(target_os = "macos")]
 use log::info;
 
+/// Keep the devices whose name could be read, and count the ones that could not.
+///
+/// Split out of [`SystemAudioCapture::list_system_devices`] so it can be tested without a
+/// sound card. That is not a stylistic preference: the only test this path had asserted
+/// `device_list.len() >= 0`, which is `>= 0` on a `usize` and therefore true for every
+/// possible input, and it ran on a CI runner with no audio devices at all — so no
+/// assertion about a *real* enumeration could go red there either. With the mapping
+/// separated from the hardware, the empty case and the unreadable case become ordinary
+/// unit tests, and the part that genuinely needs a machine is `#[ignore]`d and run by the
+/// gate.
+fn readable_names<I, E>(names: I) -> (Vec<String>, usize)
+where
+    I: IntoIterator<Item = std::result::Result<String, E>>,
+{
+    let mut readable = Vec::new();
+    let mut unreadable = 0usize;
+    for name in names {
+        match name {
+            Ok(name) => readable.push(name),
+            Err(_) => unreadable += 1,
+        }
+    }
+    (readable, unreadable)
+}
+
 /// System audio capture using Core Audio tap (macOS) or CPAL (other platforms)
 pub struct SystemAudioCapture {
     _host: cpal::Host,
@@ -29,11 +54,14 @@ impl SystemAudioCapture {
         let devices = host.output_devices()
             .map_err(|e| anyhow::anyhow!("Failed to enumerate output devices: {}", e))?;
 
-        let mut device_names = Vec::new();
-        for device in devices {
-            if let Ok(name) = device_name(&device) {
-                device_names.push(name);
-            }
+        let (device_names, unreadable) = readable_names(devices.map(|d| device_name(&d)));
+        if unreadable > 0 {
+            // Said out loud. A device whose name cannot be read is simply absent from the
+            // picker, and a user looking for it has no way to tell that from "the machine
+            // does not have it" -- which is the shape of #10.
+            log::warn!(
+                "{unreadable} output device(s) were skipped because their name could not be read"
+            );
         }
 
         Ok(device_names)
@@ -131,4 +159,44 @@ pub fn list_system_audio_devices() -> Result<Vec<String>> {
 
 pub fn check_system_audio_permissions() -> bool {
     SystemAudioCapture::check_system_audio_permissions()
+}
+#[cfg(test)]
+mod tests {
+    use super::readable_names;
+
+    #[test]
+    fn an_empty_enumeration_produces_an_empty_list_and_no_skips() {
+        // The case the old assertion pretended to cover. `assert!(len() >= 0)` is true for
+        // every list including this one, so it could not tell an empty enumeration from a
+        // full one -- and on a CI runner with no audio devices, empty is what it always got.
+        let (names, unreadable) = readable_names(Vec::<std::result::Result<String, anyhow::Error>>::new());
+        assert!(names.is_empty());
+        assert_eq!(unreadable, 0);
+    }
+
+    #[test]
+    fn a_device_whose_name_cannot_be_read_is_counted_rather_than_vanishing() {
+        let (names, unreadable) = readable_names(vec![
+            Ok("Speakers".to_string()),
+            Err(anyhow::anyhow!("name unavailable")),
+            Ok("HDMI".to_string()),
+        ]);
+
+        assert_eq!(names, vec!["Speakers".to_string(), "HDMI".to_string()]);
+        assert_eq!(
+            unreadable, 1,
+            "a device dropped from the picker must be counted, or the user cannot tell it \
+             from a device the machine does not have"
+        );
+    }
+
+    #[test]
+    fn order_is_the_enumeration_order() {
+        let (names, _) = readable_names(vec![
+            Ok::<_, anyhow::Error>("b".to_string()),
+            Ok("a".to_string()),
+            Ok("c".to_string()),
+        ]);
+        assert_eq!(names, vec!["b".to_string(), "a".to_string(), "c".to_string()]);
+    }
 }

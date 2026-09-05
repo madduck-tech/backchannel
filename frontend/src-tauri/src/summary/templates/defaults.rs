@@ -9,9 +9,13 @@ pub const DAILY_STANDUP: &str = include_str!("../../../templates/daily_standup.j
 /// Standard meeting notes template
 pub const STANDARD_MEETING: &str = include_str!("../../../templates/standard_meeting.json");
 
-/// Registry of all built-in templates
+/// Registry of all built-in templates: the single list the other two functions read.
 ///
-/// Maps template identifiers to their embedded JSON content
+/// It used to be one of **three** hardcoded copies of the same two ids — this function,
+/// `get_builtin_template`'s match arms, and `list_builtin_template_ids`'s vec — with
+/// nothing checking that they agreed. rustc reported this one as dead code because only a
+/// test called it; deleting it would have left the two copies that can still drift. The
+/// other two now derive from it, so there is one list and no way for them to disagree.
 pub fn get_builtin_templates() -> Vec<(&'static str, &'static str)> {
     vec![
         ("daily_standup", DAILY_STANDUP),
@@ -27,16 +31,15 @@ pub fn get_builtin_templates() -> Vec<(&'static str, &'static str)> {
 /// # Returns
 /// The template JSON content if found, None otherwise
 pub fn get_builtin_template(id: &str) -> Option<&'static str> {
-    match id {
-        "daily_standup" => Some(DAILY_STANDUP),
-        "standard_meeting" => Some(STANDARD_MEETING),
-        _ => None,
-    }
+    get_builtin_templates()
+        .into_iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, content)| content)
 }
 
 /// List all built-in template identifiers
 pub fn list_builtin_template_ids() -> Vec<&'static str> {
-    vec!["daily_standup", "standard_meeting"]
+    get_builtin_templates().into_iter().map(|(id, _)| id).collect()
 }
 
 #[cfg(test)]

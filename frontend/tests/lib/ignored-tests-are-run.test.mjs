@@ -172,6 +172,11 @@ const HELPERS = new Set([
   'lib/render-tsx.mjs',
   'lib/dom-harness.mjs',
   'lib/tauri-stubs.mjs',
+  // The workflow reader `lint-step-is-enforced.test.mjs` uses. A helper, and unusually a
+  // helper with its own test file (`workflow-yaml.test.mjs`) — because it is hand-rolled
+  // rather than a dependency, and a hand-rolled parser nobody tests is worse than the
+  // substring matching it replaces.
+  'lib/workflow-yaml.mjs',
 ]);
 
 function testDirFiles(dir) {
