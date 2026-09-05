@@ -310,26 +310,36 @@ pub async fn get_current_audio_backend() -> Result<String, String> {
 /// Set audio capture backend
 #[tauri::command]
 pub async fn set_audio_backend(backend: String) -> Result<(), String> {
+    use crate::audio::capture::{AudioCaptureBackend, Platform};
+
+    // One rule, asked once. This used to be two `cfg` branches: the macOS one parsed the id,
+    // and the other compared against the bare string "screencapturekit" — a fourth hand-written
+    // copy of the availability rule that nothing checked against the other three.
+    let backend_enum = AudioCaptureBackend::from_string(&backend)
+        .ok_or_else(|| format!("Invalid backend: {}", backend))?;
+
+    if !backend_enum.is_available_on(Platform::CURRENT) {
+        return Err(format!(
+            "Backend {} not available on this platform",
+            backend
+        ));
+    }
+
+    // Everything above is platform-independent and tested as such. Only the permission dance
+    // below needs a macOS compiler, because only macOS has the permission.
     #[cfg(target_os = "macos")]
     {
-        use crate::audio::capture::AudioCaptureBackend;
         use crate::audio::permissions::{
             check_screen_recording_permission, request_screen_recording_permission,
         };
 
-        let backend_enum = AudioCaptureBackend::from_string(&backend)
-            .ok_or_else(|| format!("Invalid backend: {}", backend))?;
-
-        // If switching to Core Audio, log information about Audio Capture permission
         if backend_enum == AudioCaptureBackend::CoreAudio {
             info!("🔐 Core Audio backend requires Audio Capture permission (macOS 14.4+)");
             info!("📍 Permission dialog will appear automatically when recording starts");
 
-            // Check if permission is already granted (this is informational only)
             if !check_screen_recording_permission() {
                 warn!("⚠️  Audio Capture permission may not be granted");
 
-                // Attempt to open System Settings (opens System Settings)
                 if let Err(e) = request_screen_recording_permission() {
                     error!("Failed to open System Settings: {}", e);
                 }
@@ -349,19 +359,9 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
 
         info!("Setting audio backend to: {:?}", backend_enum);
         crate::audio::capture::set_current_backend(backend_enum);
-        Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        if backend != "screencapturekit" {
-            return Err(format!(
-                "Backend {} not available on this platform",
-                backend
-            ));
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// Get backend information (name and description)
@@ -374,42 +374,20 @@ pub struct BackendInfo {
 
 #[tauri::command]
 pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use crate::audio::capture::AudioCaptureBackend;
+    use crate::audio::capture::AudioCaptureBackend;
 
-        let backends = vec![
-            BackendInfo {
-                id: AudioCaptureBackend::ScreenCaptureKit.id().to_string(),
-                name: AudioCaptureBackend::ScreenCaptureKit.name().to_string(),
-                description: AudioCaptureBackend::ScreenCaptureKit
-                    .description()
-                    .to_string(),
-            },
-            BackendInfo {
-                id: AudioCaptureBackend::CoreAudio.id().to_string(),
-                name: AudioCaptureBackend::CoreAudio.name().to_string(),
-                description: AudioCaptureBackend::CoreAudio.description().to_string(),
-            },
-        ];
-        Ok(backends)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        use crate::audio::capture::AudioCaptureBackend;
-
-        // Read off the enum rather than written out again. This branch used to hardcode
-        // "screencapturekit" / "ScreenCaptureKit" / a description — a fourth copy of strings
-        // the enum already owns, on the only platform this repository can run, so a change
-        // to `id()` would have gone unnoticed here.
-        let backend = AudioCaptureBackend::ScreenCaptureKit;
-        Ok(vec![BackendInfo {
+    // Derived from the availability rule, not written out beside it. Both branches this
+    // replaced listed backends by hand — the macOS one named two, the other named one — so
+    // the list the frontend renders could disagree with the list `set_audio_backend` accepts
+    // and nothing would have said so.
+    Ok(AudioCaptureBackend::available_backends()
+        .into_iter()
+        .map(|backend| BackendInfo {
             id: backend.id().to_string(),
             name: backend.name().to_string(),
             description: backend.description().to_string(),
-        }])
-    }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -443,6 +421,60 @@ mod tests {
                 "the stored id and the human label must stay distinguishable"
             );
         }
+    }
+
+    /// The behaviour change this refactor makes, held.
+    ///
+    /// `AudioCaptureBackend::CoreAudio` is now a variant on every platform, so
+    /// `from_string("coreaudio")` returns `Some` here where it used to return `None`. That is
+    /// deliberate — it is what makes the macOS mapping testable from Linux — but it must not
+    /// turn into a machine accepting a backend it cannot drive. Parsing and offering are two
+    /// questions and only the second one gates.
+    #[tokio::test]
+    async fn a_backend_this_platform_does_not_offer_is_rejected_even_though_its_id_parses() {
+        use crate::audio::capture::{AudioCaptureBackend, Platform};
+
+        for backend in [
+            AudioCaptureBackend::ScreenCaptureKit,
+            AudioCaptureBackend::CoreAudio,
+        ] {
+            assert_eq!(
+                AudioCaptureBackend::from_string(backend.id()),
+                Some(backend),
+                "every backend's id parses on every platform"
+            );
+
+            let offered = backend.is_available_on(Platform::CURRENT);
+            let result = set_audio_backend(backend.id().to_string()).await;
+            assert_eq!(
+                result.is_ok(),
+                offered,
+                "set_audio_backend({:?}) returned {:?}, but this platform ({:?}) {} it",
+                backend.id(),
+                result,
+                Platform::CURRENT,
+                if offered { "offers" } else { "does not offer" }
+            );
+        }
+    }
+
+    /// The list the frontend renders and the list the command accepts are the same list.
+    /// They were written out by hand in four places before, with nothing comparing them.
+    #[tokio::test]
+    async fn what_is_offered_is_exactly_what_is_accepted() {
+        use crate::audio::capture::{AudioCaptureBackend, Platform};
+
+        let offered: Vec<String> = get_audio_backend_info()
+            .await
+            .expect("backend info")
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        let expected: Vec<String> = AudioCaptureBackend::available_on(Platform::CURRENT)
+            .into_iter()
+            .map(|b| b.id().to_string())
+            .collect();
+        assert_eq!(offered, expected);
     }
 }
 
