@@ -39,7 +39,14 @@ function keyValue(line) {
   if (raw === 'true') value = true;
   else if (raw === 'false') value = false;
   else if (raw === '') value = null;
-  else value = raw.replace(/^['"]|['"]$/g, '');
+  // Strip quotes only when they *pair*. `/^['"]|['"]$/g` also ate a lone trailing quote,
+  // which silently truncated any unquoted value ending in one -- e.g. a `run:` whose last
+  // character is the closing quote of a --config JSON blob. That produced a command differing
+  // from the real one by a single character, in a check whose entire job is comparing commands
+  // character for character.
+  else if (raw.length >= 2 && (raw[0] === "'" || raw[0] === '"') && raw[raw.length - 1] === raw[0]) {
+    value = raw.slice(1, -1);
+  } else value = raw;
   return { key: m[1], value, raw };
 }
 
