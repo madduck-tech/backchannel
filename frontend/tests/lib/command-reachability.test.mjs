@@ -23,11 +23,6 @@ import {
 
 // Registered but never invoked. One line each; the reason is the point of the list.
 const NEVER_INVOKED = new Set([
-  // Notification subsystem: added, never wired. Its settings pair IS wired, in ConfigContext.
-  'clear_notifications', 'get_notification_stats', 'initialize_notification_manager_manual',
-  'is_dnd_active', 'is_notification_system_ready', 'get_system_dnd_status',
-  'request_notification_permission', 'set_manual_dnd', 'set_notification_consent',
-  'show_notification', 'show_test_notification', 'test_notification_with_auto_consent',
   // Backend-connection probes from the fork's Python-backend era. Never wired here.
   'debug_backend_connection', 'test_backend_connection',
   // System-audio capture: registered, never called; the Linux arm is a bail!(). See #13.
