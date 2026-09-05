@@ -65,10 +65,27 @@ const workspaceMembers = [
     .matchAll(/"([^"]+)"/g),
 ].map((m) => m[1]);
 assert.ok(workspaceMembers.length > 0, 'no workspace members parsed from Cargo.toml');
+// `src/` and `tests/`. The second was missing (#53) and the gap is exactly where a
+// parameterised contract suite would live: Rust's conventional home for integration tests is
+// `<member>/tests/`, and an `#[ignore]` there was held by nothing — not required to be named
+// in gopnik.json, not required to carry an excuse, not reported as unaccounted. This check
+// exists because `cpal_capture_round_trip` "was written, ignored, and therefore did not catch
+// #9"; moving that test into a directory the check cannot see would have undone it silently.
+//
+// `src/` missing is a failure (it means this list is stale); `tests/` missing is normal — no
+// member has one today, and demanding it would fail on every crate in the workspace.
+const memberDirs = (member) =>
+  [
+    { dir: path.join(repo, member, 'src'), required: true },
+    { dir: path.join(repo, member, 'tests'), required: false },
+  ].filter(({ dir, required }) => {
+    const there = fs.existsSync(dir);
+    assert.ok(there || !required, `workspace member ${member} has no src/ — this scan is stale`);
+    return there;
+  });
+
 for (const member of workspaceMembers) {
-  const dir = path.join(repo, member, 'src');
-  assert.ok(fs.existsSync(dir), `workspace member ${member} has no src/ — this scan is stale`);
-  for (const file of rustSources(dir)) {
+  for (const file of memberDirs(member).flatMap(({ dir }) => rustSources(dir))) {
     // Comments and string literals are blanked first. Without that, a comment mentioning
     // `#[ignore]` produces a phantom entry named after the next `fn` in the file, and the
     // cheapest way to green that is to paste a fictional name into the excuse map -- the
