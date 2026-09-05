@@ -51,6 +51,14 @@ pub struct DeviceInfo {
 /// New recording saver using incremental saving strategy
 pub struct RecordingSaver {
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
+    /// Where recordings go, from the user's stored preference. `None` means nobody told us,
+    /// and the platform default is used -- which is what every writer did unconditionally
+    /// before, so a configured folder was loaded, logged, and then ignored.
+    base_folder: Option<PathBuf>,
+    /// Why there is no meeting folder, when there is none. Distinguishes "the user turned
+    /// auto-save off" from "we could not create the folder" -- the application used to report
+    /// both as the former, and told the user the recording was saved either way.
+    folder_error: Option<String>,
     meeting_folder: Option<PathBuf>,
     meeting_name: Option<String>,
     metadata: Option<MeetingMetadata>,
@@ -75,9 +83,16 @@ pub struct RecordingSaver {
 const TRANSCRIPT_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl RecordingSaver {
+    /// Tell the saver where the user wants recordings, before accumulation starts.
+    pub fn set_base_folder(&mut self, folder: PathBuf) {
+        self.base_folder = Some(folder);
+    }
+
     pub fn new() -> Self {
         Self {
             incremental_saver: None,
+            base_folder: None,
+            folder_error: None,
             meeting_folder: None,
             meeting_name: None,
             metadata: None,
@@ -192,7 +207,10 @@ impl RecordingSaver {
                     Ok(()) => info!("Successfully initialized meeting folder with checkpoints"),
                     Err(e) => {
                         error!("Failed to initialize meeting folder: {}", e);
-                        // Continue anyway - will use fallback flat structure
+                        // Recording continues -- losing the transcript because the audio
+                        // folder is bad would be a worse trade -- but the failure is
+                        // remembered so that stop does not claim the recording was saved.
+                        self.folder_error = Some(e.to_string());
                     }
                 }
             }
@@ -265,8 +283,14 @@ impl RecordingSaver {
     /// * `meeting_name` - Name of the meeting
     /// * `create_checkpoints` - Whether to create .checkpoints/ directory and IncrementalAudioSaver
     fn initialize_meeting_folder(&mut self, meeting_name: &str, create_checkpoints: bool) -> Result<()> {
-        // Load preferences to get base recordings folder
-        let base_folder = super::recording_preferences::get_default_recordings_folder();
+        // The configured folder if the caller passed one, the platform default otherwise.
+        // Preferences are loaded asynchronously with an AppHandle and this is neither, so the
+        // value is threaded in from the command that already read it -- the same route
+        // `auto_save` takes.
+        let base_folder = self
+            .base_folder
+            .clone()
+            .unwrap_or_else(super::recording_preferences::get_default_recordings_folder);
 
         // Create meeting folder structure (with or without .checkpoints/ subdirectory)
         let meeting_folder = create_meeting_folder(&base_folder, meeting_name, create_checkpoints)?;
@@ -434,6 +458,23 @@ impl RecordingSaver {
         let should_save_audio = self.incremental_saver.is_some();
 
         if !should_save_audio {
+            if let Some(reason) = &self.folder_error {
+                // Not a preference: the folder could not be made, so no audio exists. Say so
+                // instead of "auto-save was disabled", and tell the frontend, which otherwise
+                // shows "Recording saved successfully!" over a recording that was not saved.
+                error!("❌ No audio was saved: {}", reason);
+                let _ = app.emit(
+                    "recording-not-saved",
+                    serde_json::json!({
+                        "reason": reason,
+                        "folder": self
+                            .base_folder
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
+                    }),
+                );
+                return Ok(None);
+            }
             info!("⚠️  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
             info!("✅ Transcripts and metadata already saved incrementally");
             return Ok(None);

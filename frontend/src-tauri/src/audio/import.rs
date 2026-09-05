@@ -338,8 +338,16 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
-    // Create meeting folder
-    let base_folder = get_default_recordings_folder();
+    // Create meeting folder, in the folder the user configured. This used to call
+    // get_default_recordings_folder() unconditionally, so an import landed somewhere the
+    // user had not chosen -- the same defect as the recording path, in a second place.
+    let base_folder = match crate::audio::recording_preferences::load_recording_preferences(&app).await {
+        Ok(prefs) => prefs.save_folder,
+        Err(e) => {
+            warn!("Could not load recording preferences for the import folder: {}", e);
+            get_default_recordings_folder()
+        }
+    };
     let meeting_folder = create_meeting_folder(&base_folder, &title, false)?;
 
     // Copy audio file to meeting folder

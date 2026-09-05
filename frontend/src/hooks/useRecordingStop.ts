@@ -35,10 +35,32 @@ interface UseRecordingStopReturn {
  * - Toast notifications for success/error
  * - Window exposure for Rust callbacks
  */
+/**
+ * Payload of the backend's `recording-not-saved` event: the meeting folder could not be
+ * created, so no audio exists. Emitted only for that case -- auto-save being off is a
+ * choice, not a failure, and stays silent.
+ */
+interface RecordingNotSavedPayload {
+  reason: string;
+  folder: string | null;
+}
+
 export function useRecordingStop(
   setIsRecording: (value: boolean) => void,
   setIsRecordingDisabled: (value: boolean) => void
 ): UseRecordingStopReturn {
+  // Remembered across the stop, because the backend reports the failure while the recording
+  // is finishing and the toast is decided afterwards.
+  const storageFailure = useRef<RecordingNotSavedPayload | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<RecordingNotSavedPayload>('recording-not-saved', (event) => {
+      console.error('No audio was saved:', event.payload);
+      storageFailure.current = event.payload;
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
   // USE global state instead
   const recordingState = useRecordingState();
   const {
@@ -307,17 +329,36 @@ export function useRecordingStop(
           // Mark as completed
           setStatus(RecordingStatus.COMPLETED);
 
-          // Show success toast with navigation option
-          toast.success('Recording saved successfully!', {
-            description: `${freshTranscripts.length} transcript segments saved.`,
-            action: {
-              label: 'View Meeting',
-              onClick: () => {
-                router.push(`/meeting-details?id=${meetingId}`);
-              }
-            },
-            duration: 10000,
-          });
+          // Do not claim the recording was saved when it was not. The transcript is kept
+          // either way -- losing it because the audio folder is bad would be the worse trade
+          // -- so this reports precisely what happened rather than suppressing the toast.
+          const failure = storageFailure.current;
+          storageFailure.current = null;
+          // Only the toast differs -- everything after it (navigation, clearing, the reset to
+          // IDLE) must still run, so this picks a message rather than returning early.
+          if (failure) {
+            toast.error('Recording not saved', {
+              description:
+                `The audio could not be written${failure.folder ? ` to ${failure.folder}` : ''}: ` +
+                `${failure.reason}. The transcript was kept.`,
+              action: {
+                label: 'View Meeting',
+                onClick: () => { router.push(`/meeting-details?id=${meetingId}`); }
+              },
+              duration: 15000,
+            });
+          } else {
+            toast.success('Recording saved successfully!', {
+              description: `${freshTranscripts.length} transcript segments saved.`,
+              action: {
+                label: 'View Meeting',
+                onClick: () => {
+                  router.push(`/meeting-details?id=${meetingId}`);
+                }
+              },
+              duration: 10000,
+            });
+          }
 
           // Navigate immediately with source parameter. The meeting is already
           // in the database at this point, so there is nothing to wait for.

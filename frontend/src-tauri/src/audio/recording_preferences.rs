@@ -39,7 +39,23 @@ impl Default for RecordingPreferences {
     }
 }
 
-/// Get the default recordings folder based on platform
+/// Get the default recordings folder based on platform.
+///
+/// Never returns a relative path. It used to fall back to `PathBuf::from(".")` when the
+/// platform's media directory was unknown, and under the AppImage that is fatal rather than
+/// merely untidy: the AppImage runtime chdirs into its own read-only FUSE mount, so
+/// `./conversationaly-recordings` resolves inside it, `mkdir` returns EROFS, and the
+/// recording then runs with no meeting folder at all -- no audio, no transcript files. The
+/// application logged the error and carried on, so the only symptom was an empty folder.
+fn recordings_dir_fallback() -> PathBuf {
+    // The home directory is writable wherever the media directories are not, and unlike the
+    // process CWD it does not depend on how the application was launched.
+    dirs::home_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("conversationaly-recordings")
+}
+
 pub fn get_default_recordings_folder() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -49,8 +65,8 @@ pub fn get_default_recordings_folder() -> PathBuf {
         } else {
             // Fallback to Documents if Music folder is not available
             dirs::document_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("conversationaly-recordings")
+                .map(|d| d.join("conversationaly-recordings"))
+                .unwrap_or_else(recordings_dir_fallback)
         }
     }
 
@@ -62,8 +78,8 @@ pub fn get_default_recordings_folder() -> PathBuf {
         } else {
             // Fallback to Documents if Movies folder is not available
             dirs::document_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("conversationaly-recordings")
+                .map(|d| d.join("conversationaly-recordings"))
+                .unwrap_or_else(recordings_dir_fallback)
         }
     }
 
@@ -71,8 +87,8 @@ pub fn get_default_recordings_folder() -> PathBuf {
     {
         // Linux/Others: ~/Documents/conversationaly-recordings
         dirs::document_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("conversationaly-recordings")
+            .map(|d| d.join("conversationaly-recordings"))
+            .unwrap_or_else(recordings_dir_fallback)
     }
 }
 

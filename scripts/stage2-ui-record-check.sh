@@ -99,6 +99,14 @@ APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true
+# A writable save_folder, so this exercises the configured path rather than the platform
+# default. Without it the run tests only what happens when nobody has chosen a folder --
+# which is worth testing too, and is what BC_NO_SAVE_FOLDER is for.
+if [ -z "${BC_NO_SAVE_FOLDER:-}" ]; then
+  printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":null,"preferred_system_device":null}}' \
+    "$PROFILE/rec" > "$APPDATA/recording_preferences.json"
+  say "save_folder pinned to $PROFILE/rec"
+fi
 say "seeded models from $CACHE — no downloads this run"
 
 if [ -n "$PLAY_INTO" ]; then
@@ -211,9 +219,40 @@ if [ -n "$LOG" ] && grep -q "Using preferred system audio" "$LOG"; then
     || die "the app opened a different device than the one clicked; see $LOG"
 fi
 
+# Stop the recording before looking for audio: the file is assembled from checkpoints when
+# the recording stops, so asserting while it is still running finds nothing and reads as the
+# very defect this check is for. The stop control is an icon button with an aria-label.
+STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
+if [ -n "$STOP" ]; then
+  click "$STOP"
+  say "stopped; waiting for the audio to be finalised"
+  for _ in $(seq 1 60); do
+    [ -n "$(find "$APPDATA" "$PROFILE/rec" -type f \( -name "*.mp4" -o -name "*.wav" -o -name "*.m4a" \) 2>/dev/null | head -1)" ] && break
+    sleep 1
+  done
+else
+  say "no Stop recording control found; the audio assertion below will be about that"
+fi
+
+# The audio file, not only the transcript. Every audio pass in this repository asserted a
+# transcript and none asserted a recording, so they were green while the default save folder
+# resolved to a read-only path and nothing was written at all (#11). This is the assertion
+# that would have caught it.
+AUDIO=$(find "$APPDATA" "$PROFILE/rec" -type f \( -name "*.mp4" -o -name "*.wav" -o -name "*.m4a" \) 2>/dev/null | head -1)
+if [ -n "$AUDIO" ]; then
+  say "audio written: $AUDIO ($(du -h "$AUDIO" | cut -f1))"
+else
+  say "no audio file under $APPDATA or $PROFILE/rec"
+  # `|| true`: grep exits 1 when it matches nothing, and under `set -e` that kills the script
+  # right here -- silently, with no verdict printed. Same class as the guard that returned an
+  # error string as an element id: a failure path that ends the run without saying anything.
+  { [ -n "$LOG" ] && grep -o "Failed to initialize meeting folder.*" "$LOG" | head -1 | sed "s/^/    /"; } || true
+fi
+
 case "$MODE" in
   signal)
     [ -n "$FOUND" ] || die "the transcript never contained: ${EXPECTED[*]}"
+    [ -n "$AUDIO" ] || die "the recording transcribed but wrote no audio file"
     say "PASS - picked '$PICK' in the dropdown and its recording transcribed: ${EXPECTED[*]}"
     ;;
   silence|wrong-sink)
