@@ -19,7 +19,6 @@ use super::{
     default_output_device,  // Get default system audio
     RecordingManager,
     DeviceEvent,
-    DeviceMonitorType
 };
 
 // Import transcription modules
@@ -1043,7 +1042,10 @@ pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
 }
 
 /// Check if recording is currently paused
-#[tauri::command]
+/// Not a Tauri command: nothing in the frontend ever invoked it, but `tray.rs:251`
+/// calls it directly to decide the tray's pause label. Unregistering it removes an
+/// entry point nobody used without removing behaviour somebody depends on — the third
+/// option #64 v1 said did not exist (#64).
 pub async fn is_recording_paused() -> bool {
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
     if let Some(manager) = manager_guard.as_ref() {
@@ -1178,52 +1180,7 @@ pub struct DisconnectedDeviceInfo {
     pub device_type: String,
 }
 
-/// Poll for audio device events (disconnect/reconnect)
-/// Should be called periodically (every 1-2 seconds) by frontend during recording
-#[tauri::command]
-pub async fn poll_audio_device_events() -> Result<Option<DeviceEventResponse>, String> {
-    let mut manager_guard = RECORDING_MANAGER.lock().unwrap();
 
-    if let Some(manager) = manager_guard.as_mut() {
-        if let Some(event) = manager.poll_device_events() {
-            info!("📱 Device event polled: {:?}", event);
-            Ok(Some(event.into()))
-        } else {
-            Ok(None)
-        }
-    } else {
-        // Not recording, no events
-        Ok(None)
-    }
-}
-
-/// Get current reconnection status
-/// Returns whether the system is attempting to reconnect and which device
-#[tauri::command]
-pub async fn get_reconnection_status() -> Result<ReconnectionStatus, String> {
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-
-    if let Some(manager) = manager_guard.as_ref() {
-        let state = manager.get_state();
-        let disconnected_device = state.get_disconnected_device().map(|(device, device_type)| {
-            DisconnectedDeviceInfo {
-                name: device.name.clone(),
-                device_type: format!("{:?}", device_type),
-            }
-        });
-
-        Ok(ReconnectionStatus {
-            is_reconnecting: manager.is_reconnecting(),
-            disconnected_device,
-        })
-    } else {
-        // Not recording, no reconnection in progress
-        Ok(ReconnectionStatus {
-            is_reconnecting: false,
-            disconnected_device: None,
-        })
-    }
-}
 
 /// Get information about the active audio output device
 /// Used to warn users about Bluetooth playback issues
@@ -1234,69 +1191,3 @@ pub async fn get_active_audio_output() -> Result<super::playback_monitor::AudioO
         .map_err(|e| format!("Failed to get audio output info: {}", e))
 }
 
-/// Manually trigger device reconnection attempt
-/// Useful for UI "Retry" button
-#[tauri::command]
-pub async fn attempt_device_reconnect(
-    device_name: String,
-    device_type: String,
-) -> Result<bool, String> {
-    // Parse device type first
-    let monitor_type = match device_type.as_str() {
-        "Microphone" => DeviceMonitorType::Microphone,
-        "SystemAudio" => DeviceMonitorType::SystemAudio,
-        _ => return Err(format!("Invalid device type: {}", device_type)),
-    };
-
-    // Check if recording is active
-    {
-        let manager_guard = RECORDING_MANAGER.lock().unwrap();
-        if manager_guard.is_none() {
-            return Err("Recording not active".to_string());
-        }
-    } // Release lock
-
-    // The guard is taken and released *inside* the blocking closure, around a synchronous
-    // section only. It used to be held across the `.await` on `attempt_device_reconnect`
-    // (`clippy::await_holding_lock`): `RECORDING_MANAGER` is a `std::sync::Mutex`, so a task
-    // that yields while holding it blocks every other thread that touches the recording
-    // manager, and deadlocks outright if the awaited future needs the same lock.
-    //
-    // Not reachable today — this command is registered at `lib.rs` and invoked from the
-    // frontend zero times, one of the dead commands #17's census counted, and its own doc
-    // comment says "Useful for UI 'Retry' button". Which makes it worse to leave, not
-    // better: it is a trap set for whoever wires that button, and it would be found by a
-    // feature rather than by a test.
-    let result = tokio::task::spawn_blocking(move || {
-        let handle = tokio::runtime::Handle::current();
-        // Take the manager out under the lock, drop the guard, then await.
-        let mut manager = {
-            let mut manager_guard = RECORDING_MANAGER.lock().unwrap();
-            match manager_guard.take() {
-                Some(manager) => manager,
-                None => return Err(anyhow::anyhow!("Recording not active")),
-            }
-        };
-        let outcome = handle.block_on(manager.attempt_device_reconnect(&device_name, monitor_type));
-        // Put it back whatever happened: dropping it here would end the recording.
-        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
-        outcome
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?;
-
-    match result {
-        Ok(success) => {
-            if success {
-                info!("✅ Manual reconnection successful");
-            } else {
-                warn!("❌ Manual reconnection failed - device not available");
-            }
-            Ok(success)
-        }
-        Err(e) => {
-            error!("Manual reconnection error: {}", e);
-            Err(e.to_string())
-        }
-    }
-}
