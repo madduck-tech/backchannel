@@ -47,6 +47,14 @@ pub struct BenchSink<S> {
     /// Latched after the one warning, the same way `segmented.rs` latches its
     /// backlog warning.
     lag_warned: bool,
+    /// Every lag, not only the throttled ones that reach the log.
+    ///
+    /// The throttle exists so a meeting does not produce one log line per commit; it was never
+    /// meant to throw the numbers away, and until #65 that is what it did — a p95 computed from
+    /// one sample per fifteen seconds is a p95 of the throttle, not of the transcript. Held in
+    /// memory for the length of one recording: a f64 per commit, so an hour of dense speech is
+    /// tens of kilobytes.
+    lags_ms: Vec<f64>,
 }
 
 impl<S: TranscriptSink> BenchSink<S> {
@@ -57,6 +65,7 @@ impl<S: TranscriptSink> BenchSink<S> {
             started,
             commits: 0,
             last_log: started,
+            lags_ms: Vec::new(),
             lag_warning: false,
             lag_warned: false,
         }
@@ -125,6 +134,7 @@ impl<S: TranscriptSink> TranscriptSink for BenchSink<S> {
         // Two float operations, unconditionally. What the throttle below guards
         // is the formatting, which is the part that actually costs something.
         let lag = lag_ms(elapsed, chunk.audio_end);
+        self.lags_ms.push(lag);
 
         if self.due(now) {
             info!(
@@ -276,5 +286,25 @@ mod tests {
         assert!(bench.due(t0 + Duration::from_secs(15)), "15s reopens it");
         assert!(!bench.due(t0 + Duration::from_secs(29)), "window restarts from the last line");
         assert!(bench.due(t0 + Duration::from_secs(30)));
+    }
+}
+
+impl<S> BenchSink<S> {
+    /// The summary of one recording, or `None` if nothing was committed.
+    ///
+    /// ADR 0008 states its criteria in p95, and this is the only place in the application that
+    /// produces one. It is *reported*, never enforced: the measurement needs an audio device and
+    /// 1.2 GB of models, and CI has neither, so nothing can go red on it. #65 says so rather than
+    /// letting a printed number look like a check.
+    pub fn summary(&mut self) -> Option<crate::audio::latency::Percentiles> {
+        crate::audio::latency::percentiles(&mut self.lags_ms.clone())
+    }
+}
+
+impl<S> Drop for BenchSink<S> {
+    fn drop(&mut self) {
+        if let Some(p) = crate::audio::latency::percentiles(&mut self.lags_ms.clone()) {
+            info!("BENCH SUMMARY committed-lag {p}");
+        }
     }
 }
