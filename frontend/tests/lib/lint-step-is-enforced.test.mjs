@@ -61,6 +61,10 @@ const COMMANDS = [
     run: 'scripts/environment-record.sh',
     what: 'a result is attributable to the environment that produced it',
     inGopnik: true,
+    // Once per job, not once per workflow: #41's macOS and Windows jobs are different
+    // machines, and a record from the Linux job says nothing about what compiled the macOS
+    // code. Every occurrence is still held to the escapes and switches below.
+    perJob: true,
   },
 ];
 
@@ -79,20 +83,33 @@ assert.deepEqual(
 );
 
 // --- 1..5, for each lint command --------------------------------------------------------
-for (const { run: needle, what } of COMMANDS) {
+for (const { run: needle, what, perJob } of COMMANDS) {
   const matching = wf.jobs
     .flatMap((job) => job.steps.map((step) => ({ job, step })))
     .filter(({ step }) => typeof step.keys.run === 'string' && step.keys.run.includes(needle));
 
-  assert.equal(
-    matching.length,
-    1,
-    `expected exactly one step running \`${needle}\` in test.yml, found ${matching.length}. ` +
-      `That command is what makes ${what}; without it the findings come straight back, ` +
-      'reported and ignored.'
-  );
+  if (perJob) {
+    // One per job. Asserted against the job list rather than a count, so adding a job without
+    // the record fails here instead of quietly producing a platform nobody can attribute.
+    assert.deepEqual(
+      matching.map(({ job }) => job.id).sort(),
+      wf.jobs.map((job) => job.id).sort(),
+      `\`${needle}\` does not run in every job of test.yml. It runs in ` +
+        `[${matching.map(({ job }) => job.id).join(', ')}] and the workflow has ` +
+        `[${wf.jobs.map((j) => j.id).join(', ')}]. Each job is a different machine, and a ` +
+        'record from one says nothing about another.'
+    );
+  } else {
+    assert.equal(
+      matching.length,
+      1,
+      `expected exactly one step running \`${needle}\` in test.yml, found ${matching.length}. ` +
+        `That command is what makes ${what}; without it the findings come straight back, ` +
+        'reported and ignored.'
+    );
+  }
 
-  const { job, step } = matching[0];
+  for (const { job, step } of matching) {
 
   // --- 5. the command is not defanged ---------------------------------------------------
   for (const escape of ['|| true', '||true', '; true', '|| :']) {
@@ -118,6 +135,7 @@ for (const { run: needle, what } of COMMANDS) {
       `the ${level} \`${name}\` carries an \`if\`, so it can be skipped without being ` +
         'removed. If it must be conditional, say here which pull requests go unlinted.'
     );
+    }
   }
 }
 
@@ -129,6 +147,83 @@ for (const { run: needle } of COMMANDS.filter((c) => c.inGopnik)) {
     `gopnik.json stage 1 no longer runs \`${needle}\`. CI and the gate must agree: a verdict ` +
       'that says READY while CI enforces something the gate did not run is the disagreement ' +
       'this repository keeps paying for.'
+  );
+}
+
+// --- the platforms nobody could compile ---------------------------------------------------
+// #41. `test.yml` was the only workflow with `on: pull_request` and it runs on Linux, so
+// everything behind a `#[cfg(target_os = ...)]` was compiled by nothing. Adding a job proves
+// nothing on its own -- a job that checks the wrong target, or is switched off, or skips on a
+// fork, all pass -- so each of those is asserted here.
+const PLATFORM_JOBS = [
+  { id: 'macos', image: /^macos/, sidecar: 'aarch64-apple-darwin' },
+  { id: 'windows', image: /^windows/, sidecar: 'x86_64-pc-windows-msvc' },
+];
+
+for (const { id, image, sidecar } of PLATFORM_JOBS) {
+  const job = wf.jobs.find((j) => j.id === id);
+  assert.ok(
+    job,
+    `test.yml no longer has a \`${id}\` job, so that platform's code is compiled by nothing ` +
+      'again. It was compiled by nothing until #41; a verdict may say behaviour is unproven ' +
+      'there (ADR 0005), never that it builds.'
+  );
+  assert.match(
+    String(job.keys['runs-on'] ?? ''),
+    image,
+    `the \`${id}\` job runs on \`${job.keys['runs-on']}\`, which is not that platform. A job ` +
+      'named for a platform and running on Linux is worse than no job: it reports a green ' +
+      'check for a compilation that never happened.'
+  );
+
+  const check = job.steps.filter(
+    (st) => typeof st.keys.run === 'string' && st.keys.run.includes('cargo check --workspace --all-targets')
+  );
+  assert.equal(check.length, 1, `expected one \`cargo check --workspace --all-targets\` step in the ${id} job, found ${check.length}`);
+
+  // Without its own sidecar the job dies in `tauri_build::build()` (externalBin ->
+  // tauri-utils ResourcePathNotFound) before compiling any of the code it exists for, and a
+  // control expecting a red job would go red for the wrong reason.
+  const built = job.steps.some(
+    (st) => typeof st.keys.run === 'string' && st.keys.run.includes(`llama-helper-${sidecar}`)
+  );
+  assert.ok(
+    built,
+    `the \`${id}\` job does not build \`binaries/llama-helper-${sidecar}\`, so \`build.rs\` fails ` +
+      'to resolve externalBin and the job fails on setup rather than on code'
+  );
+
+  for (const [level, keys, name] of [
+    ['job', job.keys, job.id],
+    ...job.steps.map((st) => ['step', st.keys, st.keys.name ?? '<unnamed>']),
+  ]) {
+    for (const key of ['continue-on-error', 'if']) {
+      assert.ok(
+        !(key in keys),
+        `the ${level} \`${name}\` carries \`${key}\`, so ${id} compilation can be skipped or ` +
+          'reported without failing'
+      );
+    }
+  }
+}
+
+// Every job installs the same compiler, and it is the one `rust-toolchain.toml` pins. The pin
+// is a literal in each job -- `dtolnay/rust-toolchain` does not read the file -- so three
+// copies can drift, and a lint or a build measured with a compiler other than the one that
+// gates a pull request is a measurement of the wrong thing (ADR 0018: 0 findings locally, 35
+// in CI, one tree).
+const rustPin = /^channel\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(repo, 'rust-toolchain.toml'), 'utf8'));
+assert.ok(rustPin, 'rust-toolchain.toml declares no `channel`');
+for (const job of wf.jobs) {
+  const step = job.steps.find((st) => String(st.keys.uses ?? '').includes('dtolnay/rust-toolchain'));
+  assert.ok(step, `the \`${job.id}\` job installs no Rust toolchain`);
+  const declared = /toolchain:\s*([^\s]+)/.exec(String(step.keys.with ?? ''));
+  assert.ok(declared, `the \`${job.id}\` job's toolchain step declares no version, so it takes the action default`);
+  assert.equal(
+    declared[1],
+    rustPin[1],
+    `the \`${job.id}\` job installs Rust ${declared[1]} while rust-toolchain.toml pins ` +
+      `${rustPin[1]}. That skew has already made a verdict false once.`
   );
 }
 
@@ -229,7 +324,8 @@ if (fs.existsSync(configPath)) {
 
 console.log(
   `ok - ${COMMANDS.length} commands enforced in CI and the gate: on=[${wf.on.join(', ')}] with no ` +
-    'pull_request filter, one step each, no continue-on-error or if at either level, no ' +
+    `pull_request filter, ${wf.jobs.length} jobs (${wf.jobs.map((j) => j.keys['runs-on']).join(', ')}) ` +
+    'on the pinned toolchain, no continue-on-error or if at either level, no ' +
     'escape in any command, gopnik stage 1 runs them, and eslint.config.mjs imports only ' +
     'what is installed'
 );

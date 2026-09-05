@@ -128,3 +128,91 @@ jobs:
 
       - name: Rust workspace tests
         run: cargo test --workspace
+
+  # ---------------------------------------------------------------------------------------
+  # #41. Until these existed, no pull request in this repository had ever compiled the macOS
+  # or Windows code — `test.yml` was the only workflow with `on: pull_request` and it runs on
+  # Linux, so everything behind `#[cfg(target_os = "macos")]` and
+  # `#[cfg(target_os = "windows")]` was checked by nothing. Not a type error, not a missing
+  # import, not a renamed function. ADR 0017 moved six such sites while satisfying the rustc
+  # deny, and the fix the linter actually suggested — deleting the "unused" imports — would
+  # have broken the macOS build with nothing to say so.
+  #
+  # Native, not cross, and that is measured rather than assumed: on Linux,
+  # `cargo check --target x86_64-pc-windows-msvc` dies at `error[E0463]: can't find crate for
+  # 'core'` before any build script in this tree, and past `rustup target add` it dies in
+  # `ring` and `aws-lc-sys` for want of NASM and an MSVC cross toolchain. A runner is cheaper
+  # than proving otherwise.
+  #
+  # Compilation only. Running the suite on these platforms is #46 and behaviour on real
+  # hardware is out of reach entirely (ADR 0005): a GitHub runner has no sound device, no
+  # desktop session, and on macOS no screen-recording grant. This changes "the macOS code may
+  # not build" into "it builds", and claims nothing else.
+
+  macos:
+    name: macOS compiles
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust (same literal as the Linux job — see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: macos-latest-aarch64-apple-darwin-check-v1
+
+      # `build.rs` calls `tauri_build::build()`, which resolves `externalBin` through
+      # tauri-utils and returns ResourcePathNotFound when a sidecar is missing — so without
+      # this the job fails on setup rather than on code, and a control that expected a red
+      # macOS job would have gone red for the wrong reason. Same step as build-macos.yml.
+      - name: Build llama-helper sidecar
+        run: |
+          cargo build --release -p llama-helper
+          mkdir -p frontend/src-tauri/binaries
+          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+
+      - name: Environment record
+        run: scripts/environment-record.sh
+
+      - name: Check the macOS code compiles
+        run: cargo check --workspace --all-targets
+
+  windows:
+    name: Windows compiles
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust (same literal as the Linux job — see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: windows-latest-x86_64-pc-windows-msvc-check-v1
+
+      - name: Build llama-helper sidecar
+        shell: bash
+        run: |
+          cargo build --release -p llama-helper
+          mkdir -p frontend/src-tauri/binaries
+          cp target/release/llama-helper.exe frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe
+
+      - name: Environment record
+        shell: bash
+        run: scripts/environment-record.sh
+
+      - name: Check the Windows code compiles
+        run: cargo check --workspace --all-targets
