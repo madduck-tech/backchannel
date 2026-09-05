@@ -20,6 +20,12 @@ use crate::audio::pipeline::sum_clamped;
 use crate::audio::transcription::ports::{Channel, Transcriber, TranscriptSink};
 use anyhow::Result;
 
+/// What to pass an inner transcriber that cannot distinguish channels -- which is the
+/// whole reason it is wrapped. It is not a claim about the audio and the inner adapter
+/// ignores it. Named rather than written out at three call sites, so nobody reads
+/// `Channel::You` there and concludes the summed stream is the microphone.
+const IGNORED: Channel = Channel::You;
+
 /// Sum the two channels and feed one inner transcriber.
 pub struct SumChannels<T> {
     inner: T,
@@ -36,7 +42,7 @@ impl<T: Transcriber> SumChannels<T> {
     /// channel was silent for that window as far as this adapter can tell.
     fn flush_held(&mut self, sink: &mut dyn TranscriptSink) -> Result<()> {
         match self.held.take() {
-            Some((_, pcm)) => self.inner.feed(Channel::You, &pcm, sink),
+            Some((_, pcm)) => self.inner.feed(IGNORED, &pcm, sink),
             None => Ok(()),
         }
     }
@@ -57,11 +63,11 @@ impl<T: Transcriber> Transcriber for SumChannels<T> {
         match self.held.take() {
             Some((held_channel, held_pcm)) if held_channel != channel => {
                 let summed = sum_clamped(&held_pcm, pcm_16k);
-                self.inner.feed(Channel::You, &summed, sink)
+                self.inner.feed(IGNORED, &summed, sink)
             }
             Some((_, held_pcm)) => {
                 // Same channel twice: the earlier window has no partner coming.
-                let first = self.inner.feed(Channel::You, &held_pcm, sink);
+                let first = self.inner.feed(IGNORED, &held_pcm, sink);
                 self.held = Some((channel, pcm_16k.to_vec()));
                 first
             }
@@ -80,9 +86,6 @@ impl<T: Transcriber> Transcriber for SumChannels<T> {
         flushed.and(finished)
     }
 
-    fn note_levels(&mut self, start_s: f64, mic_rms: f32, sys_rms: f32) {
-        self.inner.note_levels(start_s, mic_rms, sys_rms);
-    }
 }
 
 #[cfg(test)]

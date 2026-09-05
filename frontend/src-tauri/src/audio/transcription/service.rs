@@ -31,7 +31,6 @@ pub fn run(
         // A failed chunk costs that audio, not the meeting's transcript. The
         // decoder is usually fine on the next one, and ending a recording's
         // transcript over one bad buffer is the worse failure by far.
-        transcriber.note_levels(chunk.timestamp, chunk.mic_rms, chunk.sys_rms);
         // The chunk's own capture channel, not a guess about its contents. The
         // pipeline forwards one chunk per channel per window and tags each with
         // the device it came from, so this is a reading, not an inference.
@@ -147,8 +146,6 @@ pub(crate) mod tests {
             timestamp: 0.0,
             chunk_id: 0,
             device_type: DeviceType::Microphone,
-            mic_rms: 0.0,
-            sys_rms: 0.0,
         }
     }
 
