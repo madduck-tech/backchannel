@@ -129,6 +129,9 @@ jobs:
       - name: Rust workspace tests
         run: cargo test --workspace
 
+      - name: List what this platform ignores
+        run: cargo test --workspace -- --ignored --list
+
   # ---------------------------------------------------------------------------------------
   # #41. Until these existed, no pull request in this repository had ever compiled the macOS
   # or Windows code — `test.yml` was the only workflow with `on: pull_request` and it runs on
@@ -184,6 +187,20 @@ jobs:
       - name: Check the macOS code compiles
         run: cargo check --workspace --all-targets
 
+      # #46. Compiling was #41; this runs. Until it existed, the number of tests ever executed
+      # on this platform was zero, and "it works on Linux" was the whole of what any verdict
+      # could say. A `cargo check` proves a type; only running proves the arithmetic.
+      - name: Run the suite on macOS
+        run: cargo test --workspace
+
+      # The ignored set is a property of the platform, not a constant: `stream.rs`'s two cpal
+      # tests are `cfg(target_os = "linux")` and `core_audio.rs`'s is inside a macOS-only
+      # module. #46 predicted Linux 7 / macOS 6 / Windows 5 from source before this ever ran;
+      # this is what checks the prediction. It lists rather than runs, so it cannot fail the
+      # job for a hardware reason.
+      - name: List what this platform ignores
+        run: cargo test --workspace -- --ignored --list
+
   windows:
     name: Windows compiles
     runs-on: windows-latest
@@ -216,3 +233,18 @@ jobs:
 
       - name: Check the Windows code compiles
         run: cargo check --workspace --all-targets
+
+      # #46. Compiling was #41; this runs. Until it existed, the number of tests ever executed
+      # on this platform was zero, and "it works on Linux" was the whole of what any verdict
+      # could say. A `cargo check` proves a type; only running proves the arithmetic.
+      - name: Run the suite on Windows
+        run: cargo test --workspace
+
+      # The ignored set is a property of the platform, not a constant: `stream.rs`'s two cpal
+      # tests are `cfg(target_os = "linux")` and `core_audio.rs`'s is inside a macOS-only
+      # module. #46 predicted Linux 7 / macOS 6 / Windows 5 from source before this ever ran;
+      # this is what checks the prediction. It lists rather than runs, so it cannot fail the
+      # job for a hardware reason.
+      - name: List what this platform ignores
+        shell: bash
+        run: cargo test --workspace -- --ignored --list

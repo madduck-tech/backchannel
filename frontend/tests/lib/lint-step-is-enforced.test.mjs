@@ -181,6 +181,31 @@ for (const { id, image, sidecar } of PLATFORM_JOBS) {
   );
   assert.equal(check.length, 1, `expected one \`cargo check --workspace --all-targets\` step in the ${id} job, found ${check.length}`);
 
+  // #46. Compiling is not running. Until this step existed the number of tests ever executed
+  // on this platform was zero, and a job that only type-checks reads exactly like one that
+  // runs the suite -- both green, both named for the platform.
+  const run = job.steps.filter(
+    (st) =>
+      typeof st.keys.run === 'string' &&
+      /cargo test --workspace\s*$/.test(st.keys.run.trim())
+  );
+  assert.equal(
+    run.length,
+    1,
+    `expected one \`cargo test --workspace\` step in the ${id} job, found ${run.length}. ` +
+      'Without it that platform is compiled and never executed, which is what #46 was about.'
+  );
+
+  // The ignored set differs per platform (Linux 7 / macOS 6 / Windows 5 by grep), so a verdict
+  // that reports one number for all three is reporting the wrong thing.
+  assert.ok(
+    job.steps.some(
+      (st) => typeof st.keys.run === 'string' && st.keys.run.includes('-- --ignored --list')
+    ),
+    `the \`${id}\` job does not list what it ignores, so its ignored set is assumed rather ` +
+      'than measured'
+  );
+
   // Without its own sidecar the job dies in `tauri_build::build()` (externalBin ->
   // tauri-utils ResourcePathNotFound) before compiling any of the code it exists for, and a
   // control expecting a red job would go red for the wrong reason.
@@ -205,6 +230,17 @@ for (const { id, image, sidecar } of PLATFORM_JOBS) {
       );
     }
   }
+}
+
+// Every job lists what it ignores, the Linux one included -- three numbers that can be
+// compared are the point, and two of them plus a guess is not a comparison.
+for (const job of wf.jobs) {
+  assert.ok(
+    job.steps.some(
+      (st) => typeof st.keys.run === 'string' && st.keys.run.includes('-- --ignored --list')
+    ),
+    `the \`${job.id}\` job does not run \`cargo test … -- --ignored --list\``
+  );
 }
 
 // Every job installs the same compiler, and it is the one `rust-toolchain.toml` pins. The pin
