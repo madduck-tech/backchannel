@@ -95,7 +95,7 @@ print(speaker[0], "|".join(speaker[1].split()) if speaker else "")')"
 PICK="Monitor of ${TARGET_DESC//|/ }"
 say "system audio will be '$PICK' (playing into $TARGET_SINK)"
 
-PROFILE=""; PLAYER=""; PASSED=""; HARNESS_UP=""
+PROFILE=""; PLAYER=""; PASSED=""; HARNESS_UP=""; PGIDFILE=""
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
   [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
@@ -103,6 +103,7 @@ cleanup() {
   # speech sample into the machine's real speakers until somebody notices -- which has
   # happened, for half an hour.
   [ -n "$PLAYER" ] && kill -- -"$PLAYER" 2>/dev/null || true
+  [ -n "${PGIDFILE:-}" ] && rm -f "$PGIDFILE"
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1 || true
@@ -121,9 +122,15 @@ HARNESS_DESC="Backchannel harness microphone"
 say "harness up: the default input is now the virtual source playing $(basename "$MIC_SAMPLE")"
 
 # --- the system side: a real sink, played into for the whole run -------------------------
-setsid bash -c "while true; do pw-cat -p --target '$TARGET_SINK' '$SYS_SAMPLE' >/dev/null 2>&1 || sleep 1; done" >/dev/null 2>&1 &
-PLAYER=$!
-say "looping $(basename "$SYS_SAMPLE") into $TARGET_SINK"
+# The loop reports its own pid, and that is what gets killed. `$!` after `setsid ... &` is
+# not reliable: when the calling shell is already a process-group leader, setsid forks and
+# exits, so `$!` names a dead process and `kill -- -$!` reaches nothing. That is how a
+# speech sample was left playing into a machine's speakers for half an hour.
+PGIDFILE=$(mktemp /tmp/backchannel-player-pgid.XXXXXX)
+setsid bash -c "echo \$\$ > '$PGIDFILE'; while true; do pw-cat -p --target '$TARGET_SINK' '$SYS_SAMPLE' >/dev/null 2>&1 || sleep 1; done" >/dev/null 2>&1 &
+for _ in $(seq 1 20); do PLAYER=$(cat "$PGIDFILE" 2>/dev/null); [ -n "$PLAYER" ] && break; sleep 0.2; done
+[ -n "${PLAYER:-}" ] || die "the sample player did not report its process group"
+say "looping $(basename "$SYS_SAMPLE") into $TARGET_SINK (pgid $PLAYER)"
 sleep 2
 
 PROFILE=$(mktemp -d /tmp/backchannel-two-channel.XXXXXX)
@@ -186,7 +193,28 @@ T=$(by_text "Recordings"); [ -n "$T" ] || die "no Recordings tab"
 click "$T"
 await "[...document.querySelectorAll('[role=tab]')].some(t=>t.textContent.trim()==='Recordings'&&t.getAttribute('data-state')==='active')" \
       'the Recordings tab to become active'
-TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}'); [ -n "$TRIG" ] || die "no system-audio picker"
+# Wait, do not sample once. The picker renders after `list_audio_devices` returns, and that
+# call has been seen to never return: the application's own log ends on "connecting to
+# PulseAudio server" after `Reactor error: Client disconnected`, and the list never arrives.
+# Distinguish the two failures -- a picker that is gone from the UI, and a device
+# enumeration that hung -- because conflating them would make a product regression look
+# like a flaky harness.
+TRIG=""
+for _ in $(seq 1 60); do
+  TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}')
+  [ -n "$TRIG" ] && break
+  sleep 1
+done
+if [ -z "$TRIG" ]; then
+  L=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
+  if [ -n "$L" ]; then
+    say "the application's log ends with:"; tail -5 "$L" | sed 's/^/    /'
+    if grep -q "Reactor error: Client disconnected" "$L" && ! grep -q "Audio devices listed\|device_list" "$L"; then
+      die "no system-audio picker after 60s, and the log shows the PulseAudio client disconnected with no device list after it: this is the enumeration hang, not a missing control"
+    fi
+  fi
+  die "no system-audio picker after 60s"
+fi
 click "$TRIG"
 await "document.querySelectorAll('[role=option]').length > 0" 'the dropdown to open'
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role=\\\"option\\\"][normalize-space()=\\\"$PICK\\\"]\"}")
