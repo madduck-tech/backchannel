@@ -7,10 +7,53 @@ use log::{error, info, warn};
 use super::devices::{AudioDevice, get_device_and_config};
 use super::pipeline::AudioCapture;
 use super::recording_state::{RecordingState, DeviceType};
-use super::capture::{AudioCaptureBackend, get_current_backend};
+use super::capture::{AudioCaptureBackend, Platform, get_current_backend};
 
 #[cfg(target_os = "macos")]
 use super::capture::CoreAudioCapture;
+
+/// Which implementation a stream request resolves to.
+///
+/// A **decision**, not a system call: it depends only on the kind of device, the selected
+/// backend and the platform, and all three are values. It used to be `use_core_audio`,
+/// computed in two `#[cfg]` branches inside `create_with_backend` — so "does macOS take the
+/// tap for system audio" was a question only a macOS compiler could answer, and no test on
+/// any other machine could ask it (#47).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamPath {
+    /// Core Audio's aggregate-device tap. Exists only on macOS.
+    CoreAudioTap,
+    /// cpal, whichever host that resolves to on the platform.
+    Cpal,
+}
+
+/// The rule, pure and callable for a platform you are not running on.
+///
+/// Note what the platform argument is doing: it decides whether the tap is *chosen*, not
+/// whether it *exists*. `create_core_audio_stream` is still `#[cfg(target_os = "macos")]`
+/// code, and that `cfg` stays — it guards a system call. This one guarded arithmetic.
+pub fn stream_path_for(
+    device_type: &DeviceType,
+    backend: AudioCaptureBackend,
+    platform: Platform,
+) -> StreamPath {
+    let system_audio = *device_type == DeviceType::System;
+    if system_audio && backend == AudioCaptureBackend::CoreAudio && platform == Platform::MacOs {
+        StreamPath::CoreAudioTap
+    } else {
+        StreamPath::Cpal
+    }
+}
+
+/// What the cpal path is called in a log line on a given platform. Also two `cfg` branches
+/// before, and also a fact about a platform rather than about this machine.
+pub fn cpal_backend_label(backend: AudioCaptureBackend, platform: Platform) -> &'static str {
+    match (platform, backend) {
+        (Platform::MacOs, AudioCaptureBackend::ScreenCaptureKit) => "ScreenCaptureKit",
+        (Platform::MacOs, _) => "CPAL (default)",
+        _ => "CPAL",
+    }
+}
 
 /// Stream backend implementation
 pub enum StreamBackend {
@@ -60,41 +103,25 @@ impl AudioStream {
 
         // For system audio devices, use the selected backend
         // For microphone devices, always use CPAL
+        let path = stream_path_for(&device_type, backend_type, Platform::CURRENT);
+        info!(
+            "🎵 Stream: path = {:?}, device_type == System: {}, backend = {:?}, platform = {:?}",
+            path,
+            device_type == DeviceType::System,
+            backend_type,
+            Platform::CURRENT
+        );
+
+        // The `cfg` that remains guards the *call*, not the choice: `create_core_audio_stream`
+        // is macOS-only code. On every other platform `stream_path_for` has already returned
+        // `Cpal`, so this arm is unreachable there rather than merely uncompiled.
         #[cfg(target_os = "macos")]
-        let use_core_audio = device_type == DeviceType::System
-            && backend_type == AudioCaptureBackend::CoreAudio;
-
-        #[cfg(not(target_os = "macos"))]
-        let use_core_audio = false;
-
-        #[cfg(target_os = "macos")]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}, backend == CoreAudio: {}",
-              use_core_audio,
-              device_type == DeviceType::System,
-              backend_type == AudioCaptureBackend::CoreAudio);
-
-        #[cfg(not(target_os = "macos"))]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}",
-              use_core_audio,
-              device_type == DeviceType::System);
-
-        #[cfg(target_os = "macos")]
-        if use_core_audio {
+        if path == StreamPath::CoreAudioTap {
             info!("🎵 Stream: Using Core Audio backend (cidre) for system audio");
             return Self::create_core_audio_stream(device, state, device_type).await;
         }
 
-        // Default path: use CPAL
-        #[cfg(target_os = "macos")]
-        let backend_name = if backend_type == AudioCaptureBackend::ScreenCaptureKit {
-            "ScreenCaptureKit"
-        } else {
-            "CPAL (default)"
-        };
-
-        #[cfg(not(target_os = "macos"))]
-        let backend_name = "CPAL";
-
+        let backend_name = cpal_backend_label(backend_type, Platform::CURRENT);
         info!("🎵 Stream: Using CPAL backend ({}) for device: {}", backend_name, device.name);
         Self::create_cpal_stream(device, state, device_type).await
     }
@@ -448,6 +475,111 @@ impl Drop for AudioStreamManager {
 
 #[cfg(test)]
 mod tests {
+    use super::{cpal_backend_label, stream_path_for, StreamPath};
+    use crate::audio::capture::{AudioCaptureBackend, Platform};
+    use crate::audio::recording_state::DeviceType;
+
+    /// The question that used to need a macOS compiler, asked from wherever this runs.
+    #[test]
+    fn only_macos_takes_the_core_audio_tap_for_system_audio() {
+        assert_eq!(
+            stream_path_for(
+                &DeviceType::System,
+                AudioCaptureBackend::CoreAudio,
+                Platform::MacOs
+            ),
+            StreamPath::CoreAudioTap
+        );
+        for platform in [Platform::Linux, Platform::Windows] {
+            assert_eq!(
+                stream_path_for(&DeviceType::System, AudioCaptureBackend::CoreAudio, platform),
+                StreamPath::Cpal,
+                "{platform:?} has no Core Audio to tap, however the preference is set"
+            );
+        }
+    }
+
+    /// The other half of the rule, and the one a regression would be quietest about: a
+    /// microphone is never system audio, so it never takes the tap — including on macOS with
+    /// Core Audio selected, which is the combination that looks most like it should.
+    #[test]
+    fn a_microphone_never_takes_the_tap_on_any_platform() {
+        for platform in [Platform::MacOs, Platform::Linux, Platform::Windows] {
+            for backend in [
+                AudioCaptureBackend::ScreenCaptureKit,
+                AudioCaptureBackend::CoreAudio,
+            ] {
+                assert_eq!(
+                    stream_path_for(&DeviceType::Microphone, backend, platform),
+                    StreamPath::Cpal,
+                    "{platform:?} + {backend:?} routed a microphone away from cpal"
+                );
+            }
+        }
+    }
+
+    /// ScreenCaptureKit selected is the cpal path everywhere — the backend names the host cpal
+    /// uses on macOS, not a different implementation.
+    #[test]
+    fn screencapturekit_is_the_cpal_path_everywhere() {
+        for platform in [Platform::MacOs, Platform::Linux, Platform::Windows] {
+            assert_eq!(
+                stream_path_for(
+                    &DeviceType::System,
+                    AudioCaptureBackend::ScreenCaptureKit,
+                    platform
+                ),
+                StreamPath::Cpal
+            );
+        }
+    }
+
+    /// The log label was two `cfg` branches too. It is only a string, which is exactly why it
+    /// would have drifted unnoticed: nothing fails when a log lies.
+    #[test]
+    fn the_cpal_label_names_screencapturekit_only_where_that_host_exists() {
+        assert_eq!(
+            cpal_backend_label(AudioCaptureBackend::ScreenCaptureKit, Platform::MacOs),
+            "ScreenCaptureKit"
+        );
+        assert_eq!(
+            cpal_backend_label(AudioCaptureBackend::CoreAudio, Platform::MacOs),
+            "CPAL (default)"
+        );
+        for platform in [Platform::Linux, Platform::Windows] {
+            for backend in [
+                AudioCaptureBackend::ScreenCaptureKit,
+                AudioCaptureBackend::CoreAudio,
+            ] {
+                assert_eq!(
+                    cpal_backend_label(backend, platform),
+                    "CPAL",
+                    "{platform:?} has no ScreenCaptureKit host to name"
+                );
+            }
+        }
+    }
+
+    /// The path this binary can actually take. Ties the pure rule back to the one `cfg` left:
+    /// off macOS `create_core_audio_stream` does not exist, so the rule must never choose it.
+    #[test]
+    fn this_build_never_chooses_a_path_it_did_not_compile() {
+        if !cfg!(target_os = "macos") {
+            for device_type in [DeviceType::System, DeviceType::Microphone] {
+                for backend in [
+                    AudioCaptureBackend::ScreenCaptureKit,
+                    AudioCaptureBackend::CoreAudio,
+                ] {
+                    assert_eq!(
+                        stream_path_for(&device_type, backend, Platform::CURRENT),
+                        StreamPath::Cpal,
+                        "this build has no Core Audio implementation compiled in"
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
 
     /// End-to-end check of the cpal 0.18 migration against real hardware.
