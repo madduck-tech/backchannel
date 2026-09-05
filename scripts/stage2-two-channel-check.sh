@@ -115,7 +115,9 @@ trap cleanup EXIT
 scripts/audio-harness.sh down >/dev/null 2>&1 || true
 scripts/audio-harness.sh up --sample "$MIC_SAMPLE" || die "the audio harness could not come up"
 HARNESS_UP=1
-HARNESS_SRC="$(scripts/audio-harness.sh status 2>/dev/null | grep -o 'backchannel_harness_src[^ ]*' | head -1 || true)"
+# `audio-harness.sh up` gives the virtual source this description, and it is what the
+# application logs when it opens a device -- not the node name.
+HARNESS_DESC="Backchannel harness microphone"
 say "harness up: the default input is now the virtual source playing $(basename "$MIC_SAMPLE")"
 
 # --- the system side: a real sink, played into for the whole run -------------------------
@@ -220,8 +222,8 @@ LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
 MIC_OPENED=$(grep -o "Creating microphone stream: [^(]*" "$LOG" | tail -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
 say "the app opened microphone: '${MIC_OPENED:-<none>}'"
 [ -n "$MIC_OPENED" ] || die "the application never created a microphone stream; see $LOG"
-if [ -n "$HARNESS_SRC" ] && ! printf '%s' "$MIC_OPENED" | grep -qi 'harness'; then
-  die "the application opened '$MIC_OPENED', not the harness source. The default-input swap did not take, so the microphone channel of this run carries the real device, not sample A. Fix the harness or pin preferred_mic_device; do not read this run as a two-channel result."
+if ! printf '%s' "$MIC_OPENED" | grep -qi 'harness'; then
+  die "the application opened '$MIC_OPENED', not '$HARNESS_DESC'. The default-input swap did not take, so the microphone channel of this run carries the real device, not sample A. Fix the harness or pin preferred_mic_device; do not read this run as a two-channel result."
 fi
 if grep -q "Using preferred system audio" "$LOG"; then
   grep -q "Using preferred system audio: '$PICK'" "$LOG" \
