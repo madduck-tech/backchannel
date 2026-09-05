@@ -54,6 +54,11 @@ mod tests {
 
     #[test]
     fn test_module_integration() {
+        // The lock, not because this test writes anything, but because another one does: the
+        // custom templates directory is one variable per test binary, and this reads it for
+        // every id (#51).
+        let _guard = super::loader::lock_templates();
+
         // Test that we can load all built-in templates
         let ids = list_template_ids();
         assert!(!ids.is_empty());
@@ -71,6 +76,7 @@ mod tests {
 
     #[test]
     fn test_template_metadata() {
+        let _guard = super::loader::lock_templates();
         let templates = list_templates();
         assert!(!templates.is_empty());
 

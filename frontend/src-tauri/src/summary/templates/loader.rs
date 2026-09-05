@@ -20,13 +20,51 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
     }
 }
 
-/// Override where custom templates are read from and written to
+/// Serialises every test that reads or writes a template (#51).
+///
+/// `CUSTOM_TEMPLATES_DIR` is one variable per test *binary*, not per test, so a test that
+/// redirects it redirects it for everything running alongside. Measured before this existed:
+/// `cargo test -p conversationaly --lib summary::templates` failed 4 runs in 30 and 0 in 30
+/// with `--test-threads=1`, because `test_save_override_and_delete_restores_shipped_template`
+/// was creating and deleting `standard_meeting.json` while `test_module_integration` was
+/// reading it.
+///
+/// The lock is around the global, not around the runner. `--test-threads=1` also makes the
+/// symptom vanish and leaves the shared variable there for the next test to find.
 #[cfg(test)]
-pub fn set_custom_templates_dir(path: PathBuf) {
+static TEMPLATE_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the templates lock. Poisoning is recovered from rather than propagated: a panic in one
+/// test must fail that test, not turn every other template test into a second failure that
+/// hides it.
+#[cfg(test)]
+pub(crate) fn lock_templates() -> std::sync::MutexGuard<'static, ()> {
+    TEMPLATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Point the custom templates directory somewhere else for the duration of `f`, and put it
+/// back afterwards — including on panic, which is why the restore is in a guard rather than a
+/// line at the end of the closure. Holds [`lock_templates`] throughout, so no other template
+/// test observes the override.
+#[cfg(test)]
+pub(crate) fn with_custom_templates_dir<T>(path: PathBuf, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Ok(mut dir) = CUSTOM_TEMPLATES_DIR.write() {
+                *dir = self.0.take();
+            }
+        }
+    }
+
+    let _guard = lock_templates();
+    let previous = CUSTOM_TEMPLATES_DIR.read().ok().and_then(|d| d.clone());
+    let _restore = Restore(previous);
     info!("Custom templates directory set to: {:?}", path);
     if let Ok(mut dir) = CUSTOM_TEMPLATES_DIR.write() {
         *dir = Some(path);
     }
+    f()
 }
 
 /// Get the user's custom templates directory path
@@ -39,10 +77,20 @@ fn get_custom_templates_dir() -> Option<PathBuf> {
     if let Some(path) = CUSTOM_TEMPLATES_DIR.read().ok().and_then(|d| d.clone()) {
         return Some(path);
     }
+    // Under test, no override means no custom directory — never the real one. Nothing in the
+    // application sets the override, so without this a test reads whatever templates the
+    // person running the suite happens to have saved, and its result depends on them (#51).
+    // A suite whose answer depends on the developer's data is not a suite.
+    #[cfg(test)]
+    return None;
+    #[cfg(not(test))]
     let mut path = dirs::data_dir()?;
-    path.push("Conversationaly");
-    path.push("templates");
-    Some(path)
+    #[cfg(not(test))]
+    {
+        path.push("Conversationaly");
+        path.push("templates");
+        Some(path)
+    }
 }
 
 /// Reject ids that would escape the templates directory or produce odd filenames.
@@ -396,43 +444,47 @@ mod tests {
     #[test]
     fn test_save_override_and_delete_restores_shipped_template() {
         let temp = tempfile::tempdir().expect("temp dir");
-        set_custom_templates_dir(temp.path().to_path_buf());
+        // Scoped, and holding the templates lock throughout: this used to call
+        // `set_custom_templates_dir` and leave the process-global pointed at a temp dir that
+        // was then deleted, while `test_module_integration` read the same path (#51).
+        with_custom_templates_dir(temp.path().to_path_buf(), || {
 
-        let shipped = get_template("standard_meeting").expect("shipped template loads");
-        assert_eq!(shipped.name, "Standard Meeting Notes");
+            let shipped = get_template("standard_meeting").expect("shipped template loads");
+            assert_eq!(shipped.name, "Standard Meeting Notes");
 
-        // A custom copy shadows the shipped one
-        let mut edited = shipped.clone();
-        edited.name = "Overridden".to_string();
-        let id = save_template(Some("standard_meeting"), &edited).expect("save override");
-        assert_eq!(id, "standard_meeting");
-        assert_eq!(get_template("standard_meeting").unwrap().name, "Overridden");
+            // A custom copy shadows the shipped one
+            let mut edited = shipped.clone();
+            edited.name = "Overridden".to_string();
+            let id = save_template(Some("standard_meeting"), &edited).expect("save override");
+            assert_eq!(id, "standard_meeting");
+            assert_eq!(get_template("standard_meeting").unwrap().name, "Overridden");
 
-        // Deleting the custom copy resets it
-        delete_template("standard_meeting").expect("reset");
-        assert_eq!(
-            get_template("standard_meeting").unwrap().name,
-            "Standard Meeting Notes"
-        );
+            // Deleting the custom copy resets it
+            delete_template("standard_meeting").expect("reset");
+            assert_eq!(
+                get_template("standard_meeting").unwrap().name,
+                "Standard Meeting Notes"
+            );
 
-        // Creating slugifies the name and suffixes collisions
-        let mut created = shipped.clone();
-        created.name = "My Notes!".to_string();
-        assert_eq!(save_template(None, &created).unwrap(), "my_notes");
-        assert_eq!(save_template(None, &created).unwrap(), "my_notes_2");
+            // Creating slugifies the name and suffixes collisions
+            let mut created = shipped.clone();
+            created.name = "My Notes!".to_string();
+            assert_eq!(save_template(None, &created).unwrap(), "my_notes");
+            assert_eq!(save_template(None, &created).unwrap(), "my_notes_2");
 
-        // A user-created template is really gone, and deleting it twice errors
-        delete_template("my_notes").expect("delete custom");
-        assert!(delete_template("my_notes").is_err());
+            // A user-created template is really gone, and deleting it twice errors
+            delete_template("my_notes").expect("delete custom");
+            assert!(delete_template("my_notes").is_err());
 
-        // Ids may not escape the templates directory
-        assert!(save_template(Some("../evil"), &created).is_err());
-        assert!(delete_template("../evil").is_err());
-        assert!(get_template("../evil").is_err());
+            // Ids may not escape the templates directory
+            assert!(save_template(Some("../evil"), &created).is_err());
+            assert!(delete_template("../evil").is_err());
+            assert!(get_template("../evil").is_err());
 
-        // Invalid templates never reach disk
-        let mut broken = shipped.clone();
-        broken.sections.clear();
-        assert!(save_template(None, &broken).is_err());
+            // Invalid templates never reach disk
+            let mut broken = shipped.clone();
+            broken.sections.clear();
+            assert!(save_template(None, &broken).is_err());
+        });
     }
 }
