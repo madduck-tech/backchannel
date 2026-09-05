@@ -38,7 +38,7 @@ pub fn default_output_device() -> Result<AudioDevice> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        return default_system_audio_linux();
+        default_system_audio_linux()
     }
 }
 

@@ -100,5 +100,12 @@ jobs:
       - name: Rust lints (deny warnings)
         run: RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
 
+      # clippy, denied (#36, ADR 0018). Its policy lives in `[workspace.lints.clippy]` in
+      # the root Cargo.toml rather than in flags here, so it is part of the crate graph and
+      # does not bust the cargo cache the way a second RUSTFLAGS set would. `-D warnings`
+      # on the command line is what turns the remaining lints into failures.
+      - name: Rust clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Rust workspace tests
         run: cargo test --workspace

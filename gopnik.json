@@ -8,6 +8,7 @@
       "cd frontend && pnpm lint",
       "cargo test --workspace",
       "RUSTFLAGS=\"-D warnings\" cargo check --workspace --all-targets",
+      "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo test -p conversationaly --lib cpal_capture -- --ignored --nocapture",
       "cargo test -p conversationaly --lib system_audio_monitor_round_trip -- --ignored --nocapture",
       "cargo test -p conversationaly --lib stale_preference_from_the_alsa_era -- --ignored --nocapture",

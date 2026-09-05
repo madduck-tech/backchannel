@@ -38,6 +38,12 @@ const COMMANDS = [
     inGopnik: true,
   },
   {
+    // #36 / ADR 0018. The policy is in `[workspace.lints.clippy]`; this is what denies.
+    run: 'cargo clippy --workspace --all-targets -- -D warnings',
+    what: 'clippy findings fail a pull request',
+    inGopnik: true,
+  },
+  {
     // #35. `--max-warnings=0` is load-bearing: eslint exits 0 on warnings, so without it a
     // rule set to `warn` reports and passes -- the same reported-and-ignored shape #34 fixed
     // for rustc.

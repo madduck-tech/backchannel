@@ -197,3 +197,7 @@ tempfile = "3.3.0"
 # Cargo ignores [patch] outside the workspace root, so it never applied and
 # every build resolved both from the registry. It was dropped rather than
 # hoisted — see the workspace root Cargo.toml for why. Do not re-add it here.
+
+# Workspace clippy policy (ADR 0018).
+[lints]
+workspace = true

@@ -151,7 +151,7 @@ impl ModelManager {
                 // Production mode fallback (caller should provide path)
                 log::warn!("ModelManager: No models directory provided, using fallback path");
                 dirs::data_dir()
-                    .or_else(|| dirs::home_dir())
+                    .or_else(dirs::home_dir)
                     .ok_or_else(|| anyhow!("Could not find system data directory"))?
                     .join("Conversationaly")
                     .join("models")

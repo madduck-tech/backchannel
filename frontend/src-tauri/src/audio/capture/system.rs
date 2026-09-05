@@ -114,10 +114,7 @@ impl SystemAudioCapture {
 
     pub fn check_system_audio_permissions() -> bool {
         // Check if we can enumerate audio devices
-        match crate::audio::devices::host::audio_host().output_devices() {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        crate::audio::devices::host::audio_host().output_devices().is_ok()
     }
 }
 

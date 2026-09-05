@@ -1256,16 +1256,31 @@ pub async fn attempt_device_reconnect(
         }
     } // Release lock
 
-    // Spawn blocking task to handle the async reconnection
+    // The guard is taken and released *inside* the blocking closure, around a synchronous
+    // section only. It used to be held across the `.await` on `attempt_device_reconnect`
+    // (`clippy::await_holding_lock`): `RECORDING_MANAGER` is a `std::sync::Mutex`, so a task
+    // that yields while holding it blocks every other thread that touches the recording
+    // manager, and deadlocks outright if the awaited future needs the same lock.
+    //
+    // Not reachable today — this command is registered at `lib.rs` and invoked from the
+    // frontend zero times, one of the dead commands #17's census counted, and its own doc
+    // comment says "Useful for UI 'Retry' button". Which makes it worse to leave, not
+    // better: it is a trap set for whoever wires that button, and it would be found by a
+    // feature rather than by a test.
     let result = tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(async {
+        let handle = tokio::runtime::Handle::current();
+        // Take the manager out under the lock, drop the guard, then await.
+        let mut manager = {
             let mut manager_guard = RECORDING_MANAGER.lock().unwrap();
-            if let Some(manager) = manager_guard.as_mut() {
-                manager.attempt_device_reconnect(&device_name, monitor_type).await
-            } else {
-                Err(anyhow::anyhow!("Recording not active"))
+            match manager_guard.take() {
+                Some(manager) => manager,
+                None => return Err(anyhow::anyhow!("Recording not active")),
             }
-        })
+        };
+        let outcome = handle.block_on(manager.attempt_device_reconnect(&device_name, monitor_type));
+        // Put it back whatever happened: dropping it here would end the recording.
+        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
+        outcome
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?;

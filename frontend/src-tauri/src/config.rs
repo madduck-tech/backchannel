@@ -1,7 +1,7 @@
-/// Application configuration constants
-///
-/// Centralized definitions for default models and settings.
-/// Used across database initialization, import, and retranscription.
+//! Application configuration constants
+//!
+//! Centralized definitions for default models and settings.
+//! Used across database initialization, import, and retranscription.
 
 /// Transcript provider for models that run locally through transcribe.cpp.
 pub const LOCAL_TRANSCRIPT_PROVIDER: &str = "local";

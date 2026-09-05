@@ -244,9 +244,7 @@ impl SummaryService {
             }
         };
 
-        let Some(folder_path) = meeting.folder_path.filter(|p| !p.trim().is_empty()) else {
-            return None;
-        };
+        let folder_path = meeting.folder_path.filter(|p| !p.trim().is_empty())?;
 
         match read_detected_summary_language_from_metadata(Path::new(&folder_path)) {
             Ok(language) => language,

@@ -36,3 +36,7 @@ rocm = ["llama-cpp-2/rocm"]
 # NOTE: the release profile for this crate lives in the workspace root
 # Cargo.toml as [profile.release.package.llama-helper]. Cargo ignores
 # [profile] in a non-root manifest.
+
+# Workspace clippy policy (ADR 0018).
+[lints]
+workspace = true

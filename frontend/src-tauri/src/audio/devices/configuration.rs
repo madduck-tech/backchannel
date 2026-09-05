@@ -14,10 +14,12 @@ lazy_static! {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Default)]
 pub enum AudioTranscriptionEngine {
     Deepgram,
     WhisperTiny,
     WhisperDistilLargeV3,
+    #[default]
     WhisperLargeV3Turbo,
     WhisperLargeV3,
 }
@@ -34,11 +36,6 @@ impl fmt::Display for AudioTranscriptionEngine {
     }
 }
 
-impl Default for AudioTranscriptionEngine {
-    fn default() -> Self {
-        AudioTranscriptionEngine::WhisperLargeV3Turbo
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct DeviceControl {
