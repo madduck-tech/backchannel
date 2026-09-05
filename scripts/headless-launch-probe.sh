@@ -57,12 +57,25 @@ trap 'rm -rf "$WORK"' EXIT
 ABS_APP=$(readlink -f "$APP")
 say "  extracting $ABS_APP …"
 ( cd "$WORK" && "$ABS_APP" --appimage-extract >/dev/null 2>&1 ) || say "  (extract returned non-zero)"
-BIN=$(find "$WORK/squashfs-root/usr/bin" -maxdepth 1 -type f -name 'conversationaly*' | head -1)
+# `AppRun`, not `usr/bin/conversationaly`. Measured, and this was the fifth obstacle — one nobody
+# listed, in this issue or anywhere else. Launching the binary directly gets as far as the D-Bus
+# handshake and then dies:
+#
+#   ERROR: Unable to spawn a new child process: Failed to spawn child process
+#   "././/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" (No such file or directory)
+#   Trace/breakpoint trap (core dumped)
+#
+# WebKitGTK resolves its helper processes relative to the working directory, and `AppRun` is what
+# sets that up — it sources `apprun-hooks/linuxdeploy-plugin-gtk.sh` before exec'ing the binary.
+# So the obstacle was never xvfb or the session bus: both worked, and the only D-Bus complaint was
+# the accessibility bus, which is a warning. It was launching past the wrapper the bundle ships
+# for exactly this.
+BIN="$WORK/squashfs-root/AppRun"
 if [ ! -x "${BIN:-}" ]; then
-  verdict "NOT ATTEMPTED — could not extract a runnable binary from the AppImage."
+  verdict "NOT ATTEMPTED — could not extract a runnable AppRun from the AppImage."
   exit 0
 fi
-say "  binary          $BIN"
+say "  entry point     $BIN"
 
 LOG="$WORK/stdout.log"
 export HOME="$WORK/home"; mkdir -p "$HOME"
@@ -74,7 +87,9 @@ export WEBKIT_DISABLE_COMPOSITING_MODE=1
 export LIBGL_ALWAYS_SOFTWARE=1
 
 say "  launching under dbus-run-session + xvfb-run…"
-setsid dbus-run-session -- xvfb-run -a "$BIN" >"$LOG" 2>&1 &
+# From inside the AppDir: `AppRun` resolves its own directory, but WebKit's helper lookup is
+# relative to the process's cwd, which is what the direct-binary attempt proved.
+setsid env -C "$WORK/squashfs-root" dbus-run-session -- xvfb-run -a "$BIN" >"$LOG" 2>&1 &
 PGID=$!
 sleep "$ALIVE_FOR"
 
