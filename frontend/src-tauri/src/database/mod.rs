@@ -1,3 +1,4 @@
+mod migration_history;
 pub mod commands;
 pub mod manager;
 pub mod models;
