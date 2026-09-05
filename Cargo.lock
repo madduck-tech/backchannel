@@ -1751,7 +1751,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-sidecar"
 version = "2.5.2"
-source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?branch=main#a1216c3d0256112702b4c1967101a55488088965"
+source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?rev=a1216c3#a1216c3d0256112702b4c1967101a55488088965"
 dependencies = [
  "anyhow",
  "tar",
