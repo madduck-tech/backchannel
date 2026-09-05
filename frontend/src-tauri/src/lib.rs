@@ -237,25 +237,6 @@ fn read_audio_file(file_path: String) -> Result<Vec<u8>, String> {
     }
 }
 
-#[tauri::command]
-async fn save_transcript(file_path: String, content: String) -> Result<(), String> {
-    log_info!("Saving transcript to: {}", file_path);
-
-    // Ensure parent directory exists
-    if let Some(parent) = std::path::Path::new(&file_path).parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
-        }
-    }
-
-    // Write content to file
-    std::fs::write(&file_path, content)
-        .map_err(|e| format!("Failed to write transcript: {}", e))?;
-
-    log_info!("Transcript saved successfully");
-    Ok(())
-}
 
 // Audio level monitoring commands
 // Transcription commands are handled by transcribe_engine::commands
@@ -273,14 +254,6 @@ async fn trigger_microphone_permission() -> Result<bool, String> {
         .map_err(|e| format!("Failed to trigger microphone permission: {}", e))
 }
 
-#[tauri::command]
-async fn start_recording_with_devices<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
-}
 
 #[tauri::command]
 async fn start_recording_with_devices_and_meeting<R: Runtime>(
@@ -566,7 +539,6 @@ pub fn run() {
             is_recording,
             get_transcription_status,
             read_audio_file,
-            save_transcript,
             transcribe_engine::commands::transcribe_init,
             transcribe_engine::commands::transcribe_get_available_models,
             transcribe_engine::commands::transcribe_load_model,
@@ -583,21 +555,16 @@ pub fn run() {
             transcribe_engine::commands::transcribe_delete_corrupted_model,
             get_audio_devices,
             trigger_microphone_permission,
-            start_recording_with_devices,
             start_recording_with_devices_and_meeting,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,
-            audio::recording_commands::is_recording_paused,
             audio::recording_commands::get_recording_state,
             audio::recording_commands::get_meeting_folder_path,
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,
             // Device monitoring commands (AirPods/Bluetooth disconnect/reconnect)
-            audio::recording_commands::poll_audio_device_events,
-            audio::recording_commands::get_reconnection_status,
-            audio::recording_commands::attempt_device_reconnect,
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
             // Capture-start measurement, debug builds only (audio/dictation_probe.rs)
@@ -609,13 +576,11 @@ pub fn run() {
             audio::incremental_saver::has_audio_checkpoints,
             console_utils::show_console,
             console_utils::hide_console,
-            console_utils::toggle_console,
             console_utils::get_log_file_path,
             console_utils::reveal_log_file,
             ollama::get_ollama_models,
             ollama::pull_ollama_model,
             ollama::delete_ollama_model,
-            ollama::get_ollama_model_context,
             openai::openai::get_openai_models,
             anthropic::anthropic::get_anthropic_models,
             groq::groq::get_groq_models,
@@ -634,8 +599,6 @@ pub fn run() {
             api::api_save_meeting_title,
             api::api_save_transcript,
             api::open_meeting_folder,
-            api::test_backend_connection,
-            api::debug_backend_connection,
             api::open_external_url,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
@@ -670,8 +633,6 @@ pub fn run() {
             audio::recording_preferences::set_recording_preferences,
             audio::recording_preferences::get_default_recordings_folder_path,
             audio::recording_preferences::open_recordings_folder,
-            audio::recording_preferences::select_recording_folder,
-            audio::recording_preferences::get_available_audio_backends,
             audio::recording_preferences::get_current_audio_backend,
             audio::recording_preferences::set_audio_backend,
             audio::recording_preferences::get_audio_backend_info,
@@ -688,8 +649,6 @@ pub fn run() {
             audio::system_audio_commands::stop_system_audio_monitoring,
             audio::system_audio_commands::get_system_audio_monitoring_status,
             // Screen Recording permission commands
-            audio::permissions::check_screen_recording_permission_command,
-            audio::permissions::request_screen_recording_permission_command,
             audio::permissions::trigger_system_audio_permission_command,
             // Database import commands
             database::commands::get_speaker_names,
@@ -708,7 +667,6 @@ pub fn run() {
             // Onboarding commands
             onboarding::get_onboarding_status,
             onboarding::save_onboarding_status_cmd,
-            onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
             // System settings commands
             #[cfg(target_os = "macos")]
@@ -716,7 +674,6 @@ pub fn run() {
             // Retranscription commands
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,
-            audio::retranscription::is_retranscription_in_progress_command,
             audio::diarization::label_speakers_command,
             audio::diarization::is_diarizer_downloaded_command,
             audio::diarization::diarizer_size_mb,
@@ -726,7 +683,6 @@ pub fn run() {
             audio::import::validate_audio_file_command,
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
-            audio::import::is_import_in_progress_command,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

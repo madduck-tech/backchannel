@@ -23,27 +23,10 @@ import {
 
 // Registered but never invoked. One line each; the reason is the point of the list.
 const NEVER_INVOKED = new Set([
-  // Backend-connection probes from the fork's Python-backend era. Never wired here.
-  'debug_backend_connection', 'test_backend_connection',
   // System-audio capture: registered, never called; the Linux arm is a bail!(). See #13.
   'check_system_audio_permissions_command', 'get_system_audio_monitoring_status',
   'list_system_audio_devices_command', 'start_system_audio_capture_command',
   'start_system_audio_monitoring', 'stop_system_audio_monitoring',
-  // Screen-recording permission pair, macOS-shaped, never wired.
-  'check_screen_recording_permission_command', 'request_screen_recording_permission_command',
-  // Device reconnection: written, never surfaced.
-  'attempt_device_reconnect', 'get_reconnection_status', 'poll_audio_device_events',
-  // Superseded by a wider command the frontend does call.
-  'save_transcript',                 // superseded by api_save_transcript
-  'start_recording_with_devices',    // superseded by start_recording_with_devices_and_meeting
-  'is_recording_paused',
-  'is_import_in_progress_command', 'is_retranscription_in_progress_command',
-  // Ollama context lookup, unused since the summary engine changed.
-  'get_ollama_model_context',
-  'get_available_audio_backends',
-  'select_recording_folder',
-  'reset_onboarding_status_cmd',
-  'toggle_console',
   // Deliberate and permanent: #[cfg(debug_assertions)], invoked from the devtools console
   // by hand. Its own header says so. This entry can never leave the list.
   'dictation_probe',
