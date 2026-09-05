@@ -56,7 +56,7 @@ straight to `main`.
 ADR 0016. The cycle above asks whether the work does what is claimed; this asks whether the next
 change will be caught.
 
-None of the five items below has a failure mode: no tool reads a pull request body or a verdict. They
+None of the six items below has a failure mode: no tool reads a pull request body or a verdict. They
 are conventions the gate and the critic enforce by being run, not by being automated. What *is*
 automated is the table underneath.
 
@@ -75,6 +75,14 @@ automated is the table underneath.
    refuses a verdict without one — no tool parses a verdict — so it rests on the same honesty as the
    rest of this section.
 5. **Verify claims against the artifact, not the intent to produce it.** Re-read what was published.
+6. **A `READY` verdict on an executable change carries its environment record.** Stage 1's first
+   command is `scripts/environment-record.sh`; its output goes in the verdict with the rest. ADR 0019.
+   A verdict is a claim about the repository and its evidence is a claim about a machine, and on
+   2026-09-05 those differed three times in one day — 0 clippy findings locally against 35 in CI on
+   one tree, a test that took different code paths depending on whether ffmpeg was on `PATH`, and an
+   enumeration hang nobody has explained. Same honesty as 1–5: nothing parses a verdict. What *is*
+   enforced is that the command runs on both sides, so the evidence arrives whether or not the author
+   thought about it.
 
 What is machine-enforced rather than asked for, and the check that does it:
 
@@ -89,6 +97,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the device picker's two lists and two handlers, rendered | `device-selection.test.mjs` |
 | the picker instructing the user to click a control it does not render | `device-selection-instructions.test.mjs` |
 | either lint step (rustc's deny, eslint) being removed, switched off at step or job level, defanged with `\|\| true`, or left in a workflow that no longer runs on pull requests; and `eslint.config.mjs` importing something that is not installed | `lint-step-is-enforced.test.mjs`, over the reader in `workflow-yaml.test.mjs` |
+| the environment record, or any lint step, running on one side only — configured in `gopnik.json` stage 1 but not `test.yml`, or the reverse; and CI provisioning a Node or pnpm version other than the one `.nvmrc` and `packageManager` pin | the same test |
 | a transcript row's capture channel, across the Rust enum, the event, both TypeScript interfaces, the column and its migration — and the diarization pass leaving it alone | `transcript-channel.test.mjs` |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
@@ -102,9 +111,10 @@ its reason — the record the check exists to build. Matching on string literals
 identifiers narrows this; it does not close it. Closing it needs a lint that reads TypeScript, which
 is #35; the Rust half of that gap is closed (ADR 0017).
 
-Not covered, and named so the absence is a decision: **JavaScript** is not linted (#35 — the Rust
-half is denied in CI as of ADR 0017), and a backend that fabricates a value a correct component
-renders is caught by nothing.
+Not covered, and named so the absence is a decision: a backend that fabricates a value a correct
+component renders is caught by nothing, and **eleven eslint rules remain off** (#38, 277 findings,
+one rule per pull request — 98 of them `react-hooks/*`, which are behaviour rather than style).
+JavaScript itself is linted and denied as of #35; the Rust half as of ADR 0017 and ADR 0018.
 
 Stage 2's **accessibility-tree** driver reaches only top-level push buttons — a `page tab` exposes no
 action to it, and neither keyboard nor coordinate input reaches the webview. That is a limit of that

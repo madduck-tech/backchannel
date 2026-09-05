@@ -16,20 +16,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Provisions pnpm 11 from `version`; it reads $GITHUB_WORKSPACE/package.json,
-      # which does not exist here, so it never sees frontend/package.json's
-      # packageManager pin. Do not add package_json_file: the action refuses
-      # when the pin (11.25.0) differs from `version` (11).
+      # The exact version, matching frontend/package.json's `packageManager` pin — not the
+      # major (#42, ADR 0019). The action reads $GITHUB_WORKSPACE/package.json, which does not
+      # exist here, so it never sees that pin by itself, and `version: 11` let CI float within
+      # the major while corepack held a developer at 11.25.0. Do not add package_json_file
+      # instead: the action refuses when the pin and `version` differ, so these two numbers
+      # have to be changed together and this comment is the reminder.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11
+          version: 11.25.0
           run_install: false
 
+      # `node-version-file`, not a literal: `.nvmrc` is the one place the number lives, so a
+      # developer's `nvm use` and this job cannot drift (#42, ADR 0019). They had: this said
+      # '22' while every measurement in this repository was made on 24, which meant `pnpm test`
+      # and `pnpm lint` results were produced by a different runtime than the one that gates a
+      # pull request. Same defect as the rustc skew ADR 0018 was written about, one language over.
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
@@ -66,6 +73,14 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
+      # The environment this run's results are properties of (#42, ADR 0019). Placed after
+      # every tool is installed and before anything is measured, so the numbers below it are
+      # attributable. It never fails: absent tools -- there is no sound server, no display and
+      # no ffmpeg on a runner -- are recorded as `absent`, which is the comparison that matters
+      # against a developer machine where they are present.
+      - name: Environment record
+        run: scripts/environment-record.sh
+
       - name: Frontend unit tests
         working-directory: frontend
         run: pnpm test
@@ -96,13 +111,11 @@ jobs:
       # workflow or job `env:` level so a later step (a clippy adoption, #36) does not
       # inherit it and turn its own warnings into errors all at once.
       #
-      # Note the cost this accepts: `dtolnay/rust-toolchain@stable` is unpinned and there is
-      # no `rust-toolchain.toml`, so a future rustc that adds or widens a default lint turns
-      # `main` red with no code change. `build.rs`'s `unexpected_cfgs` — which this change
-      # had to fix first, because it stopped the deny reaching the crate at all — is a lint
-      # rustc turned on by itself, so the precedent is already in this tree. Accepted rather
-      # than hidden: a warning nobody is forced to read is a warning nobody reads, which is
-      # what #34 measured. If it becomes a nuisance, pin the toolchain — do not delete this.
+      # `build.rs`'s `unexpected_cfgs` had to be fixed before this deny reached the crate at
+      # all: the build script died, so the crate holding sixteen of the eighteen warnings was
+      # never checked (ADR 0017). A future rustc that widens a default lint can still turn
+      # `main` red with no code change — the toolchain pin above makes that a deliberate bump
+      # rather than a surprise, and the remedy is never to delete this step.
       - name: Rust lints (deny warnings)
         run: RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
 

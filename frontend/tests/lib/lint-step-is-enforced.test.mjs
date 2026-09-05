@@ -18,6 +18,7 @@
 // trusted.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readWorkflow } from './workflow-yaml.mjs';
@@ -49,6 +50,16 @@ const COMMANDS = [
     // for rustc.
     run: 'pnpm lint',
     what: 'eslint findings fail a pull request',
+    inGopnik: true,
+  },
+  {
+    // #42 / ADR 0019. Not a lint -- the first non-lint entry in this list, and the reason the
+    // list is really "commands CI and the gate must agree on" rather than "lint commands".
+    // It is held to the same four escapes because the failure mode is the same: a record that
+    // runs on one side only is worse than none, since two records that cannot be compared read
+    // like two that agree.
+    run: 'scripts/environment-record.sh',
+    what: 'a result is attributable to the environment that produced it',
     inGopnik: true,
   },
 ];
@@ -121,6 +132,65 @@ for (const { run: needle } of COMMANDS.filter((c) => c.inGopnik)) {
   );
 }
 
+// --- the runtimes CI provisions are the ones the repository pins -------------------------
+// #42 / ADR 0019. The environment record above makes a skew *visible*; these two make the
+// two skews this repository actually had *impossible*. A record nobody diffs is the failure
+// mode the issue was written about, so where drift can be removed by construction it is.
+const stepsWith = wf.jobs.flatMap((job) => job.steps).filter((st) => typeof st.keys.with === 'string');
+
+const nodeStep = stepsWith.find((st) => String(st.keys.uses ?? '').includes('actions/setup-node'));
+assert.ok(nodeStep, 'test.yml no longer sets up Node, so `pnpm test` runs on whatever the image has');
+assert.match(
+  nodeStep.keys.with,
+  /node-version-file:\s*\.nvmrc/,
+  'the setup-node step no longer reads `.nvmrc`. A literal here is a second place the Node ' +
+    'version lives, and it drifted once already: this said 22 while every measurement in the ' +
+    'repository was made on 24.'
+);
+const nvmrc = fs.readFileSync(path.join(repo, '.nvmrc'), 'utf8').trim();
+assert.match(nvmrc, /^\d+\.\d+\.\d+$/, `.nvmrc is \`${nvmrc}\`, not an exact version — a major ` +
+  'alone floats, which is what `version: 11` did for pnpm');
+
+const pnpmStep = stepsWith.find((st) => String(st.keys.uses ?? '').includes('pnpm/action-setup'));
+assert.ok(pnpmStep, 'test.yml no longer sets up pnpm');
+const declared = /version:\s*([0-9][^\s]*)/.exec(pnpmStep.keys.with);
+assert.ok(declared, 'the pnpm setup step declares no `version`, so it provisions the action default');
+const pinned = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).packageManager;
+assert.equal(
+  `pnpm@${declared[1]}`,
+  pinned,
+  `test.yml provisions pnpm ${declared[1]} while frontend/package.json pins ${pinned}. corepack ` +
+    'holds a developer to the pin and this literal holds CI, so when they differ the two sides ' +
+    'run different package managers and neither says so.'
+);
+
+// --- the record survives a machine that has none of what it reports ----------------------
+// The one way this step can turn a pull request red is by failing, and the machine it is most
+// likely to fail on is the one that matters: a runner has no sound server, no display and no
+// ffmpeg. So run it with an empty PATH -- nothing but the shell it is invoked with -- and
+// require exit 0 and the word `absent`. `absent` is asserted because a record that printed an
+// empty value for a missing tool would be indistinguishable from one that printed a real
+// value, which is the shape of #10 and the reason this script prints the word at all.
+const recorder = path.join(repo, 'scripts/environment-record.sh');
+const bare = spawnSync('/bin/bash', [recorder], {
+  cwd: repo,
+  env: { PATH: '', HOME: repo },
+  encoding: 'utf8',
+});
+assert.equal(
+  bare.status,
+  0,
+  `scripts/environment-record.sh exits ${bare.status} when nothing it reports is installed. It ` +
+    'is a record, not a check: on a runner most of these tools are legitimately missing, and a ' +
+    `record that fails there fails on the case it exists for.\n  stderr: ${bare.stderr}`
+);
+assert.match(
+  bare.stdout,
+  /\babsent\b/,
+  'with an empty PATH the record printed no `absent` line, so a missing tool and a missing ' +
+    'line look the same in the output that a verdict pastes'
+);
+
 // --- the eslint config is backed by what it imports -------------------------------------
 // The original defect: `eslint.config.mjs` was committed importing `@eslint/eslintrc`, which
 // was never installed, so it threw on import before reaching a rule. Deleting the file is a
@@ -158,7 +228,7 @@ if (fs.existsSync(configPath)) {
 }
 
 console.log(
-  `ok - ${COMMANDS.length} lint commands enforced: on=[${wf.on.join(', ')}] with no ` +
+  `ok - ${COMMANDS.length} commands enforced in CI and the gate: on=[${wf.on.join(', ')}] with no ` +
     'pull_request filter, one step each, no continue-on-error or if at either level, no ' +
     'escape in any command, gopnik stage 1 runs them, and eslint.config.mjs imports only ' +
     'what is installed'
