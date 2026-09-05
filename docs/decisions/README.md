@@ -20,6 +20,7 @@
 | [0016](0016-quality-cycle-tests-and-red-first.md) | The quality cycle: a change ships with the test that would have caught it | accepted; extends 0013 |
 | [0017](0017-deny-rustc-warnings.md) | rustc warnings are denied, and the deny is held in place | accepted; supersedes 0016's "no lint in CI" for Rust |
 | [0018](0018-adopt-clippy.md) | clippy is adopted, and every allow says what it would cost to fix | accepted; completes 0017, supersedes 0016's "no lint in CI" in full |
+| [0019](0019-record-the-verification-environment.md) | A verification result carries the environment that produced it | accepted |
 
 ## Deferred questions
 
