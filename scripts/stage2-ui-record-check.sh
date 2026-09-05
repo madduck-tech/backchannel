@@ -83,10 +83,12 @@ esac
 PROFILE=""
 PLAYER=""
 PASSED=""
+PGIDFILE=""
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
   [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
   [ -n "$PLAYER" ] && kill -- -"$PLAYER" 2>/dev/null || true
+  [ -n "${PGIDFILE:-}" ] && rm -f "$PGIDFILE"
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
   if [ -n "$PROFILE" ] && [ "$PASSED" = "1" ]; then rm -rf "$PROFILE"
@@ -110,8 +112,13 @@ fi
 say "seeded models from $CACHE — no downloads this run"
 
 if [ -n "$PLAY_INTO" ]; then
-  setsid bash -c "while true; do pw-cat -p --target '$PLAY_INTO' '$SAMPLE' >/dev/null 2>&1 || sleep 1; done" >/dev/null 2>&1 &
-  PLAYER=$!
+  # The loop reports its own pid. `$!` after `setsid ... &` names the setsid process, which
+  # forks and exits when the calling shell already leads its process group -- so `kill -- -$!`
+  # reaches nothing and the sample keeps playing into the machine's speakers.
+  PGIDFILE=$(mktemp /tmp/backchannel-player-pgid.XXXXXX)
+  setsid bash -c "echo \$\$ > '$PGIDFILE'; while true; do pw-cat -p --target '$PLAY_INTO' '$SAMPLE' >/dev/null 2>&1 || sleep 1; done" >/dev/null 2>&1 &
+  for _ in $(seq 1 20); do PLAYER=$(cat "$PGIDFILE" 2>/dev/null); [ -n "$PLAYER" ] && break; sleep 0.2; done
+  [ -n "${PLAYER:-}" ] || die "the sample player did not report its process group"
   say "looping the sample into $PLAY_INTO"
   sleep 2
 fi

@@ -62,6 +62,9 @@ struct Row {
     audio_start_time: Option<f64>,
     audio_end_time: Option<f64>,
     duration: Option<f64>,
+    /// Read only so the rewritten transcript files keep it. This pass never
+    /// sets it: `speaker` is the model's verdict, `channel` is capture's.
+    channel: Option<String>,
 }
 
 /// Whether the diarizer weights are on disk.
@@ -297,9 +300,17 @@ async fn load_rows<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<V
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    let rows: Vec<(String, String, String, Option<f64>, Option<f64>, Option<f64>)> =
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<String>,
+    )> =
         sqlx::query_as(
-            "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration
+            "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, channel
              FROM transcripts WHERE meeting_id = ?
              ORDER BY audio_start_time IS NULL, audio_start_time, timestamp",
         )
@@ -311,13 +322,14 @@ async fn load_rows<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<V
     Ok(rows
         .into_iter()
         .map(
-            |(id, text, timestamp, audio_start_time, audio_end_time, duration)| Row {
+            |(id, text, timestamp, audio_start_time, audio_end_time, duration, channel)| Row {
                 id,
                 text,
                 timestamp,
                 audio_start_time,
                 audio_end_time,
                 duration,
+                channel,
             },
         )
         .collect())
@@ -387,6 +399,10 @@ fn write_meeting_files(
             audio_end_time: row.audio_end_time,
             duration: row.duration,
             speaker: label.clone(),
+            // Carried, not recomputed. This pass rewrites `speaker` on every
+            // row; the channel is a fact of capture and must survive it, in the
+            // exported files as well as in the table.
+            channel: row.channel.clone(),
         })
         .collect();
 
@@ -591,6 +607,7 @@ mod tests {
             audio_start_time: None,
             audio_end_time: Some(3.0),
             duration: None,
+            channel: None,
         };
         assert_eq!(row_span(&row), None);
     }

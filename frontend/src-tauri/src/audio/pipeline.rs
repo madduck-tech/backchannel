@@ -307,19 +307,31 @@ impl ProfessionalAudioMixer {
     /// mic arrives normalised to -23 LUFS, so overs are rare and a limiter here
     /// would only pump.
     fn mix_window(&mut self, mic_window: &[f32], sys_window: &[f32]) -> Vec<f32> {
-        // Both windows are the same length (extract_window pads), but stay
-        // defensive: a length mismatch must not truncate the mix.
-        let max_len = mic_window.len().max(sys_window.len());
-        let mut mixed = Vec::with_capacity(max_len);
-
-        for i in 0..max_len {
-            let mic = mic_window.get(i).copied().unwrap_or(0.0);
-            let sys = sys_window.get(i).copied().unwrap_or(0.0);
-            mixed.push((mic + sys).clamp(-1.0, 1.0));
-        }
-
-        mixed
+        sum_clamped(mic_window, sys_window)
     }
+}
+
+/// Sum two windows sample-wise, clamped to the valid float-PCM range.
+///
+/// Public to the crate because there is exactly one definition of "the mix" and
+/// two callers of it: the recording path above, and
+/// `transcription::adapters::summed`, which has to rebuild the same sum for a
+/// streaming backend that can only hold one stream open. A second, subtly
+/// different sum in that adapter would mean the transcript and the saved audio
+/// heard different things.
+pub(crate) fn sum_clamped(mic_window: &[f32], sys_window: &[f32]) -> Vec<f32> {
+    // Both windows are the same length (extract_window pads), but stay
+    // defensive: a length mismatch must not truncate the mix.
+    let max_len = mic_window.len().max(sys_window.len());
+    let mut mixed = Vec::with_capacity(max_len);
+
+    for i in 0..max_len {
+        let mic = mic_window.get(i).copied().unwrap_or(0.0);
+        let sys = sys_window.get(i).copied().unwrap_or(0.0);
+        mixed.push((mic + sys).clamp(-1.0, 1.0));
+    }
+
+    mixed
 }
 
 /// Simplified audio capture without broadcast channels
@@ -864,8 +876,6 @@ impl AudioCapture {
             timestamp,
             chunk_id,
             device_type: self.device_type.clone(),
-            mic_rms: 0.0,
-            sys_rms: 0.0,
         };
 
         // NOTE: Raw audio is NOT sent to recording saver to prevent echo
@@ -953,7 +963,11 @@ pub struct AudioPipeline {
     ring_buffer: AudioMixerRingBuffer,
     mixer: ProfessionalAudioMixer,
     // Stateful 48kHz -> 16kHz conversion for the transcription stream.
-    downsampler: StreamingDownsampler16k,
+    /// One per channel: transcription now receives the two streams separately, so each
+    /// needs its own resampler state. They cannot share one -- a resampler carries filter
+    /// history, and interleaving two sources through it would smear each into the other.
+    downsampler_mic: StreamingDownsampler16k,
+    downsampler_sys: StreamingDownsampler16k,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
 }
@@ -1007,7 +1021,8 @@ impl AudioPipeline {
             // Initialize professional audio mixing
             ring_buffer,
             mixer,
-            downsampler: StreamingDownsampler16k::new(sample_rate),
+            downsampler_mic: StreamingDownsampler16k::new(sample_rate),
+            downsampler_sys: StreamingDownsampler16k::new(sample_rate),
             recording_sender_for_mixed: None,  // Will be set by manager
         }
     }
@@ -1111,22 +1126,40 @@ impl AudioPipeline {
     ) {
         let mixed = self.mixer.mix_window(mic_window, sys_window);
 
-        // Transcription gets a continuous 16kHz stream, not speech segments:
-        // the engine holds one stream open for the whole meeting and does its
-        // own endpointing, so gating on VAD here would break its context
-        // across every pause.
-        let samples_16k = self.downsampler.push(&mixed);
-        if !samples_16k.is_empty() {
+        // Transcription gets the two channels *separately*, so a transcript row can say
+        // which one carried the words. They used to be summed here and forwarded as one
+        // stream with `device_type: Microphone, // Mixed audio` -- a field that was true
+        // before the mix and a constant lie after it. What survived the sum was a pair of
+        // per-window RMS values and a loudness heuristic guessing the speaker from them.
+        //
+        // Transcription still gets a continuous 16kHz stream per channel rather than speech
+        // segments: a streaming engine holds one stream open for the whole meeting and does
+        // its own endpointing, so gating on VAD here would break its context across pauses.
+        let mic_16k = self.downsampler_mic.push(mic_window);
+        let sys_16k = self.downsampler_sys.push(sys_window);
+
+        // The timestamp is shared: both channels are the same window of the same meeting,
+        // and giving them separate clocks would make rows from the two impossible to
+        // interleave in the transcript.
+        let timestamp = self.transcription_samples_sent as f64 / 16000.0;
+        let advance = mic_16k.len().max(sys_16k.len()) as u64;
+
+        for (data, device_type) in [
+            (mic_16k, DeviceType::Microphone),
+            (sys_16k, DeviceType::System),
+        ] {
+            if data.is_empty() {
+                continue;
+            }
             let transcription_chunk = AudioChunk {
-                data: samples_16k,
+                data,
                 sample_rate: 16000,
-                timestamp: self.transcription_samples_sent as f64 / 16000.0,
+                timestamp,
                 chunk_id: self.chunk_id_counter,
-                device_type: DeviceType::Microphone, // Mixed audio
-                mic_rms: rms(mic_window),
-                sys_rms: rms(sys_window),
+                device_type,
+                // Kept for the existing attribution heuristic, which stays until the
+                // channel it guesses at is carried by every decoder path.
             };
-            self.transcription_samples_sent += transcription_chunk.data.len() as u64;
 
             if let Err(e) = self.transcription_sender.send(transcription_chunk) {
                 // The receiver is gone for the rest of the meeting once the
@@ -1136,10 +1169,12 @@ impl AudioPipeline {
                     *transcription_dead = true;
                     warn!("Transcription stopped receiving audio ({}); recording continues without a live transcript", e);
                 }
+                break;
             } else {
                 self.chunk_id_counter += 1;
             }
         }
+        self.transcription_samples_sent += advance;
 
         // The WAV file gets the same mixed audio, timestamped by how much mixed
         // audio has been produced. It used to carry whichever input chunk
@@ -1151,8 +1186,6 @@ impl AudioPipeline {
                 chunk_id: self.chunk_id_counter,
                 device_type: DeviceType::Microphone, // Mixed audio
                 data: mixed,
-                mic_rms: 0.0,
-                sys_rms: 0.0,
             };
             self.mixed_samples_sent += recording_chunk.data.len() as u64;
             let _ = sender.send(recording_chunk);
@@ -1287,8 +1320,6 @@ impl AudioPipelineManager {
                 timestamp: 0.0,
                 chunk_id: u64::MAX, // Special ID to indicate flush
                 device_type: super::recording_state::DeviceType::Microphone,
-                mic_rms: 0.0,
-                sys_rms: 0.0,
             };
 
             if let Err(e) = sender.send(flush_chunk) {
@@ -1309,8 +1340,6 @@ impl AudioPipelineManager {
                         timestamp: 0.0,
                         chunk_id: u64::MAX - (i as u64),
                         device_type: super::recording_state::DeviceType::Microphone,
-                        mic_rms: 0.0,
-                        sys_rms: 0.0,
                     };
                     let _ = sender.send(additional_flush);
                 }
@@ -1407,10 +1436,101 @@ mod tests {
         assert_eq!(rb.windows, 3);
         assert_eq!(rb.sys_pad, (w * 3) as u64, "missing system audio mixes as silence");
     }
-}
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
+
+    /// A pipeline wired to two channels, so `forward_mixed` can be driven
+    /// directly. Everything else it needs is inert here: nothing reads the
+    /// receiver and no device is opened.
+    fn pipeline_for_test() -> (
+        AudioPipeline,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        mpsc::UnboundedReceiver<AudioChunk>,
+    ) {
+        use super::super::device_detection::InputDeviceKind;
+        let (_audio_tx, audio_rx) = mpsc::unbounded_channel();
+        let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
+        let (recording_tx, recording_rx) = mpsc::unbounded_channel();
+        let mut pipeline = AudioPipeline::new(
+            audio_rx,
+            transcription_tx,
+            50,
+            16_000,
+            "mic".to_string(),
+            InputDeviceKind::Wired,
+            "system".to_string(),
+            InputDeviceKind::Wired,
+        );
+        pipeline.recording_sender_for_mixed = Some(recording_tx);
+        (pipeline, transcription_rx, recording_rx)
     }
-    (samples.iter().map(|&x| x * x).sum::<f32>() / samples.len() as f32).sqrt()
+
+    /// Two distinguishable windows: a constant each, so a chunk can be
+    /// identified by its value alone and a sum is checked by arithmetic rather
+    /// than by eye. 16kHz in, 16kHz out, so the downsampler is a pass-through
+    /// and the samples that arrive are the samples that were sent.
+    const MIC_LEVEL: f32 = 0.25;
+    const SYS_LEVEL: f32 = 0.5;
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<AudioChunk>) -> Vec<AudioChunk> {
+        let mut out = Vec::new();
+        while let Ok(chunk) = rx.try_recv() {
+            out.push(chunk);
+        }
+        out
+    }
+
+    // `tokio::test`, not `test`: `AudioPipeline::new` builds an
+    // `AudioMetricsBatcher`, which spawns onto a reactor.
+    #[tokio::test]
+    async fn transcription_receives_the_two_channels_apart_and_tagged() {
+        let (mut pipeline, mut transcription, _recording) = pipeline_for_test();
+        let mut dead = false;
+
+        pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+
+        let chunks = drain(&mut transcription);
+        let tagged: Vec<(DeviceType, f32)> = chunks
+            .iter()
+            .map(|c| (c.device_type.clone(), c.data[0]))
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                (DeviceType::Microphone, MIC_LEVEL),
+                (DeviceType::System, SYS_LEVEL),
+            ],
+            "each channel must reach the transcriber whole and carry the device it came from; \
+             a summed stream would arrive as one chunk holding {}",
+            MIC_LEVEL + SYS_LEVEL
+        );
+        for chunk in &chunks {
+            assert_eq!(chunk.sample_rate, 16_000);
+            assert_eq!(
+                chunk.timestamp, 0.0,
+                "both channels are the same window of the same meeting and must share its clock"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_recording_still_gets_the_mix_and_only_the_mix() {
+        // #30 forwards two channels to transcription. The saved meeting must be
+        // unaffected: it is the one artefact a user cannot regenerate.
+        let (mut pipeline, _transcription, mut recording) = pipeline_for_test();
+        let mut dead = false;
+
+        pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+
+        let chunks = drain(&mut recording);
+        assert_eq!(chunks.len(), 1, "the saver must see one stream, not two");
+        // By level, not by duration: `mix_window` returns `max_len` samples, so
+        // a single channel forwarded here by mistake would have exactly the
+        // same length as the mix.
+        assert!(
+            chunks[0].data.iter().all(|&x| (x - (MIC_LEVEL + SYS_LEVEL)).abs() < 1e-6),
+            "the saver got {} — one channel alone, not the mix ({})",
+            chunks[0].data[0],
+            MIC_LEVEL + SYS_LEVEL
+        );
+        assert_eq!(chunks[0].data.len(), 1600);
+    }
 }

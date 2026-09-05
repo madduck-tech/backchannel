@@ -173,6 +173,9 @@ pub(crate) fn create_transcript_segments(
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
                 speaker: speaker.clone(),
+                // Transcribing a file has no capture channels to tell apart:
+                // the recording is already one mixed track.
+                channel: None,
             }
         })
         .collect()

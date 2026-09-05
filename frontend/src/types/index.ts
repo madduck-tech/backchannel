@@ -17,6 +17,15 @@ export interface Transcript {
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker?: string;
+  /**
+   * Which capture channel carried these words: 'you' is this machine's
+   * microphone, 'others' is system audio. Absent when the decoder cannot say --
+   * today the streaming path, which is fed the two channels summed.
+   *
+   * Separate from `speaker`, which is a model's guess and is rewritten in full
+   * by a diarization pass.
+   */
+  channel?: 'you' | 'others';
 }
 
 export interface TranscriptUpdate {
@@ -36,6 +45,15 @@ export interface TranscriptUpdate {
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
   speaker?: string;
+  /**
+   * Which capture channel carried these words: 'you' is this machine's
+   * microphone, 'others' is system audio. Absent when the decoder cannot say --
+   * today the streaming path, which is fed the two channels summed.
+   *
+   * Separate from `speaker`, which is a model's guess and is rewritten in full
+   * by a diarization pass.
+   */
+  channel?: 'you' | 'others';
 }
 
 export interface Block {

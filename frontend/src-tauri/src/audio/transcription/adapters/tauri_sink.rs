@@ -40,6 +40,13 @@ pub struct TranscriptUpdate {
     pub duration: f64,         // Segment duration in seconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// `"you"` or `"others"` — which channel this audio was captured on.
+    ///
+    /// Omitted when the decoder cannot say, so a listener can tell "unknown"
+    /// from a claim. Separate from `speaker`, which is the model's guess and is
+    /// rewritten wholesale by a diarization pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// The volatile live-text event. Deliberately a different event from
@@ -108,6 +115,7 @@ impl<R: Runtime> TranscriptSink for TauriSink<R> {
             audio_end_time: chunk.audio_end,
             duration: chunk.duration(),
             speaker: chunk.speaker,
+            channel: chunk.channel.map(|c| c.label().to_string()),
             text: chunk.text,
         };
 

@@ -449,6 +449,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     confidence: update.confidence.unwrap_or(1.0),
                     sequence_id: update.sequence_id,
                     speaker: update.speaker.clone(),
+                    channel: update.channel.clone(),
                 };
 
                 // Save to recording manager
@@ -644,6 +645,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     confidence: update.confidence.unwrap_or(1.0),
                     sequence_id: update.sequence_id,
                     speaker: update.speaker.clone(),
+                    channel: update.channel.clone(),
                 };
 
                 // Save to recording manager

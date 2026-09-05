@@ -20,6 +20,7 @@ pub mod service;
 use adapters::bench_sink::BenchSink;
 use adapters::segmented::{Decoder, SegmentedTranscriber};
 use adapters::streaming::StreamingTranscriber;
+use adapters::summed::SumChannels;
 use adapters::tauri_sink::TauriSink;
 use crate::audio::AudioChunk;
 use crate::transcribe_engine::TRANSCRIBE_ENGINE;
@@ -113,8 +114,13 @@ pub fn start_transcription_task<R: Runtime>(
                     // dropping audio; the streaming path has no cap, so nothing
                     // otherwise tells a user that the transcript has quietly
                     // drifted half a minute behind them.
+                    // Wrapped, because one open stream cannot take two
+                    // channels: it would hear the same second of the meeting
+                    // twice, in series. ADR 0003's per-channel instance needs a
+                    // second `Model` the engine cannot hold yet, so until then
+                    // this path gets the mix and its rows carry no channel.
                     Ok(stream) => service::run(
-                        StreamingTranscriber::new(stream),
+                        SumChannels::new(StreamingTranscriber::new(stream)),
                         sink.warn_when_behind(),
                         receiver,
                     ),
@@ -123,7 +129,7 @@ pub fn start_transcription_task<R: Runtime>(
                     }
                 }
             } else {
-                match SegmentedTranscriber::with_attribution(
+                match SegmentedTranscriber::with_diarization(
                     Decoder::Local { session, run_options },
                     diarizes,
                 ) {

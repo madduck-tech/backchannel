@@ -174,6 +174,7 @@ mod tests {
             audio_end,
             confidence: None,
             speaker: None,
+            channel: None,
         }
     }
 

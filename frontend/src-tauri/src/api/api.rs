@@ -119,6 +119,9 @@ pub struct MeetingTranscript {
     pub duration: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// The capture channel, `"you"` or `"others"`, when it is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -172,6 +175,9 @@ pub struct TranscriptSegment {
     pub duration: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// The capture channel, `"you"` or `"others"`, when it is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 // Helper function to get server address - now hardcoded
@@ -678,6 +684,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
                     speaker: t.speaker,
+                    channel: t.channel,
                 })
                 .collect::<Vec<_>>();
 
