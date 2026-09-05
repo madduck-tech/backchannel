@@ -161,6 +161,51 @@ pub fn check_system_audio_permissions() -> bool {
 mod tests {
     use super::readable_names;
 
+    /// Moved here from `audio/system_audio_commands.rs` when that file's six unreachable
+    /// commands were deleted (#64). It never tested a command: it tests
+    /// `list_system_audio_devices`, which is live — `audio/system_audio_stream.rs:29` and
+    /// `audio/capture/mod.rs:14` use it. The test follows the function it is about.
+    ///
+    /// Its history is why it is worth keeping. It used to assert `device_list.len() >= 0` on a
+    /// `usize` — true for every possible list, forever — and its `Err` arm printed and passed, so
+    /// it could not fail on either branch. rustc reported the first half on every pull request and
+    /// nothing failed on it (ADR 0017). What is left genuinely needs a machine with audio devices,
+    /// so it is `#[ignore]`d and selected by name in `gopnik.json` stage 1, like
+    /// `cpal_capture_round_trip`.
+    #[tokio::test]
+    #[ignore = "needs a machine with real output devices; run by gopnik.json stage 1"]
+    async fn listing_system_audio_devices_returns_usable_names() {
+        let device_list =
+            super::list_system_audio_devices().expect("enumerating output devices failed on a machine that has them");
+
+        assert!(
+            !device_list.is_empty(),
+            "no output devices on a machine expected to have them"
+        );
+        assert!(
+            device_list.iter().all(|name| !name.trim().is_empty()),
+            "an empty device name cannot be shown in the picker or stored as a preference: {device_list:?}"
+        );
+
+        let mut unique = device_list.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            device_list.len(),
+            "duplicate names make a stored preference ambiguous (#10): {device_list:?}"
+        );
+    }
+
+    /// Also moved. A smoke test over the live `check_system_audio_permissions`, which
+    /// `audio/capture/mod.rs:15` re-exports and `system.rs:158` calls.
+    #[test]
+    fn checking_permissions_does_not_panic() {
+        let has_permission = super::check_system_audio_permissions();
+        println!("Has system audio permissions: {has_permission}");
+    }
+
+
     #[test]
     fn an_empty_enumeration_produces_an_empty_list_and_no_skips() {
         // The case the old assertion pretended to cover. `assert!(len() >= 0)` is true for
