@@ -353,9 +353,24 @@ PY
 RC=$?
 [ "$RC" -eq 0 ] || die "the channel oracle failed for mode $MODE"
 
-AUDIO=$(find "$PROFILE/rec" "$APPDATA" -type f \( -name "*.mp4" -o -name "*.wav" -o -name "*.m4a" \) 2>/dev/null | head -1)
-[ -n "$AUDIO" ] || die "the recording transcribed but wrote no audio file"
-say "audio written: $AUDIO ($(du -h "$AUDIO" | cut -f1))"
+# The finalised recording, not a checkpoint. `stop_and_save` merges the checkpoints into
+# one file (`recording_saver.rs`), and an unsorted `find` will happily return a checkpoint
+# instead -- which is how this line first reported "audio written" while naming
+# `.checkpoints/audio_chunk_002.mp4`. A build that writes checkpoints and never assembles
+# them would pass that, and #11 is exactly what a green audio assertion over a missing
+# recording costs.
+FINAL=""
+for _ in $(seq 1 60); do
+  FINAL=$(find "$PROFILE/rec" "$APPDATA" -type f \( -name "*.mp4" -o -name "*.wav" -o -name "*.m4a" \) \
+            -not -path "*/.checkpoints/*" 2>/dev/null | head -1)
+  [ -n "$FINAL" ] && break
+  sleep 1
+done
+if [ -z "$FINAL" ]; then
+  PARTS=$(find "$PROFILE/rec" "$APPDATA" -type f -path "*/.checkpoints/*" 2>/dev/null | wc -l)
+  die "no finalised recording after 60s; $PARTS checkpoint file(s) exist, so audio was captured and never assembled"
+fi
+say "recording finalised: $FINAL ($(du -h "$FINAL" | cut -f1))"
 
 say "PASS ($MODE) - microphone rows say 'you', system rows say 'others', and nothing crossed"
 PASSED=1
