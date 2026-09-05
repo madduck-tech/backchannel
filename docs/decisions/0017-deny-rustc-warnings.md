@@ -3,7 +3,15 @@
 Date: 2026-09-05
 
 Status: accepted. Supersedes the clause in [ADR 0016](0016-quality-cycle-tests-and-red-first.md) that recorded "no lint runs in CI" as an
-  accepted absence, for Rust only. The JavaScript half of that clause stands until #35 lands.
+  accepted absence, for Rust only. The JavaScript half of that clause was superseded the same day by #35.
+
+  **Decision 5 below — the accepted cost of an unpinned toolchain — did not survive the day it was
+  written.** It fired in the first CI run after the deny existed: verified locally at zero findings on
+  rustc 1.96.1, CI's `@stable` had moved to 1.98.1 and reported 35 errors on the identical tree. The
+  toolchain is now pinned in `rust-toolchain.toml`; see
+  [ADR 0018](0018-adopt-clippy.md)'s consequences. The clause is left as written, because what it
+  called an accepted risk turning out to be a deferred decision within hours is the part worth
+  keeping visible.
 
 ## Context
 
