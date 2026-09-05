@@ -1,0 +1,114 @@
+name: Stage 2 artifact
+
+# The AppImage a Stage 2 pass is run against, built by a machine instead of a person (#43).
+#
+# Why this exists: every Stage 2 observation in this repository's history was made on one
+# laptop, by hand. Sixteen stage 2 entries; 5-12 need a display and 13-16 need a live
+# PipeWire session, so those stay on a real machine. Entries 1-4 need neither, and entry 3 --
+# the AppImage build -- is 8.7 min of the ~9-13 min an observation costs (49 s Next.js,
+# 471 s `tauri build`, measured on 4daa4af with warm caches). Moving it here means a person's
+# Stage 2 starts at entry 5 with a downloaded artifact.
+#
+# What this is NOT: a Stage 2 pass. Nothing here drives the application, records audio or
+# reads a transcript. `scripts/stage2-ui-check.sh` cannot run on a stock runner -- it asserts
+# the system-audio picker offers more than the default (`:228`) and only sink monitors enter
+# that list, and a runner has no sound server -- so a job that "ran the UI check" here would
+# die for a reason unrelated to the UI and its control would go red for the wrong reason.
+# That is written down in #43 so nobody retries it without reading why.
+#
+# Not a required status check on `main`, deliberately: it takes ~9 min against the suites'
+# ~4, and blocking every merge on it buys nothing that the suites do not already prove. It
+# runs on every pull request so the artifact exists when it is wanted.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  appimage:
+    name: AppImage for Stage 2
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # The same literal as test.yml, for the same reason (ADR 0018): a lint or a build
+      # measured with a different compiler than the one that gates a pull request is a
+      # measurement of the wrong thing.
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: ubuntu-24.04-x86_64-unknown-linux-gnu-appimage-v1
+
+      # Same package list and pins as test.yml and build-linux.yml's Ubuntu 24.04 step,
+      # plus FUSE, which appimagetool needs and `cargo test` does not.
+      - name: Install dependencies (Ubuntu 24.04)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+            fuse libfuse2 \
+            libwebkit2gtk-4.1-0=2.44.0-2 \
+            libwebkit2gtk-4.1-dev=2.44.0-2 \
+            libjavascriptcoregtk-4.1-0=2.44.0-2 \
+            libjavascriptcoregtk-4.1-dev=2.44.0-2 \
+            gir1.2-javascriptcoregtk-4.1=2.44.0-2 \
+            gir1.2-webkit2-4.1=2.44.0-2
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # gopnik.json stage 2, entry 2, verbatim. `build.rs` resolves externalBin through
+      # tauri-utils and fails with ResourcePathNotFound when this is missing, so a job
+      # without it fails on setup rather than on code.
+      - name: Build llama-helper sidecar
+        run: |
+          cargo build --release -p llama-helper
+          mkdir -p frontend/src-tauri/binaries
+          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
+
+      # gopnik.json stage 2, entry 3, verbatim -- and `stage2-artifact-matches-the-gate`
+      # asserts the two strings are identical. If CI built the AppImage with different
+      # flags, a person downloading it would be running Stage 2 against something the gate
+      # never described, which is worse than building it themselves.
+      - name: Build the AppImage
+        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+
+      # A bundle step that produces nothing still exits 0 in some tauri failure modes, so
+      # assert the file rather than the command's return value -- `.claude/rules/testing.md`,
+      # "a call that returns success is not evidence it did anything".
+      - name: Assert the artifact exists and is executable
+        run: |
+          APP=$(ls -t target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)
+          [ -n "$APP" ] || { echo "no AppImage under target/release/bundle/appimage/"; ls -laR target/release/bundle 2>/dev/null; exit 1; }
+          [ -x "$APP" ] || { echo "$APP is not executable"; exit 1; }
+          echo "built $APP ($(du -h "$APP" | cut -f1))"
+          echo "APPIMAGE=$APP" >> "$GITHUB_ENV"
+
+      - name: Publish the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backchannel-appimage-${{ github.sha }}
+          path: ${{ env.APPIMAGE }}
+          if-no-files-found: error
+          retention-days: 14
