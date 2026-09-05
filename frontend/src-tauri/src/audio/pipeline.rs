@@ -1446,6 +1446,103 @@ mod tests {
         assert_eq!(rb.windows, 3);
         assert_eq!(rb.sys_pad, (w * 3) as u64, "missing system audio mixes as silence");
     }
+
+    /// A pipeline wired to two channels, so `forward_mixed` can be driven
+    /// directly. Everything else it needs is inert here: nothing reads the
+    /// receiver and no device is opened.
+    fn pipeline_for_test() -> (
+        AudioPipeline,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        mpsc::UnboundedReceiver<AudioChunk>,
+    ) {
+        use super::super::device_detection::InputDeviceKind;
+        let (_audio_tx, audio_rx) = mpsc::unbounded_channel();
+        let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
+        let (recording_tx, recording_rx) = mpsc::unbounded_channel();
+        let mut pipeline = AudioPipeline::new(
+            audio_rx,
+            transcription_tx,
+            50,
+            16_000,
+            "mic".to_string(),
+            InputDeviceKind::Wired,
+            "system".to_string(),
+            InputDeviceKind::Wired,
+        );
+        pipeline.recording_sender_for_mixed = Some(recording_tx);
+        (pipeline, transcription_rx, recording_rx)
+    }
+
+    /// Two distinguishable windows: a constant each, so a chunk can be
+    /// identified by its value alone and a sum is checked by arithmetic rather
+    /// than by eye. 16kHz in, 16kHz out, so the downsampler is a pass-through
+    /// and the samples that arrive are the samples that were sent.
+    const MIC_LEVEL: f32 = 0.25;
+    const SYS_LEVEL: f32 = 0.5;
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<AudioChunk>) -> Vec<AudioChunk> {
+        let mut out = Vec::new();
+        while let Ok(chunk) = rx.try_recv() {
+            out.push(chunk);
+        }
+        out
+    }
+
+    // `tokio::test`, not `test`: `AudioPipeline::new` builds an
+    // `AudioMetricsBatcher`, which spawns onto a reactor.
+    #[tokio::test]
+    async fn transcription_receives_the_two_channels_apart_and_tagged() {
+        let (mut pipeline, mut transcription, _recording) = pipeline_for_test();
+        let mut dead = false;
+
+        pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+
+        let chunks = drain(&mut transcription);
+        let tagged: Vec<(DeviceType, f32)> = chunks
+            .iter()
+            .map(|c| (c.device_type.clone(), c.data[0]))
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                (DeviceType::Microphone, MIC_LEVEL),
+                (DeviceType::System, SYS_LEVEL),
+            ],
+            "each channel must reach the transcriber whole and carry the device it came from; \
+             a summed stream would arrive as one chunk holding {}",
+            MIC_LEVEL + SYS_LEVEL
+        );
+        for chunk in &chunks {
+            assert_eq!(chunk.sample_rate, 16_000);
+            assert_eq!(
+                chunk.timestamp, 0.0,
+                "both channels are the same window of the same meeting and must share its clock"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_recording_still_gets_the_mix_and_only_the_mix() {
+        // #30 forwards two channels to transcription. The saved meeting must be
+        // unaffected: it is the one artefact a user cannot regenerate.
+        let (mut pipeline, _transcription, mut recording) = pipeline_for_test();
+        let mut dead = false;
+
+        pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+
+        let chunks = drain(&mut recording);
+        assert_eq!(chunks.len(), 1, "the saver must see one stream, not two");
+        // By level, not by duration: `mix_window` returns `max_len` samples, so
+        // a single channel forwarded here by mistake would have exactly the
+        // same length as the mix.
+        assert!(
+            chunks[0].data.iter().all(|&x| (x - (MIC_LEVEL + SYS_LEVEL)).abs() < 1e-6),
+            "the saver got {} — one channel alone, not the mix ({})",
+            chunks[0].data[0],
+            MIC_LEVEL + SYS_LEVEL
+        );
+        assert_eq!(chunks[0].data.len(), 1600);
+    }
 }
 fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
