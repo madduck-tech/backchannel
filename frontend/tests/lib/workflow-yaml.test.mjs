@@ -97,3 +97,38 @@ test('it refuses a file it does not model rather than guessing', () => {
   assert.throws(() => readWorkflow('name: nothing\n'), /no top-level `on:` key/);
   assert.throws(() => readWorkflow('on: push\n'), /no top-level `jobs:` key/);
 });
+
+test('an unquoted value ending in a quote keeps its last character', () => {
+  // Red-first. `raw.replace(/^['"]|['"]$/g, '')` strips a *lone* trailing quote, so a `run:`
+  // whose final character is the closing quote of an embedded JSON argument came back one
+  // character short. That is invisible in every use of this reader except the one that
+  // compares a workflow command against gopnik.json character for character (#43), where it
+  // read as "CI builds the artifact differently from the gate".
+  const wf = readWorkflow(`
+on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build
+        run: tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+`);
+  assert.equal(
+    wf.jobs[0].steps[0].keys.run,
+    `tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+  );
+});
+
+test('a properly quoted value still loses its quotes', () => {
+  const wf = readWorkflow(`
+on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Quoted name'
+        run: "echo hello"
+`);
+  assert.equal(wf.jobs[0].steps[0].keys.name, 'Quoted name');
+  assert.equal(wf.jobs[0].steps[0].keys.run, 'echo hello');
+});
