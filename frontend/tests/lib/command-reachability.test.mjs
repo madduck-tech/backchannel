@@ -41,7 +41,7 @@ const NEVER_INVOKED = new Set([
   // Superseded by a wider command the frontend does call.
   'save_transcript',                 // superseded by api_save_transcript
   'start_recording_with_devices',    // superseded by start_recording_with_devices_and_meeting
-  'is_audio_level_monitoring', 'is_recording_paused',
+  'is_recording_paused',
   'is_import_in_progress_command', 'is_retranscription_in_progress_command',
   // Ollama context lookup, unused since the summary engine changed.
   'get_ollama_model_context',

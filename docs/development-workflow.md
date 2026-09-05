@@ -87,11 +87,12 @@ What is machine-enforced rather than asked for, and the check that does it:
 | a component unreachable from any page | `component-reachability.test.mjs` |
 | the string the device picker stores, against the Rust that parses it | `device-preference-string.test.mjs` |
 | the device picker's two lists and two handlers, rendered | `device-selection.test.mjs` |
+| the picker instructing the user to click a control it does not render | `device-selection-instructions.test.mjs` |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
 so wiring a thing up, deleting it, or adding a new unreached one all force an edit. The other four
 rows are literal pins with no allowlist. The table lists the checks that guard *reachability and
-contracts*; it is not the whole suite, which has 13 test files.
+contracts*; it is not the whole suite, which has 14 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
