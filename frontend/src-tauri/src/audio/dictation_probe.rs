@@ -210,7 +210,8 @@ async fn measure(
     // Mic only, no system audio, no saver. `auto_save: false` with no meeting
     // name set means `RecordingSaver` writes nothing and creates no folder.
     let capture = manager
-        .start_recording(Some(Arc::new(mic)), None, false)
+        // No stored preference: this is the devtools-only probe, and it saves nothing.
+        .start_recording(Some(Arc::new(mic)), None, false, None)
         .await
         .map_err(|e| format!("Failed to start capture: {e}"))?;
     let streams_up_ms = t0.elapsed().as_millis();
