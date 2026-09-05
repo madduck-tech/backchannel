@@ -116,9 +116,21 @@ trap cleanup EXIT
 scripts/audio-harness.sh down >/dev/null 2>&1 || true
 scripts/audio-harness.sh up --sample "$MIC_SAMPLE" || die "the audio harness could not come up"
 HARNESS_UP=1
-# `audio-harness.sh up` gives the virtual source this description, and it is what the
-# application logs when it opens a device -- not the node name.
-HARNESS_DESC="Backchannel harness microphone"
+# Read the description out of the graph rather than assuming the one the harness asks for.
+# Measured 2026-09-05: `audio-harness.sh` passes
+# `node.description=Backchannel harness microphone` and PipeWire reports `Backchannel` --
+# for the sink too. The application logs the description, so a guard built on the requested
+# string refuses a run in which the swap worked perfectly, which is what happened here.
+HARNESS_DESC=$(pw-dump | python3 -c '
+import json, sys
+for o in json.load(sys.stdin):
+    p = (o.get("info") or {}).get("props") or {}
+    if p.get("node.name") == "backchannel_harness_src":
+        print(p.get("node.description") or "")
+        break
+')
+[ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph after a successful 'up'"
+say "the harness source presents itself as '$HARNESS_DESC'"
 say "harness up: the default input is now the virtual source playing $(basename "$MIC_SAMPLE")"
 
 # --- the system side: a real sink, played into for the whole run -------------------------
@@ -250,7 +262,7 @@ LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
 MIC_OPENED=$(grep -o "Creating microphone stream: [^(]*" "$LOG" | tail -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
 say "the app opened microphone: '${MIC_OPENED:-<none>}'"
 [ -n "$MIC_OPENED" ] || die "the application never created a microphone stream; see $LOG"
-if ! printf '%s' "$MIC_OPENED" | grep -qi 'harness'; then
+if [ "$MIC_OPENED" != "$HARNESS_DESC" ]; then
   die "the application opened '$MIC_OPENED', not '$HARNESS_DESC'. The default-input swap did not take, so the microphone channel of this run carries the real device, not sample A. Fix the harness or pin preferred_mic_device; do not read this run as a two-channel result."
 fi
 if grep -q "Using preferred system audio" "$LOG"; then

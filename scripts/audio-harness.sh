@@ -32,6 +32,13 @@
 #     writes into ~/.local/state/wireplumber/default-nodes, where a stale entry survives a
 #     teardown that looks clean and survives a reboot.
 #
+# One thing the descriptions do NOT do: survive. Measured 2026-09-05 -- `up` passes
+# `node.description=Backchannel harness microphone` for the source and
+# `node.description=Backchannel harness sink` for the sink, and `pw-dump` reports
+# `Backchannel` for both. The application shows and logs the description, so anything
+# asserting on the string this script asks for will not match what the graph gives out.
+# Read it back from `pw-dump` instead.
+#
 # It needs a live PipeWire session, so it does not run in CI. That is why the audio half
 # of the gate is local-only; see gopnik.json.
 
