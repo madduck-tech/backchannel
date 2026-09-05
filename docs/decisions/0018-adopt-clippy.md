@@ -105,10 +105,22 @@ This is the argument for why a clippy adoption is not a mechanical pass, in one 
 - `get_audio_backend_info`'s non-macOS branch hardcoded `"screencapturekit"` / `"ScreenCaptureKit"` —
   a **fourth** copy of strings the enum owns, on the only platform this repository runs. It now reads
   off the enum. Same disease as the three template registries ADR 0017 collapsed.
-- **Accepted cost, the same one ADR 0017 named**: the toolchain is `@stable` and unpinned, so a
-  clippy release that adds or widens a lint turns `main` red with no code change. Clippy moves faster
-  than rustc here, so this is likelier than it was for ADR 0017. The remedy is unchanged: pin the
-  toolchain, do not delete the deny.
+- **The unpinned-toolchain cost was not hypothetical, and it arrived in the first CI run.** ADR 0017
+  named it as an accepted risk. Measured 2026-09-05: the adoption was verified locally on
+  **rustc 1.96.1** with zero findings, and CI — `dtolnay/rust-toolchain@stable`, which had picked up
+  **1.98.1** — reported **35 errors** in the same tree, all of one lint 1.96 does not emit
+  (`redundant reference in info!/error!/format! argument`). Nothing about the code had changed. The
+  two machines were measuring with different rulers, so "91 → 0" was true of one of them and the
+  gate verdict that said so was a statement about a laptop.
+
+  **Therefore the toolchain is pinned**, in `rust-toolchain.toml` at 1.98.1, and `test.yml` installs
+  that version rather than `@stable`. Once a lint deny exists, an unpinned toolchain is a correctness
+  problem and not a convenience one: a local run that does not use the same compiler as CI cannot
+  support a claim about the repository. Bumping the pin is a deliberate change with its own pull
+  request — install, run both denies, fix or allow what appears, say what moved. Deleting the pin to
+  make a red CI green is the one move this decision forbids.
+
+  The 35 were all machine-applicable and are fixed; the count with the pin in place is 0 on both.
 - **Not bought**: `cargo fmt` and `prettier` are still not run — a formatter touches every file and
   is a different argument. The eleven eslint rules #35 switched off are still off (#38). The seven
   clippy lints above are still off, and turning one back on is a unit of work, not a chore.

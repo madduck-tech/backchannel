@@ -1,0 +1,18 @@
+# Pinned, because the lint denies (ADR 0017, ADR 0018) make an unpinned toolchain a
+# correctness problem rather than a convenience one.
+#
+# Measured 2026-09-05, the first CI run after clippy was denied: the adoption was verified
+# locally on rustc 1.96.1 with **zero** findings, and CI — which installs
+# `dtolnay/rust-toolchain@stable` and had picked up 1.98.1 — reported **35 errors** in the
+# same tree. All of one lint that 1.96 does not emit
+# (`redundant reference in info!/error!/format! argument`). Nothing about the code had
+# changed; the two machines were measuring with different rulers, and the verdict that said
+# "91 → 0" was true only of one of them.
+#
+# So this file is what makes a local lint result mean anything about the repository. Bumping
+# it is a deliberate change with its own pull request: install the new toolchain, run both
+# denies, fix or allow what appears, and say what moved. Do not delete it to make a red CI
+# green.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

@@ -33,5 +33,8 @@ Decisions that govern this code: ADR 0002 (STT for Russian), 0003 (two STT strea
   "monitor" in a description: the descriptions read "Monitor of ..." and the old check was
   case-sensitive, so it matched none of them.
 - Pin git dependencies to a revision; a new crate is called out with its license.
+- The Rust toolchain is pinned in `rust-toolchain.toml` (ADR 0018). It is not a preference:
+  with `-D warnings` in CI, a local lint run on a different compiler measures a different
+  repository — 1.96 reported 0 findings where CI's 1.98 reported 35, on the same tree.
 - Latency work is measured on the emulated minimum machine
   (`systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`) with the six timestamps from ADR 0008.

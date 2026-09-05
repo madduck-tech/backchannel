@@ -33,9 +33,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # No `@stable` here: `rust-toolchain.toml` pins the version and rustup honours it, so
+      # CI and a developer's machine lint with the same ruler. They did not, once — see that
+      # file — and a lint verdict measured with a different compiler than CI runs is a
+      # verdict about the wrong thing.
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.98.1
+          components: clippy
           targets: x86_64-unknown-linux-gnu
 
       - name: Rust cache
