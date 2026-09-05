@@ -141,8 +141,48 @@ assert.ok(
     "command's own return value."
 );
 
+// --- the runtimes this workflow provisions are the repository's, not its own copies ------
+// This file introduced a second place where the pnpm version and the Rust toolchain are
+// written down. `lint-step-is-enforced.test.mjs` holds test.yml's copies against `.nvmrc`
+// and `packageManager`; without this, stage2-artifact.yml could drift away from both and
+// build the Stage 2 artifact with a different toolchain than the gate describes — which is
+// the exact failure the rest of this file exists to prevent, one level up.
+const withOf = (needle) => {
+  const st = steps.find((s) => String(s.keys.uses ?? '').includes(needle));
+  assert.ok(st, `stage2-artifact.yml no longer uses ${needle}`);
+  return String(st.keys.with ?? '');
+};
+
+assert.match(
+  withOf('actions/setup-node'),
+  /node-version-file:\s*\.nvmrc/,
+  'the AppImage job no longer reads `.nvmrc`, so it can build with a different Node than the ' +
+    'suites do'
+);
+
+const pnpmPin = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).packageManager;
+const pnpmDeclared = /version:\s*([0-9][^\s]*)/.exec(withOf('pnpm/action-setup'));
+assert.ok(pnpmDeclared, 'the AppImage job declares no pnpm `version`');
+assert.equal(
+  `pnpm@${pnpmDeclared[1]}`,
+  pnpmPin,
+  `stage2-artifact.yml provisions pnpm ${pnpmDeclared[1]} while frontend/package.json pins ${pnpmPin}`
+);
+
+const rustPin = /^channel\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(repo, 'rust-toolchain.toml'), 'utf8'));
+assert.ok(rustPin, 'rust-toolchain.toml declares no `channel`');
+const rustDeclared = /toolchain:\s*([^\s]+)/.exec(withOf('dtolnay/rust-toolchain'));
+assert.ok(rustDeclared, 'the AppImage job declares no Rust toolchain version');
+assert.equal(
+  rustDeclared[1],
+  rustPin[1],
+  `stage2-artifact.yml builds with Rust ${rustDeclared[1]} while rust-toolchain.toml pins ` +
+    `${rustPin[1]}. An artifact built by a different compiler than the gate names is an ` +
+    'artifact the gate did not describe.'
+);
+
 console.log(
-  `ok - stage 2 artifact: ${steps.length} steps, on=[${wf.on.join(', ')}] unfiltered, the sidecar ` +
+  `ok - stage 2 artifact: ${steps.length} steps on pnpm ${pnpmDeclared[1]} / rust ${rustDeclared[1]}, on=[${wf.on.join(', ')}] unfiltered, the sidecar ` +
     'and AppImage commands are gopnik stage 2 verbatim, nothing is switched off, and a missing ' +
     'artifact fails the job'
 );
