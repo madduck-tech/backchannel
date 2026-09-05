@@ -48,8 +48,15 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Extract rather than mount: --appimage-extract-and-run needs FUSE, which a container often
 # lacks, and that failure would be mistaken for the application failing.
-say "  extracting…"
-( cd "$WORK" && "$(readlink -f "$APP")" --appimage-extract >/dev/null 2>&1 )
+#
+# The absolute path is resolved BEFORE the subshell. Resolving it inside — `( cd "$WORK" && \
+# "$(readlink -f "$APP")" … )` — expands the substitution after the `cd`, so a relative argument
+# resolves against the wrong directory and the extraction produces nothing. Measured: the first CI
+# run of this probe reported `could not extract a runnable binary`, which was this bug and not the
+# application. The probe was right to say NOT ATTEMPTED rather than blame the app.
+ABS_APP=$(readlink -f "$APP")
+say "  extracting $ABS_APP …"
+( cd "$WORK" && "$ABS_APP" --appimage-extract >/dev/null 2>&1 ) || say "  (extract returned non-zero)"
 BIN=$(find "$WORK/squashfs-root/usr/bin" -maxdepth 1 -type f -name 'conversationaly*' | head -1)
 if [ ! -x "${BIN:-}" ]; then
   verdict "NOT ATTEMPTED — could not extract a runnable binary from the AppImage."
