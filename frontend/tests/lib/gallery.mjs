@@ -130,8 +130,15 @@ export async function renderOne(file) {
   const { tauriStubs } = await import('./tauri-stubs.mjs');
   const { setupDom } = await import('./dom-harness.mjs');
 
+  // **Both** asynchronous escapes, and the second one was found by this issue's own control 3.
+  // A rejected promise is an `unhandledRejection`; a throw from inside a `setTimeout` callback is an
+  // `uncaughtException`. Trapping only the first left a component that throws from a timer killing
+  // the child with no card at all -- the exact outcome the `failed-asynchronously` kind exists to
+  // prevent. Neither is swallowed: both become the card's reason.
   let asyncFailure = null;
-  process.on('unhandledRejection', (e) => { asyncFailure = String(e?.message ?? e).split('\n')[0]; });
+  const record = (e) => { asyncFailure ??= String(e?.message ?? e).split('\n')[0]; };
+  process.on('unhandledRejection', record);
+  process.on('uncaughtException', record);
   await setupDom();
   const React = (await import('react')).default;
   const { act } = await import('react');
