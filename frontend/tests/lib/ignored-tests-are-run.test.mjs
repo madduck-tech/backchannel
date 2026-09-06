@@ -217,6 +217,12 @@ const HELPERS = new Set([
   // rather than a dependency, and a hand-rolled parser nobody tests is worse than the
   // substring matching it replaces.
   'lib/workflow-yaml.mjs',
+  // The control runner (#94). Like `workflow-yaml.mjs` above it is a helper with its own test file
+  // (`controls-are-real.test.mjs`) — and for a sharper reason: it is the thing that runs controls,
+  // so a control on it is not ceremony, it is the only reason to believe it. Its fixture set is
+  // two-sided on purpose: an oracle made only of broken controls it must catch is satisfied by
+  // `exit 1`, which is the same shape as the defect the runner exists to close.
+  'lib/control-runner.mjs',
 ]);
 
 function testDirFiles(dir) {
