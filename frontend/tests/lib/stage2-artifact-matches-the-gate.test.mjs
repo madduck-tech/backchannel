@@ -206,8 +206,63 @@ assert.equal(
     'artifact the gate did not describe.'
 );
 
+// --- #103: the identity that travels with the artifact is the identity the gate consumes ---------
+//
+// Before this, the workflow published the AppImage alone and the gate located one with five
+// independent `ls -t` expressions guarded only by `test -x`. Measured on 2026-09-06 at HEAD 3ef8879:
+// that expression selected a binary 36 commits behind HEAD, entry 4 passed it, entry 5 launched it,
+// and the log said `Application setup complete`. A green launch pass against a revision nobody
+// tested. Meanwhile `git rev-parse HEAD > "$S2/expected-sha"` had been written since the gate was
+// created and `grep -rn expected-sha` found one occurrence -- the write.
+//
+// Three things are held here, and they are one coupling seen from three sides. Pinning the two
+// locator commands against each other verbatim would be *wrong*: CI locates a file it just built
+// and carries `2>/dev/null` and `>> "$GITHUB_ENV"`, while the gate locates one a person supplied.
+// What must agree is the name the identity travels under.
+const PROVENANCE = '.built-from';
+
+{
+  // 1. The workflow publishes the provenance file, not only the AppImage.
+  const upload = steps.find((s) => String(s.keys.uses || '').startsWith('actions/upload-artifact'));
+  assert.ok(upload, 'the AppImage job uploads nothing');
+  // `workflow-yaml.mjs` keeps a `with:` block as its raw text and does not model block scalars
+  // (its own header says so), so `path: |` is matched against that text rather than a parsed list.
+  assert.match(
+    String(upload.keys.with ?? ''),
+    new RegExp(PROVENANCE.replace('.', '\\.')),
+    'stage2-artifact.yml publishes the AppImage without its `' + PROVENANCE + '` file, so a person ' +
+      'who downloads it has no way to prove which revision it is. That is the state #103 was ' +
+      'opened about.'
+  );
+
+  // 2. The locator reads that same name. If these drift, the gate silently stops checking identity.
+  const locator = fs.readFileSync(path.join(repo, 'scripts/stage2-locate-app.sh'), 'utf8');
+  assert.ok(
+    locator.includes(`$APP${PROVENANCE}`),
+    `scripts/stage2-locate-app.sh does not read \`$APP${PROVENANCE}\`, so the file the workflow ` +
+      'publishes and the file the gate reads are no longer the same file.'
+  );
+
+  // 3. **One locator.** Every stage 2 entry that names an AppImage goes through the script. Entry 3
+  //    is the exception and the only one: it BUILDS the bundle, so it is what writes the provenance
+  //    file rather than a consumer of it. Before #103 there were five independent `ls -t` sites, and
+  //    that is what made a stale binary reachable from four separate places.
+  const raw = stage2
+    .map((c, i) => [i + 1, c])
+    .filter(([, c]) => c.includes('ls -t target/release/bundle/appimage'))
+    .map(([i]) => i);
+  assert.deepEqual(
+    raw,
+    [3],
+    'stage 2 entries locate the AppImage with a bare `ls -t` instead of scripts/stage2-locate-app.sh: ' +
+      `entries ${raw.join(', ')}.\n\n  Only entry 3 may, because it builds the bundle and writes ` +
+      'its provenance. Every consumer goes through the locator, or the identity check is optional ' +
+      'again for whichever entry skipped it.'
+  );
+}
+
 console.log(
   `ok - stage 2 artifact: ${steps.length} steps on pnpm ${pnpmDeclared[1]} / rust ${rustDeclared[1]}, on=[${wf.on.join(', ')}] unfiltered, the sidecar ` +
     'and AppImage commands are gopnik stage 2 verbatim, nothing is switched off, and a missing ' +
-    'artifact fails the job'
+    'artifact fails the job, and the AppImage identity travels under one name that both sides read'
 );
