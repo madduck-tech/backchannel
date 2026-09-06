@@ -651,7 +651,7 @@ jobs:
         run: |
           # Build llama-helper without GPU features (CPU-only)
           # Note: Vulkan build has CMake race condition issues with llama-cpp-sys-2
-          # The Tauri app itself uses whisper-rs with Vulkan for transcription
+          # The Tauri app itself uses transcribe-cpp with Vulkan for transcription
           # llama-helper is for LLM inference and works fine on CPU
           Write-Host "Building llama-helper sidecar (CPU-only)..."
 

@@ -22,6 +22,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readWorkflow } from './workflow-yaml.mjs';
+import { assertSetEquals } from './reachability-shared.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const repo = path.join(root, '..');
@@ -322,34 +323,93 @@ assert.match(
     'line look the same in the output that a verdict pastes'
 );
 
-// --- no workflow builds the sidecar with a feature that cannot build ---------------------
-// #6. `build-devtest.yml` built `llama-helper` for Windows with `--features vulkan` and died in
-// `llama-cpp-sys-2`'s cmake script before reaching the Tauri build. `build.yml:560-566` had
-// already decided against it *and written down why* — "Vulkan build has CMake race condition
-// issues with llama-cpp-sys-2" — and the other file did not know.
+// --- how the llama-helper sidecar is built, held as a closed set -------------------------
+// #6. `build-devtest.yml` built the sidecar for Windows with `--features vulkan` and died inside
+// `llama-cpp-sys-2`'s cmake script. The underlying error is in that run's log 85 lines above the
+// panic (`CMake error : Not a file: .../vulkan-shaders-gen-build/cmake_install.cmake`, then
+// `error MSB8066`): the `vulkan-shaders-gen` ExternalProject's install rule runs before its own
+// configure step has written that file, under `--parallel 4`. `build.yml:562-565` had already
+// decided against Vulkan here and said why.
 //
-// The rule is narrow on purpose: the Tauri app itself DOES build with `--features vulkan` on
-// Windows (whisper-rs, `build-devtest.yml:333`) and that is correct. Only the sidecar is
-// forbidden, so this looks at lines that build llama-helper.
+// **This is set equality, not a pattern match, and that is the whole point.** The first version of
+// this check forbade `--features vulkan` on a line that builds llama-helper. An adversary found six
+// ways past it in one pass, and the sharpest needed no new string at all:
+//
+//     cargo build --release -p llama-helper ${{ steps.build-features.outputs.features }}
+//
+// `build-devtest.yml`'s `build-features` step already computes exactly `--features vulkan` on
+// Windows, so that one line — a plausible "stop duplicating the feature logic" refactor —
+// reproduces #6 with the pattern check green. The others: a shell variable assigned on an earlier
+// line, `--package llama-helper` instead of `-p`, a YAML folded scalar, `--manifest-path`, and
+// `cd llama-helper` first (which is what `docs/GPU_ACCELERATION.md:73-75` tells developers to do).
+//
+// A forbidden-pattern list is open-ended and the next construction is always outside it. So instead
+// this holds *every* line that builds the sidecar, verbatim, and any change to any of them — new
+// spelling, new file, new indirection — turns it red and asks a person to look. The rule a reader
+// must apply when that happens is in ALLOWED_SIDECAR_BUILDS below.
+//
+// Residual, named rather than implied: a build invoked from a shell script or a composite action
+// rather than from a workflow line is invisible here. Neither exists today
+// (`.github/actions` is absent; no workflow calls a script that builds the sidecar).
 const workflowDir = path.join(repo, '.github/workflows');
-const sidecarVulkan = [];
-for (const name of fs.readdirSync(workflowDir).filter((f) => f.endsWith('.yml'))) {
+
+// Every line, in any workflow, that builds llama-helper or feeds features to that build.
+// `.yaml` as well as `.yml`: GitHub accepts both, and only matching one is a way past this.
+const sidecarBuildLines = [];
+for (const name of fs.readdirSync(workflowDir).filter((f) => /\.ya?ml$/.test(f))) {
   const text = fs.readFileSync(path.join(workflowDir, name), 'utf8');
-  const lines = text.split('\n');
-  lines.forEach((line, i) => {
-    if (line.trim().startsWith('#')) return;
-    const buildsSidecar = /LLAMA_FEATURES\s*=.*vulkan/.test(line)
-      || (/cargo build .*-p llama-helper/.test(line) && /vulkan/.test(line));
-    if (buildsSidecar) sidecarVulkan.push(`${name}:${i + 1}  ${line.trim()}`);
+  text.split('\n').forEach((line) => {
+    const code = line.replace(/#.*$/, '').trim();
+    if (!code) return;
+    const buildsSidecar =
+      // a direct build
+      (/\bcargo\b/.test(code) && /llama-helper/.test(code)) ||
+      // the variable that feeds one
+      /^LLAMA_FEATURES\s*=/.test(code) ||
+      // entering the crate, after which a bare `cargo build --features vulkan` is a sidecar build
+      // with no `llama-helper` on its own line. None exists today, so adding one turns this red —
+      // which is the point: it is the one construction the arms above cannot see.
+      (/(^cd\s|working-directory)/.test(code) && /llama-helper/.test(code));
+    if (buildsSidecar) sidecarBuildLines.push(`${name}  ${code}`);
   });
 }
-assert.deepEqual(
-  sidecarVulkan,
-  [],
-  'a workflow builds llama-helper with Vulkan:\n  ' + sidecarVulkan.join('\n  ') +
-    '\n\n  build.yml:560-566 records why that fails — a cmake race in llama-cpp-sys-2 — and #6 was ' +
-    'the Windows leg dying there before it reached the Tauri build. The app\'s own Vulkan feature ' +
-    'is fine and untouched by this check; only the sidecar is forbidden.'
+
+// The rule, for whoever this check just stopped:
+//   * Windows must be CPU-only. Not a style preference — the Vulkan build does not complete.
+//   * macOS gets `--features metal`.
+//   * Linux is CPU-only.
+//   * A build that takes its features from a variable or a step output is only as safe as what
+//     feeds it, so it belongs here only once you have read what that resolves to on Windows.
+const ALLOWED_SIDECAR_BUILDS = new Set([
+  // The two files that branch on platform. Both resolve to metal on macOS, empty elsewhere.
+  'build-devtest.yml  LLAMA_FEATURES=""',
+  'build-devtest.yml  LLAMA_FEATURES="--features metal"',
+  'build-devtest.yml  cargo build --release -p llama-helper $LLAMA_FEATURES',
+  'build.yml  LLAMA_FEATURES=""',
+  'build.yml  LLAMA_FEATURES="--features metal"',
+  'build.yml  cargo build --release -p llama-helper $LLAMA_FEATURES',
+  // Windows, CPU-only and unconditional. build.yml:568 is the documented workaround #6 restored.
+  'build.yml  cargo build --release -p llama-helper',
+  'build-windows.yml  cargo build --release -p llama-helper',
+  // macOS, Metal, unconditional.
+  'build-macos.yml  cargo build --release -p llama-helper --features metal',
+  // CPU-only everywhere else.
+  'build-linux.yml  cargo build --release -p llama-helper',
+  'stage2-artifact.yml  cargo build --release -p llama-helper',
+  // test.yml builds it on all three runners on every pull request. Its macOS leg is deliberately
+  // CPU-only too: it compiles and runs the suite, it does not ship a bundle.
+  'test.yml  cargo build --release -p llama-helper',
+]);
+
+assertSetEquals(
+  new Set(sidecarBuildLines),
+  ALLOWED_SIDECAR_BUILDS,
+  'lines that build the llama-helper sidecar',
+  'Windows must stay CPU-only: the Vulkan sidecar build fails in llama-cpp-sys-2 (#6), and ' +
+    'build.yml:562-565 records why. macOS takes --features metal. If you changed how the sidecar ' +
+    'is built, update the set above — and if the new line takes its features from a variable or a ' +
+    'step output, read what that resolves to on Windows first: build-devtest.yml\'s ' +
+    'build-features step resolves to "--features vulkan" there.'
 );
 
 // --- the eslint config is backed by what it imports -------------------------------------
