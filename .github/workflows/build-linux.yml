@@ -201,6 +201,12 @@ jobs:
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
 
+      # ADR 0020 set `createUpdaterArtifacts: false`, so `tauri build` no longer
+      # requires TAURI_SIGNING_PRIVATE_KEY on any platform and this gate is inert.
+      # Kept, not deleted: it becomes live again the day this fork owns an updater
+      # identity and turns the artifacts back on, and deleting it would make that
+      # day's bundle fail with the message #4 spent a run diagnosing.
+      #
       # tauri.conf.json enables updater artifacts and carries a pubkey, so `tauri build`
       # requires TAURI_SIGNING_PRIVATE_KEY for deb/AppImage/rpm and fails the bundle
       # without it. Mapping the secret only when non-empty does not help: an unset
