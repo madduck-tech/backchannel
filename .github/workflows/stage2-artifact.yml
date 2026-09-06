@@ -92,7 +92,7 @@ jobs:
       # flags, a person downloading it would be running Stage 2 against something the gate
       # never described, which is worse than building it themselves.
       - name: Build the AppImage
-        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && git rev-parse HEAD > "$(ls -t target/release/bundle/appimage/*.AppImage | head -1).built-from"
 
       # A bundle step that produces nothing still exits 0 in some tauri failure modes, so
       # assert the file rather than the command's return value -- `.claude/rules/testing.md`,
@@ -104,6 +104,24 @@ jobs:
           [ -x "$APP" ] || { echo "$APP is not executable"; exit 1; }
           echo "built $APP ($(du -h "$APP" | cut -f1))"
           echo "APPIMAGE=$APP" >> "$GITHUB_ENV"
+
+      # #103. The build step writes `git rev-parse HEAD` beside the bundle, and that command must
+      # stay byte-identical to gopnik.json stage 2 entry 3 -- `stage2-artifact-matches-the-gate.test.mjs`
+      # asserts it. But on `pull_request` this checkout's HEAD is the **merge commit**: measured on
+      # run 34044890650, `head_sha` was 7cc9e07f while `github.sha` was 1bce9414, a merge of 7cc9e07f
+      # into 292b99a5, and `git cat-file -t 1bce9414` on a developer's clone answers "not a valid
+      # object name". A person who downloads this artifact and checks out the branch has the HEAD
+      # commit, not the merge, so a provenance file naming the merge would fail the identity check for a
+      # reason that is not a defect.
+      #
+      # So the build writes the command the gate pins, and this step corrects it to the revision a
+      # downloader will actually be sitting on. Separate step on purpose: the pinned command must not
+      # grow a CI-only branch.
+      - name: Record the revision a downloader will compare against
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          printf '%s\n' "$SHA" > "$APPIMAGE.built-from"
+          echo "artifact identity: $SHA (workflow HEAD is $(git rev-parse HEAD))"
 
       # #67 conditions 1 and 2, and the observation #5 could not be made without.
       #
@@ -136,6 +154,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backchannel-appimage-${{ github.sha }}
-          path: ${{ env.APPIMAGE }}
+          # Both files. Before #103 this published the AppImage alone, flattened to a single zip
+          # entry -- measured on run 34044890650: EOCD reported 1 entry, no directory prefix. Nothing
+          # travelled with it to say which revision it was, and the gate's five `ls -t` locators had
+          # no way to consume it anyway.
+          path: |
+            ${{ env.APPIMAGE }}
+            ${{ env.APPIMAGE }}.built-from
           if-no-files-found: error
           retention-days: 14
