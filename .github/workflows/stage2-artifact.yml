@@ -123,6 +123,33 @@ jobs:
           printf '%s\n' "$SHA" > "$APPIMAGE.built-from"
           echo "artifact identity: $SHA (workflow HEAD is $(git rev-parse HEAD))"
 
+      # #107. A page of every component, drawn inside the provider stack the application itself
+      # mounts, with the application's own compiled stylesheets inlined. The AppImage above already
+      # shows anything reachable *by using* the app; this shows what you cannot navigate to -- the
+      # onboarding steps without re-onboarding, dialogs, error and empty states.
+      #
+      # It lives here rather than in `test.yml` for a measured reason: 78 cards is 96 s against that
+      # suite's 12 s, and `test.yml` is the only required status check on `main`. It also needs the
+      # stylesheets, which only a `pnpm build` produces -- and the step above just did one.
+      #
+      # A NEW step on purpose. The build command above is pinned byte-identical to gopnik.json stage
+      # 2 entry 3 and asserted by `stage2-artifact-matches-the-gate.test.mjs`; extending it would
+      # break that coupling.
+      #
+      # This one FAILS the job on three things, each a way the page could lie: no cards at all, no
+      # stylesheets, or a component that used to draw and no longer does. A picture is not an
+      # assertion, but an empty or unstyled picture is worse than none.
+      - name: Draw every component
+        run: cd frontend && GALLERY_OUT=gallery.html node tests/lib/gallery.mjs
+
+      - name: Publish the component gallery
+        uses: actions/upload-artifact@v4
+        with:
+          name: backchannel-gallery-${{ github.sha }}
+          path: frontend/gallery.html
+          if-no-files-found: error
+          retention-days: 14
+
       # #67 conditions 1 and 2, and the observation #5 could not be made without.
       #
       # The `.deb` is built here and installed in a CLEAN container — not on this runner, which has

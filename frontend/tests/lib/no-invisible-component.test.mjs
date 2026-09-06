@@ -31,20 +31,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sourceFiles, rel, assertSetEquals } from './reachability-shared.mjs';
+import { sourceFiles, rel, assertSetEquals, componentFiles } from './reachability-shared.mjs';
 
-/** Vendored shadcn: generated rather than written, excluded by the same rule as component-reachability. */
-const VENDORED = /^src\/components\/ui\//;
-
-/**
- * Where a component can live. `src/app/_components/` is in scope because three shipped components
- * live there -- `SettingsModal.tsx` is already a parse target of `modal-reachability.test.mjs` -- and
- * before this change a component added there was invisible with zero edits.
- */
-const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/'];
-
-const inScope = (f) =>
-  COMPONENT_ROOTS.some((r) => f.startsWith(r)) && f.endsWith('.tsx') && !VENDORED.test(f);
+// The scope rule moved to `reachability-shared.mjs` in #107 and is imported, not copied: the gallery
+// holds the same denominator, and two copies of it drift. `SettingsModal.tsx` is already a parse
+// target of `modal-reachability.test.mjs`; before #98 a component added under `src/app/_components/`
+// was invisible with zero edits.
 
 /**
  * Everything that predates this rule. **Entries only ever leave.** One collective reason, because
@@ -127,7 +119,7 @@ const BACKLOG = new Set([
  */
 const EXCEPTIONS = {};
 
-const components = sourceFiles().map(rel).filter(inScope);
+const components = componentFiles();
 
 // Only files the runner actually runs. `pnpm test` globs `tests/**/*.test.mjs`, and
 // `ignored-tests-are-run.test.mjs` sanctions everything else under `tests/` as a helper -- so a

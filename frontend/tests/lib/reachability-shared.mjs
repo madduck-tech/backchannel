@@ -137,6 +137,30 @@ export function reachableFromEntries(files = sourceFiles()) {
 }
 
 /** Assert two sets are equal, reporting both directions separately. */
+/**
+ * Where a component can live, and which files count as one. **One definition, two consumers** --
+ * `no-invisible-component.test.mjs` and the gallery -- because two copies of a denominator drift and
+ * then the gallery describes a tree that is not the one under test (#107 condition 1).
+ *
+ * This is an extraction with a decision in it, not a lift-and-shift. `component-reachability.test.mjs`
+ * scopes to `src/components/` over `.ts` *and* `.tsx`; this rule adds `src/app/_components/` and takes
+ * `.tsx` only. They answer different questions -- "is this module reachable" against "is this a
+ * component someone can look at" -- so they are deliberately **not** unified here, and that is stated
+ * rather than left as an inconsistency someone finds later.
+ *
+ * `src/app/_components/` is in scope because three shipped components live there; before #98 a
+ * component added there was invisible with zero edits.
+ */
+export const VENDORED_COMPONENTS = /^src\/components\/ui\//;
+export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/'];
+export const isComponentFile = (f) =>
+  COMPONENT_ROOTS.some((r) => f.startsWith(r)) && f.endsWith('.tsx') && !VENDORED_COMPONENTS.test(f);
+
+/** Every component file in the tree, sorted -- the denominator both consumers hold. */
+export function componentFiles(files = sourceFiles()) {
+  return files.map(rel).filter(isComponentFile).sort();
+}
+
 export function assertSetEquals(actual, allowed, what, hint) {
   const missing = [...actual].filter((x) => !allowed.has(x)).sort();
   const stale = [...allowed].filter((x) => !actual.has(x)).sort();
