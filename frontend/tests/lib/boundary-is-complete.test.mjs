@@ -135,8 +135,37 @@ function callersOf(member) {
 // ways reports all 67 lucide names as missing — it would fail loudly for the wrong reason, which is
 // the better of the two bad outcomes, but it would also be rewritten to "skip the Proxy" and the
 // coverage would quietly vanish.
+// The derivation is pinned before it is consumed, for the reason section 1 gives: a derived set that
+// nothing pins moves silently. And here it is worse than silent. A control found it -- changing
+// `[^}]*` to `[^}\n]*`, which drops both multi-line `lucide-react` statements and the 23 names they
+// carry, left this section **green**, because the only module with multi-line imports is the one
+// whose Proxy answers every name. So the multi-line reader was unobservable: real, and asserted by
+// nothing. The count is what makes it observable.
+//
+// `sonner` is pinned by name because it is the module where a name can actually be missing.
+// `lucide-react` is pinned by count: 67 icon names would be noise, its stub is total by construction
+// so the *content* cannot fail, and the number is exactly what a line-based reader would move.
+const BOUND_IN_SOURCE = { sonner: ['Toaster', 'toast'], 'lucide-react': 67 };
+
 {
   const { modules, covered } = boundaryStubs();
+
+  assert.deepEqual(
+    [...namedImportsFromSource('sonner')].sort(),
+    BOUND_IN_SOURCE.sonner,
+    'the names this application binds from `sonner` have moved.\n' +
+      '  now: ' + [...namedImportsFromSource('sonner')].sort().join(', ') + '\n' +
+      '  pinned: ' + BOUND_IN_SOURCE.sonner.join(', ')
+  );
+  assert.equal(
+    namedImportsFromSource('lucide-react').size,
+    BOUND_IN_SOURCE['lucide-react'],
+    'the number of `lucide-react` names bound in src/ has moved.\n' +
+      `  now: ${namedImportsFromSource('lucide-react').size}, pinned: ${BOUND_IN_SOURCE['lucide-react']}\n\n` +
+      '  If this dropped by roughly 23, the import reader stopped spanning newlines and the two ' +
+      'multi-line statements in ImportAudioDialog.tsx and Sidebar/index.tsx went unread.'
+  );
+
   const missing = [];
   for (const module of covered) {
     for (const name of [...namedImportsFromSource(module)].sort()) {
