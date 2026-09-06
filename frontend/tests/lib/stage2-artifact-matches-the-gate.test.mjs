@@ -141,6 +141,31 @@ assert.ok(
     "command's own return value."
 );
 
+// --- the release is verified before it ships, and in a clean container ------------------
+// #67 / #5. The `.deb` must be installed somewhere that is not the build runner: this runner has
+// every build dependency, so installing here passes while the package is still missing a
+// `Depends` entry — which is exactly how #5 survived until somebody installed the bundle by hand.
+const debCheck = steps.find(
+  (s) => typeof s.keys.run === 'string' && s.keys.run.includes('deb-install-check.sh')
+);
+assert.ok(
+  debCheck,
+  'the workflow no longer installs the .deb anywhere. Building it proves the bundler ran; only ' +
+    'installing it on a machine that did not build it proves the package declares what it needs.'
+);
+const checker = fs.readFileSync(path.join(repo, 'scripts/deb-install-check.sh'), 'utf8');
+assert.match(
+  checker,
+  /docker run/,
+  'deb-install-check.sh no longer uses a container. Installing on the build runner passes for a ' +
+    'package that is broken everywhere else — that is the defect #5 was, not a stricter version ' +
+    'of it.'
+);
+assert.ok(
+  steps.some((s) => typeof s.keys.run === 'string' && s.keys.run.includes('--bundles deb')),
+  'nothing builds a .deb, so the install check has nothing to install'
+);
+
 // --- the runtimes this workflow provisions are the repository's, not its own copies ------
 // This file introduced a second place where the pnpm version and the Rust toolchain are
 // written down. `lint-step-is-enforced.test.mjs` holds test.yml's copies against `.nvmrc`
