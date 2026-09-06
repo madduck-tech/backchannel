@@ -1,3 +1,4 @@
+mod legacy_import;
 mod migration_history;
 pub mod commands;
 pub mod manager;
