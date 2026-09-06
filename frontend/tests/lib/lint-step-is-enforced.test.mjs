@@ -366,13 +366,32 @@ for (const name of fs.readdirSync(workflowDir).filter((f) => /\.ya?ml$/.test(f))
       (/\bcargo\b/.test(code) && /llama-helper/.test(code)) ||
       // the variable that feeds one
       /^LLAMA_FEATURES\s*=/.test(code) ||
-      // entering the crate, after which a bare `cargo build --features vulkan` is a sidecar build
-      // with no `llama-helper` on its own line. None exists today, so adding one turns this red —
-      // which is the point: it is the one construction the arms above cannot see.
-      (/(^cd\s|working-directory)/.test(code) && /llama-helper/.test(code));
+      // entering the crate, after which a bare `cargo build --features vulkan` has no
+      // `llama-helper` on its own line. `pushd` as well as `cd`: one keystroke walked around the
+      // first version of this arm.
+      (/(^cd\s|^pushd\s|working-directory)/.test(code) && /llama-helper/.test(code)) ||
+      // the crate name held in a variable: `CRATE=llama-helper` then `cargo build -p "$CRATE" …`.
+      // Neither line matches the first arm.
+      /^[A-Za-z_][A-Za-z0-9_]*=.*llama-helper/.test(code) ||
+      // a features flag on a continuation line. A YAML folded scalar (`run: >`) splits
+      // `cargo build --release -p llama-helper` from `--features vulkan`, leaving the first line
+      // byte-identical to an allowlisted key and the second matching nothing. The only bare `--`
+      // line in any workflow today is a `--jq` filter, which carries no `features`.
+      /^--.*\bfeatures\b/.test(code);
     if (buildsSidecar) sidecarBuildLines.push(`${name}  ${code}`);
   });
 }
+
+// Counted, not merely collected. `test.yml` builds the sidecar with a byte-identical command on
+// three runners; as a plain set those collapse to one member, so deleting the **Windows** one would
+// leave this green — and that job is the per-pull-request measurement that
+// `cargo build --release -p llama-helper` succeeds on `windows-latest`, which is the entire
+// evidentiary basis for building it CPU-only. The count goes in the key so losing one is visible.
+const occurrences = new Map();
+for (const line of sidecarBuildLines) occurrences.set(line, (occurrences.get(line) ?? 0) + 1);
+const sidecarBuilds = new Set(
+  [...occurrences].map(([line, n]) => (n === 1 ? line : line.replace('  ', ` \u00d7${n}  `)))
+);
 
 // The rule, for whoever this check just stopped:
 //   * Windows must be CPU-only. Not a style preference — the Vulkan build does not complete.
@@ -398,11 +417,11 @@ const ALLOWED_SIDECAR_BUILDS = new Set([
   'stage2-artifact.yml  cargo build --release -p llama-helper',
   // test.yml builds it on all three runners on every pull request. Its macOS leg is deliberately
   // CPU-only too: it compiles and runs the suite, it does not ship a bundle.
-  'test.yml  cargo build --release -p llama-helper',
+  'test.yml \u00d73  cargo build --release -p llama-helper',
 ]);
 
 assertSetEquals(
-  new Set(sidecarBuildLines),
+  sidecarBuilds,
   ALLOWED_SIDECAR_BUILDS,
   'lines that build the llama-helper sidecar',
   'Windows must stay CPU-only: the Vulkan sidecar build fails in llama-cpp-sys-2 (#6), and ' +
