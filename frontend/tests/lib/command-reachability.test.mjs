@@ -23,10 +23,6 @@ import {
 
 // Registered but never invoked. One line each; the reason is the point of the list.
 const NEVER_INVOKED = new Set([
-  // System-audio capture: registered, never called; the Linux arm is a bail!(). See #13.
-  'check_system_audio_permissions_command', 'get_system_audio_monitoring_status',
-  'list_system_audio_devices_command', 'start_system_audio_capture_command',
-  'start_system_audio_monitoring', 'stop_system_audio_monitoring',
   // Deliberate and permanent: #[cfg(debug_assertions)], invoked from the devtools console
   // by hand. Its own header says so. This entry can never leave the list.
   'dictation_probe',
