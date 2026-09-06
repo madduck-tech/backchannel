@@ -72,7 +72,19 @@ jobs:
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
             libjavascriptcoregtk-4.1-dev=2.44.0-2 \
             gir1.2-javascriptcoregtk-4.1=2.44.0-2 \
-            gir1.2-webkit2-4.1=2.44.0-2
+            gir1.2-webkit2-4.1=2.44.0-2 \
+            webkit2gtk-driver=2.44.0-2
+
+      # #101. `tauri-driver` proxies WebDriver to WebKitWebDriver and launches the application; it is
+      # the mechanism `scripts/stage2-ui-check.sh` rests on, and it has never run on a runner --
+      # `grep -rn "tauri-driver" .github/workflows/` was 0 before this. It is a compile, not a
+      # download, so it is a real cost and is named rather than hidden; the Rust cache above covers
+      # its dependencies and `--locked` keeps it reproducible.
+      #
+      # `webkit2gtk-driver` is pinned to 2.44.0-2 with everything else. A driver from a different
+      # WebKit than the one the AppImage links would answer a different question.
+      - name: Install tauri-driver (#101)
+        run: cargo install tauri-driver --locked
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -149,6 +161,24 @@ jobs:
       # interaction — and it asks it here rather than assuming an answer in an issue.
       - name: Probe whether the application starts headless
         run: scripts/headless-launch-probe.sh "$APPIMAGE" 25
+
+      # #101. Nothing has ever established that this application's webview loads on a machine.
+      # `headless-launch-probe.sh` above asserts a live process and two greps of stdout --
+      # `Application setup complete` is `lib.rs:433`, the third statement in `.setup()`, and the
+      # database init that can still panic is 74 lines later. Nothing in the tree logs a
+      # window-ready or webview-loaded signal, so that probe could not have asserted a render even in
+      # principle. A WebDriver needs a loaded webview, not a live process.
+      #
+      # A measurement, not a check: always exits 0 and prints one `verdict=` line, the ADR 0019
+      # shape. The honest answer may be "no", and a probe that fails the build when the answer is no
+      # is one nobody can afford to run.
+      #
+      # It takes "$APPIMAGE" directly rather than `scripts/stage2-locate-app.sh`. In this workflow
+      # the provenance file is deliberately the head SHA while `git rev-parse HEAD` is the merge
+      # commit, so the locator would `die` for a reason that is not a defect -- the same reason the
+      # headless probe above takes it directly.
+      - name: Probe whether the webview loads under WebDriver
+        run: scripts/webdriver-probe.sh "$APPIMAGE"
 
       - name: Publish the artifact
         uses: actions/upload-artifact@v4
