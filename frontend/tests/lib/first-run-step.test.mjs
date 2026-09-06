@@ -33,6 +33,7 @@
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -72,13 +73,12 @@ function harness({
     { get: () => (props) => React.createElement('div', null, props?.children) }
   );
   const overrides = {
+    ...boundaryStubs().modules,
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     '@/contexts/OnboardingContext': { useOnboarding: () => onboarding },
     '../OnboardingContainer': { OnboardingContainer: ({ children }) => children },
     'framer-motion': { motion: motionProxy, AnimatePresence: ({ children }) => children },
-    'lucide-react': new Proxy({}, { get: () => () => null }),
-    sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {}, info: () => {} }) },
   };
   return { seen, stubs, overrides };
 }

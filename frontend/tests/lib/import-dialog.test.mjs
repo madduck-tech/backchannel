@@ -33,6 +33,7 @@
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -69,6 +70,7 @@ function harness({ fileInfo = FILE, processing = false, modelKey = 'local:parake
   const sidebarContext = { refetchMeetings: () => {} };
 
   const overrides = {
+    ...boundaryStubs().modules,
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     // **Every hook return here is built once and handed back unchanged.**
@@ -83,8 +85,6 @@ function harness({ fileInfo = FILE, processing = false, modelKey = 'local:parake
     '@/contexts/ConfigContext': { useConfig: () => configContext },
     'next/navigation': { useRouter: () => router },
     '../Sidebar/SidebarProvider': { useSidebar: () => sidebarContext },
-    'lucide-react': new Proxy({}, { get: () => () => null }),
-    sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {}, info: () => {} }) },
   };
   return { seen, stubs, overrides };
 }

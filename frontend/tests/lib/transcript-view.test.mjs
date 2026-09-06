@@ -34,6 +34,7 @@
 //   * `useRecordingState` is stubbed rather than wrapped; it throws outside its provider.
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 globalThis.giveJsdomALayout({ width: 800, height: 600 });
@@ -51,12 +52,12 @@ const segment = (i, over = {}) => ({
 });
 
 const overrides = {
+    ...boundaryStubs().modules,
   '@/contexts/RecordingStateContext': {
     // The component reads only `captureArmed` from the context: until the microphone has
     // delivered a frame the pane must not claim to be listening. `isRecording` is a prop.
     useRecordingState: () => ({ captureArmed: true }),
   },
-  'lucide-react': new Proxy({}, { get: () => () => null }),
 };
 
 const { VirtualizedTranscriptView } = loadTsx(

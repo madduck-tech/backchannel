@@ -223,6 +223,11 @@ const HELPERS = new Set([
   // two-sided on purpose: an oracle made only of broken controls it must catch is satisfied by
   // `exit 1`, which is the same shape as the defect the runner exists to close.
   'lib/control-runner.mjs',
+  // The boundary layer (#96). A helper with its own test file
+  // (`boundary-is-complete.test.mjs`) for the same reason `workflow-yaml.mjs` has one: it is
+  // hand-rolled, and the thing it hand-rolls — `sonner`'s surface — was wrong in all six copies it
+  // replaces.
+  'lib/boundary-stubs.mjs',
 ]);
 
 function testDirFiles(dir) {

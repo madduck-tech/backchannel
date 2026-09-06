@@ -111,6 +111,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the import dialog starting an import with no file, being dismissable while one is running, still offering Import during it, or dropping the path, the filename fallback, the null language for auto, or either half of the model choice | `import-dialog.test.mjs`, rendered and driven in jsdom |
 | a control that was published before the runner existed quietly ceasing to hold its line | `published-controls-still-hold.test.mjs`, the side of the runner's oracle nobody could tune |
 | a control that does nothing: a mutation that never landed, an anchor that no longer matches the line, a check that stayed green, a check that died without asserting, or a tree left changed | `controls-are-real.test.mjs`, over the runner in `control-runner.mjs` |
+| a boundary module the application calls but the shared stub layer does not offer, or a test rebuilding a stub the layer already covers | `boundary-is-complete.test.mjs`, over the layer in `boundary-stubs.mjs` |
 | the share of components a test has ever rendered falling, whether because a test stopped rendering one or because components were added faster than tests | `rendered-component-ratio.test.mjs`, which holds both the numerator and the denominator |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
@@ -118,7 +119,7 @@ so wiring a thing up, deleting it, or adding a new unreached one all force an ed
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 30 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 31 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
