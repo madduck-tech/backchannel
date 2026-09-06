@@ -77,6 +77,33 @@ export async function setupDom() {
     globalThis.matchMedia = mql;
   }
 
+  // jsdom performs no layout: every element is 0x0 and there is no `ResizeObserver`. A
+  // virtualised list therefore renders **nothing** — measured: `VirtualizedTranscriptView` with 25
+  // segments produced 0 rows, and a test written against that would have asserted an empty screen
+  // and passed. `giveJsdomALayout()` is opt-in rather than always on, because a component that is
+  // *not* virtualised should be tested against jsdom as it is.
+  //
+  // The fake is narrow and its shape matters: `@tanstack/virtual-core` reads
+  // `entry.borderBoxSize[0]`, not `contentRect`, so an observer reporting only `contentRect` looks
+  // exactly like one that works and still renders nothing.
+  globalThis.giveJsdomALayout = ({ width = 800, height = 600 } = {}) => {
+    dom.window.ResizeObserver = globalThis.ResizeObserver = class {
+      constructor(cb) { this.cb = cb; }
+      observe(el) { this.cb([{ target: el, borderBoxSize: [{ inlineSize: width, blockSize: height }] }], this); }
+      unobserve() {}
+      disconnect() {}
+    };
+    const rect = { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON() {} };
+    Object.defineProperty(dom.window.HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ ...rect }),
+    });
+    for (const [prop, value] of [['clientHeight', height], ['clientWidth', width]]) {
+      Object.defineProperty(dom.window.HTMLElement.prototype, prop, { configurable: true, get: () => value });
+    }
+    return { width, height };
+  };
+
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
   // Imported only after the globals exist: react-dom/client reads them at module scope.
