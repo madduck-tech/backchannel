@@ -92,6 +92,12 @@ export function loadTsx(entry, overrides = {}, barePackages = null) {
       // jsdom an origin, without which every access throws instead.
       get localStorage() { return globalThis.window?.localStorage; },
       get sessionStorage() { return globalThis.window?.sessionStorage; },
+      // Third of the same kind, after `alert` and `localStorage`: components reach for the bare
+      // global. `DownloadProgressStep.tsx:164` reads `navigator.userAgent` to decide whether the
+      // next step is macOS permissions, and died with `ReferenceError: navigator is not defined`
+      // inside an effect.
+      get navigator() { return globalThis.navigator; },
+      get location() { return globalThis.window?.location; },
       setTimeout,
       clearTimeout,
       setInterval,
