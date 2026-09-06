@@ -37,6 +37,21 @@ export async function setupDom() {
     if (k in globalThis && !FORCE.includes(k)) continue;
     try { globalThis[k] = dom.window[k]; } catch { /* getter-only, skip */ }
   }
+  // jsdom declares `alert`/`confirm`/`prompt` and then throws "not implemented" when called.
+  // `RecordingControls.tsx:62` calls `alert()` on its initialisation-failure path, so a component
+  // test reaches it and dies inside a passive effect, where the real error is three frames of
+  // React internals away from the cause. Recorded here rather than swallowed: the calls are
+  // captured so a test can assert one happened, and a component that starts alerting on a path it
+  // should not will show up as a captured call rather than as a crash.
+  globalThis.__alerts = [];
+  const capture = (kind) => (message) => { globalThis.__alerts.push({ kind, message: String(message) }); };
+  globalThis.alert = capture('alert');
+  globalThis.confirm = (m) => { capture('confirm')(m); return false; };
+  globalThis.prompt = (m) => { capture('prompt')(m); return null; };
+  dom.window.alert = globalThis.alert;
+  dom.window.confirm = globalThis.confirm;
+  dom.window.prompt = globalThis.prompt;
+
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
   // Imported only after the globals exist: react-dom/client reads them at module scope.

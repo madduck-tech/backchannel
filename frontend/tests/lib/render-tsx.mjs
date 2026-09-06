@@ -65,6 +65,19 @@ export function loadTsx(entry, overrides = {}) {
       window: globalThis.window,
       document: globalThis.document,
       React,
+      // The vm context has its own globals, so a browser API the harness defines on the outer
+      // `globalThis` is invisible here. `RecordingControls.tsx:62` calls `alert()` on its
+      // initialisation-failure path and died with `ReferenceError: alert is not defined` three
+      // frames deep in a React passive effect, where the message says nothing about the cause.
+      // Passed through rather than stubbed locally: `dom-harness.mjs` captures the calls, so a
+      // component that starts alerting on a path it should not shows up as a recorded call.
+      alert: globalThis.alert,
+      confirm: globalThis.confirm,
+      prompt: globalThis.prompt,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
     });
     cache.set(file, module.exports);
     return module.exports;
