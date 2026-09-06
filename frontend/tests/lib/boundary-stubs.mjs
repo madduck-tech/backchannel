@@ -57,7 +57,11 @@ export function toastMembersCalledInSource(dir = path.join(root, 'src')) {
  *
  * Three things the obvious version gets wrong, all present in this tree:
  *   * **Multi-line statements.** A line-based reader misses `lucide-react`'s two multi-line imports
- *     and the 23 names they carry. Hence the `s` flag and no per-line loop.
+ *     and the 23 names they carry. What carries that is the file being read whole and `[^}]*`
+ *     spanning newlines — **not** the `s` flag, which only governs `.` and is inert in this pattern
+ *     (measured: with and without it, a multi-line import matches; changing `[^}]*` to `[^}\n]*`
+ *     is what drops it). The flag is kept because the pattern is a `String.raw` block a future edit
+ *     may add a `.` to, but it is not what makes this work and the control targets `[^}]*`.
  *   * **Aliases.** `import { Database as DatabaseIcon }` requires the module to offer **`Database`**;
  *     the local name is the importer's business. The part before `as` is what is taken.
  *   * **Type-only bindings.** `import { type Foo }` needs no runtime value. None exist for these two
