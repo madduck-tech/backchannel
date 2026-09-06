@@ -93,7 +93,21 @@ const guardControl = (over = {}) => ({
 });
 
 const verdictOf = (results, id) => results.find((r) => r.id === id)?.verdict;
-const only = (control, options) => runControls([control], work, { timeoutMs: 20_000, ...options });
+
+// Every verdict this file has actually *observed*, collected as the fixtures run.
+//
+// The first version of the coverage check at the bottom compared a hardcoded literal set against
+// `Object.values(VERDICT)`. That is a self-report wearing the costume of verification: deleting an
+// entire must-catch fixture left the suite green and the summary line still claiming "6 verdicts,
+// each exercised" — measured. This issue's own thesis, reproduced inside the instrument built to
+// close it. The set is now built from what came back, so a deleted fixture removes a verdict from it.
+const observed = new Set();
+const record = (results) => {
+  for (const r of results) observed.add(r.verdict);
+  return results;
+};
+const only = (control, options) =>
+  record(runControls([control], work, { timeoutMs: 20_000, ...options }));
 
 // --- must-NOT-flag: a sound control comes back ok ------------------------------------------------
 {
@@ -170,7 +184,7 @@ const only = (control, options) => runControls([control], work, { timeoutMs: 20_
   // check that writes to that same file. The runner restores what each control mutated, so only the
   // batch-wide comparison can see it — which is why restoration is asserted over every touched file
   // at the end rather than trusted per control.
-  const results = runControls(
+  const results = record(runControls(
     [
       {
         id: 'other/limit',
@@ -184,7 +198,7 @@ const only = (control, options) => runControls([control], work, { timeoutMs: 20_
     ],
     work,
     { timeoutMs: 20_000 }
-  );
+  ));
   assert.ok(
     results.some((r) => r.verdict === VERDICT.notRestored),
     'a check with a side effect on another source must be reported as leaving the tree changed. An ' +
@@ -205,18 +219,20 @@ const only = (control, options) => runControls([control], work, { timeoutMs: 20_
 
 // --- every verdict the runner can produce is exercised ---------------------------------------------
 {
-  const exercised = new Set(['ok', 'check-stayed-green', 'mutation-did-not-land', 'anchor-drift',
-                             'died-without-asserting', 'not-restored']);
   assert.deepEqual(
-    [...exercised].sort(),
+    [...observed].sort(),
     Object.values(VERDICT).sort(),
-    'the runner grew a verdict this file does not exercise. Add a fixture for it: a failure mode ' +
-      'with no fixture is a failure mode nobody has seen work'
+    'the verdicts this run actually produced are not the verdicts the runner can produce.\n' +
+      '  observed: ' + [...observed].sort().join(', ') + '\n' +
+      '  declared: ' + Object.values(VERDICT).sort().join(', ') + '\n\n' +
+      '  Either the runner grew a verdict with no fixture — a failure mode nobody has seen work — ' +
+      'or a fixture was deleted and stopped producing one. Both are the same defect: a claim about ' +
+      'coverage that nothing measured.'
   );
 }
 
 fs.rmSync(work, { recursive: true, force: true });
 console.log(
-  `ok - control runner: ${Object.values(VERDICT).length} verdicts, each exercised; one sound ` +
+  `ok - control runner: ${observed.size} verdicts observed of ${Object.values(VERDICT).length} declared; one sound ` +
     'control passes and five broken ones are named'
 );
