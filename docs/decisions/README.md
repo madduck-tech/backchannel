@@ -21,6 +21,7 @@
 | [0017](0017-deny-rustc-warnings.md) | rustc warnings are denied, and the deny is held in place | accepted; supersedes 0016's "no lint in CI" for Rust |
 | [0018](0018-adopt-clippy.md) | clippy is adopted, and every allow says what it would cost to fix | accepted; completes 0017, supersedes 0016's "no lint in CI" in full |
 | [0019](0019-record-the-verification-environment.md) | A verification result carries the environment that produced it | accepted |
+| [0020](0020-no-updater-artifacts-without-an-identity.md) | No updater artifacts until this fork owns an updater identity | accepted |
 
 ## Deferred questions
 

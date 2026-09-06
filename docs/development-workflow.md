@@ -104,6 +104,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the sidebar losing the meetings list, mismarking the current meeting, leaving a deleted current meeting selected, letting a rename and the open meeting disagree, writing a blank title, or still reporting idle while recording | `sidebar.test.mjs`, rendered and driven in jsdom |
 | the transcript losing a row at the virtualisation threshold, leaving a hole in the rendered window, editing the text it displays, or showing a raw diarizer id beside a named speaker | `transcript-view.test.mjs`, rendered and driven in jsdom with a faked layout |
 | model settings saving a provider with no API key or a blank custom endpoint, keeping an untrimmed key, carrying one provider's custom endpoint into another's config, or telling the parent a configuration was saved after the backend refused it | `model-settings.test.mjs`, rendered and driven in jsdom |
+| updater artifacts being produced for an endpoint outside this fork, or being switched on while the fork owns no updater identity | `updater-identity.test.mjs` |
 | the share of components a test has ever rendered falling, whether because a test stopped rendering one or because components were added faster than tests | `rendered-component-ratio.test.mjs`, which holds both the numerator and the denominator |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
@@ -111,7 +112,7 @@ so wiring a thing up, deleting it, or adding a new unreached one all force an ed
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 23 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 24 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
