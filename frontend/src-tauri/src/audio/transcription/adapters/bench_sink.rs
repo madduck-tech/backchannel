@@ -172,6 +172,26 @@ impl<S: TranscriptSink> TranscriptSink for BenchSink<S> {
     }
 }
 
+impl<S> BenchSink<S> {
+    /// The summary of one recording, or `None` if nothing was committed.
+    ///
+    /// ADR 0008 states its criteria in p95, and this is the only place in the application that
+    /// produces one. It is *reported*, never enforced: the measurement needs an audio device and
+    /// 1.2 GB of models, and CI has neither, so nothing can go red on it. #65 says so rather than
+    /// letting a printed number look like a check.
+    pub fn summary(&mut self) -> Option<crate::audio::latency::Percentiles> {
+        crate::audio::latency::percentiles(&mut self.lags_ms.clone())
+    }
+}
+
+impl<S> Drop for BenchSink<S> {
+    fn drop(&mut self) {
+        if let Some(p) = crate::audio::latency::percentiles(&mut self.lags_ms.clone()) {
+            info!("BENCH SUMMARY committed-lag {p}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,25 +306,5 @@ mod tests {
         assert!(bench.due(t0 + Duration::from_secs(15)), "15s reopens it");
         assert!(!bench.due(t0 + Duration::from_secs(29)), "window restarts from the last line");
         assert!(bench.due(t0 + Duration::from_secs(30)));
-    }
-}
-
-impl<S> BenchSink<S> {
-    /// The summary of one recording, or `None` if nothing was committed.
-    ///
-    /// ADR 0008 states its criteria in p95, and this is the only place in the application that
-    /// produces one. It is *reported*, never enforced: the measurement needs an audio device and
-    /// 1.2 GB of models, and CI has neither, so nothing can go red on it. #65 says so rather than
-    /// letting a printed number look like a check.
-    pub fn summary(&mut self) -> Option<crate::audio::latency::Percentiles> {
-        crate::audio::latency::percentiles(&mut self.lags_ms.clone())
-    }
-}
-
-impl<S> Drop for BenchSink<S> {
-    fn drop(&mut self) {
-        if let Some(p) = crate::audio::latency::percentiles(&mut self.lags_ms.clone()) {
-            info!("BENCH SUMMARY committed-lag {p}");
-        }
     }
 }
