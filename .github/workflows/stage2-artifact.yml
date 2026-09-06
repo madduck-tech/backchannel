@@ -66,7 +66,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
-            fuse libfuse2 \
+            fuse libfuse2 xvfb dbus-x11 \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -104,6 +104,18 @@ jobs:
           [ -x "$APP" ] || { echo "$APP is not executable"; exit 1; }
           echo "built $APP ($(du -h "$APP" | cut -f1))"
           echo "APPIMAGE=$APP" >> "$GITHUB_ENV"
+
+      # #67 condition 0: can this application start with no desktop at all? Every other
+      # condition in that issue rests on the answer and nothing in this repository has ever
+      # measured it. A measurement, not a check — the probe always exits 0 and prints a verdict,
+      # because the honest answer might be "no" and a probe that fails the build when the answer
+      # is no is a probe nobody can afford to run.
+      #
+      # #43 already refuted the nearest neighbour: `stage2-ui-check.sh` under xvfb dies because a
+      # runner has no sink monitors. This asks a narrower question — no audio, no WebDriver, no
+      # interaction — and it asks it here rather than assuming an answer in an issue.
+      - name: Probe whether the application starts headless
+        run: scripts/headless-launch-probe.sh "$APPIMAGE" 25
 
       - name: Publish the artifact
         uses: actions/upload-artifact@v4
