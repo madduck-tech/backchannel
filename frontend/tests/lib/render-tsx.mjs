@@ -85,6 +85,13 @@ export function loadTsx(entry, overrides = {}, barePackages = null) {
       alert: globalThis.alert,
       confirm: globalThis.confirm,
       prompt: globalThis.prompt,
+      // Same class as `alert` above: components reach for the bare global, not `window.localStorage`.
+      // `ModelSettingsModal.handleSave` writes `providerModelMap` this way and died with
+      // `ReferenceError: localStorage is not defined` inside a click handler. jsdom's real storage is
+      // passed through, so a test can read back what the component wrote — `dom-harness.mjs` gives
+      // jsdom an origin, without which every access throws instead.
+      get localStorage() { return globalThis.window?.localStorage; },
+      get sessionStorage() { return globalThis.window?.sessionStorage; },
       setTimeout,
       clearTimeout,
       setInterval,
