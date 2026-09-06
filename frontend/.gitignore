@@ -54,3 +54,6 @@ next-env.d.ts
 
 # Visual Studio Build Tools installer — fetch from Microsoft, never commit
 vs_buildtools.exe
+
+# Written and removed per card by tests/lib/gallery.mjs; a killed child can leave one behind.
+src/__gallery_entry.tsx

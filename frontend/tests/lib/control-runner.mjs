@@ -42,9 +42,39 @@ export const VERDICT = {
 const DEFAULTS = {
   /** Per-check wall clock. A control that hangs is not a control. */
   timeoutMs: 90_000,
-  /** Heap cap for node checks. Portable in a way `systemd-run` is not: CI runs macOS and Windows. */
-  heapMb: 1024,
+  /**
+   * Memory cap for a check. Two mechanisms, and the difference was measured on 2026-09-06 after two
+   * more OOM kills of the IDE:
+   *
+   *   * `--max-old-space-size` bounds the **V8 heap only**. Under a 64 MB cap a node process reached
+   *     a peak RSS of **1.58 GB** by writing to `Buffer.allocUnsafe` — external allocations, which
+   *     jsdom makes constantly, are not counted. So the flag alone does not protect the machine, and
+   *     the mutation this runner exists to apply is exactly what produces a runaway: an unrestored
+   *     `{true && (` in `ImportAudioDialog.tsx` cost 22.9 GB on 2026-09-04.
+   *   * A cgroup cap bounds the process. `MemoryMax` **alone is not enough**: this machine has 7 GB
+   *     of swap, and measured, `MemoryMax=300M` let the same program allocate 1536 MB because the
+   *     kernel swapped rather than killed. `MemorySwapMax=0` is what makes it hard — with both, the
+   *     process dies and the caller sees exit **137**, which the branch below already handles.
+   *
+   * `systemd-run` is Linux-only and its user manager is not always present, so it is used when it
+   * works and the heap flag is the fallback. A degraded run **says so** rather than looking capped.
+   */
+  memoryMb: 1024,
 };
+
+/** Whether a kernel-enforced cap is available here. Probed once, not assumed. */
+let cgroupCapAvailable = null;
+export function kernelCapAvailable() {
+  if (cgroupCapAvailable === null) {
+    const probe = spawnSync(
+      'systemd-run',
+      ['--user', '--scope', '-q', '-p', 'MemoryMax=64M', '-p', 'MemorySwapMax=0', '--', 'true'],
+      { encoding: 'utf8', timeout: 10_000 }
+    );
+    cgroupCapAvailable = probe.status === 0;
+  }
+  return cgroupCapAvailable;
+}
 
 /**
  * @param {object} control
@@ -58,7 +88,7 @@ const DEFAULTS = {
  * @param {object} [options]
  */
 export function runControl(control, cwd, options = {}) {
-  const { timeoutMs, heapMb } = { ...DEFAULTS, ...options };
+  const { timeoutMs, memoryMb } = { ...DEFAULTS, ...options };
   const target = path.join(cwd, control.file);
   const before = fs.readFileSync(target);
   const lines = before.toString().split('\n');
@@ -92,7 +122,7 @@ export function runControl(control, cwd, options = {}) {
       };
     }
 
-    const argv = withHeapCap(control.check, heapMb);
+    const argv = withHeapCap(control.check, memoryMb);
     const run = spawnSync(argv[0], argv.slice(1), {
       cwd,
       timeout: timeoutMs,
@@ -152,9 +182,17 @@ export function runControls(controls, cwd, options = {}) {
 }
 
 /** `--max-old-space-size` for a node check; other commands are run as given. */
-function withHeapCap(argv, heapMb) {
+function withHeapCap(argv, memoryMb) {
   const [cmd, ...rest] = argv;
-  return path.basename(cmd).startsWith('node') ? [cmd, `--max-old-space-size=${heapMb}`, ...rest] : argv;
+  const capped = path.basename(cmd).startsWith('node')
+    ? [cmd, `--max-old-space-size=${memoryMb}`, ...rest]
+    : argv;
+  // The heap flag stays even under a cgroup: it makes V8 fail its own allocation with a stack rather
+  // than being SIGKILLed, which produces a far more useful failure when the cause is ordinary.
+  return kernelCapAvailable()
+    ? ['systemd-run', '--user', '--scope', '-q',
+       '-p', `MemoryMax=${memoryMb * 2}M`, '-p', 'MemorySwapMax=0', '--', ...capped]
+    : capped;
 }
 
 /** The first assertion line, so a passing control says what it proved. */

@@ -212,6 +212,15 @@ const HELPERS = new Set([
   'lib/render-tsx.mjs',
   'lib/dom-harness.mjs',
   'lib/tauri-stubs.mjs',
+  // The boundary layer (#96) and the gallery builder (#107). The gallery is a helper rather than a
+  // test for a measured reason: building all 78 cards takes **96 s** against the whole suite's 12 s,
+  // because each card is its own process. Putting that in the only required status check would make
+  // `pnpm test` nine times slower to produce a picture that asserts nothing. The cheap half of #107
+  // -- the denominator, the provider drift, the stub usage -- is in `gallery-is-complete.test.mjs`
+  // and runs here; the expensive half runs in `stage2-artifact.yml`, which already builds the
+  // frontend and is not a required check.
+  'lib/boundary-stubs.mjs',
+  'lib/gallery.mjs',
   // The workflow reader `lint-step-is-enforced.test.mjs` uses. A helper, and unusually a
   // helper with its own test file (`workflow-yaml.test.mjs`) — because it is hand-rolled
   // rather than a dependency, and a hand-rolled parser nobody tests is worse than the

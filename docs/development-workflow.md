@@ -113,13 +113,14 @@ What is machine-enforced rather than asked for, and the check that does it:
 | a control that does nothing: a mutation that never landed, an anchor that no longer matches the line, a check that stayed green, a check that died without asserting, or a tree left changed | `controls-are-real.test.mjs`, over the runner in `control-runner.mjs` |
 | a boundary module the application calls but the shared stub layer does not offer, or a test rebuilding a stub the layer already covers | `boundary-is-complete.test.mjs`, over the layer in `boundary-stubs.mjs` |
 | a component arriving with no test that renders it, a number being raised to absorb it, or a rendered component losing its test | `no-invisible-component.test.mjs`, which holds the unrendered set under equality and the rendered count under a floor |
+| the gallery drawing a different tree than the one under test, wrapping a provider stack the application does not mount, or server-rendering instead of mounting | `gallery-is-complete.test.mjs`, over the builder in `gallery.mjs` |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
 so wiring a thing up, deleting it, or adding a new unreached one all force an edit. Every other row
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 31 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 32 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and

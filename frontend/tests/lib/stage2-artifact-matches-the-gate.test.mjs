@@ -79,6 +79,24 @@ const workflowStep = (needle) => {
   return found[0];
 };
 
+/**
+ * The step that publishes the AppImage — located by what it uploads, not by being the first upload.
+ * #107 added a second `upload-artifact` (the component gallery) earlier in the job, and `find` on
+ * `uses` alone then silently pointed the `.built-from` assertion at the wrong artifact: the test went
+ * red naming a defect that was not there. A locator that depends on step order is the same class of
+ * fragility as the five `ls -t` expressions #103 replaced.
+ */
+const appImageUpload = () => {
+  const found = steps.filter(
+    (s) => String(s.keys.uses ?? '').includes('actions/upload-artifact') &&
+      /APPIMAGE/.test(String(s.keys.with ?? ''))
+  );
+  assert.equal(found.length, 1,
+    'expected exactly one upload-artifact step publishing the AppImage, found ' + found.length);
+  return found[0];
+};
+
+
 for (const [needle, what] of [
   ['cargo build --release -p llama-helper', 'the sidecar the app cannot build without'],
   ['tauri build --bundles appimage', 'the AppImage itself'],
@@ -119,7 +137,7 @@ for (const [level, keys, name] of [
 }
 
 // --- 5. a missing artifact is a failure, not a silence ----------------------------------
-const upload = steps.find((s) => String(s.keys.uses ?? '').includes('actions/upload-artifact'));
+const upload = appImageUpload();
 assert.ok(upload, 'stage2-artifact.yml builds an AppImage and uploads nothing');
 assert.match(
   String(upload.keys.with ?? ''),
@@ -223,7 +241,7 @@ const PROVENANCE = '.built-from';
 
 {
   // 1. The workflow publishes the provenance file, not only the AppImage.
-  const upload = steps.find((s) => String(s.keys.uses || '').startsWith('actions/upload-artifact'));
+  const upload = appImageUpload();
   assert.ok(upload, 'the AppImage job uploads nothing');
   // `workflow-yaml.mjs` keeps a `with:` block as its raw text and does not model block scalars
   // (its own header says so), so `path: |` is matched against that text rather than a parsed list.
