@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { setupDom, changeSelect } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -24,10 +25,10 @@ const DEVICES = [
 
 const stubs = tauriStubs({ devices: DEVICES });
 const { DeviceSelection } = loadTsx('src/components/DeviceSelection.tsx', {
+    ...boundaryStubs().modules,
   '@tauri-apps/api/core': stubs.core,
   '@tauri-apps/api/event': stubs.event,
   // Icons render as SVG and carry nothing asserted here.
-  'lucide-react': new Proxy({}, { get: () => () => null }),
 });
 
 // The component runs in a vm context, so objects it creates carry that context's Object

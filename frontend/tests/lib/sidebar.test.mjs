@@ -29,6 +29,7 @@
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -61,6 +62,7 @@ function harness({ isRecording = false, currentId = 'm-1' } = {}) {
     setMeetings: (m) => { seen.meetings = m; },
   };
   const overrides = {
+    ...boundaryStubs().modules,
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     'next/navigation': {
@@ -74,9 +76,7 @@ function harness({ isRecording = false, currentId = 'm-1' } = {}) {
     '@/contexts/ImportDialogContext': { useImportDialog: () => ({ openImportDialog: () => {} }) },
     '@/hooks/useAppVersion': { useAppVersion: () => '0.0.0-test' },
     // Icons render as SVG and carry nothing asserted here.
-    'lucide-react': new Proxy({}, { get: () => () => null }),
     // Toasts are user feedback, not state. Asserting on them would test sonner.
-    sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {} }) },
   };
   return { seen, stubs, overrides };
 }
@@ -250,6 +250,18 @@ const click = async (el) => { await act(async () => { el.dispatchEvent(new windo
 //
 // `@tauri-apps/plugin-updater` in this list is not incidental: the sidebar's About surface reaches
 // the updater, which is the runtime path #79 is about.
+// **What the boundary layer serves is invisible to `barePackages`, so it is asserted beside it.**
+// `render-tsx.mjs:67` consults `overrides` before `nodeRequire`, so a module the layer covers never
+// reaches the recorder — the layer's coverage is exactly this check's blind spot, and #96 created
+// it by moving `lucide-react` and `sonner` into the layer. Holding both lists means a component that
+// starts importing a covered module still moves something a person reads.
+assert.deepEqual(
+  boundaryStubs().covered.sort(),
+  ['lucide-react', 'sonner'],
+  'the boundary layer changed what it covers. Whatever it serves is invisible to `barePackages` ' +
+    'below, so the two lists together are the whole of what this component reached.'
+);
+
 assert.deepEqual(
   [...barePackages].sort(),
   [

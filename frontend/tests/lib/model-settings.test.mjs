@@ -31,6 +31,7 @@
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -66,6 +67,7 @@ function harness({ config = {}, failCustomSave = false } = {}) {
   });
   const modelConfig = { ...BASE, ...config };
   const overrides = {
+    ...boundaryStubs().modules,
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     // The component's own fallback: "use ConfigContext if available, fallback to props".
@@ -76,8 +78,6 @@ function harness({ config = {}, failCustomSave = false } = {}) {
     },
     // Component 7 on the same list; it owns its own download and disk state.
     '@/components/BuiltInModelManager': { BuiltInModelManager: () => null },
-    'lucide-react': new Proxy({}, { get: () => () => null }),
-    sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {} }) },
   };
   return { seen, stubs, overrides, modelConfig };
 }

@@ -21,6 +21,7 @@
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
+import { boundaryStubs } from './boundary-stubs.mjs';
 
 const { React, createRoot, act } = await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
@@ -46,11 +47,11 @@ const recordingStateStub = (isPaused) => ({
 
 function load(isPaused = false) {
   return loadTsx('src/components/RecordingControls.tsx', {
+    ...boundaryStubs().modules,
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     '@/contexts/RecordingStateContext': recordingStateStub(isPaused),
     // Icons render as SVG and carry nothing asserted here.
-    'lucide-react': new Proxy({}, { get: () => () => null }),
   });
 }
 
