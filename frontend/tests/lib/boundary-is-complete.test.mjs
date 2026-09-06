@@ -10,8 +10,25 @@
 //     component that starts calling `toast.loading` moves this check, not a runtime TypeError three
 //     tests later. Falsifiable: delete a member and it names the callers.
 //   * **`lucide-react` has no surface to check.** Its stub is `new Proxy({}, { get: () => () => null })`,
-//     total by construction, so a completeness check over it is decoration and is not written. Said
-//     here rather than silently omitted.
+//     total by construction. Section 3 runs over it anyway, and says so: the value of doing that is
+//     not catching a missing icon (impossible) but proving the *predicate* works, because the two
+//     obvious predicates do not.
+//
+// #104 added section 3, and the reason is that sections 1 and 2 measured a proxy for the thing.
+// Section 1 derives `toast.<member>` **call sites**; nothing read which **names** the source binds.
+// So `import { Toaster } from 'sonner'` (`AppToaster.tsx:3`) was uncovered while the check whose
+// stated job is completeness reported completeness. Measured: `AppToaster` loaded fine and died only
+// on render, with `Element type is invalid ... got: undefined`.
+//
+// The two derivations are orthogonal and both are kept. Knowing `toast` is bound says nothing about
+// which members are invoked; knowing the members says nothing about `Toaster`.
+//
+// **Default and namespace imports are out of scope, and this is the reason.** `grep` over `src/`
+// finds zero of either from either covered module, so an assertion would have no subject. And the
+// failure they would cause is not the loud one: the loader transpiles with `esModuleInterop`, so
+// `import Foo from 'sonner'` binds `__importDefault(stub)` — the whole stub object, not `undefined` —
+// and `import Lucide from 'lucide-react'` binds the Proxy itself. Both bind silently wrong values
+// rather than throwing, which is worth a sentence here and not worth a check with no subject.
 //
 // And the deduplication itself: no test may build its own stub for a module the layer covers.
 // Deliberately narrow — `next/navigation` and the context hooks are *not* covered, because those
@@ -20,7 +37,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boundaryStubs, toastMembersCalledInSource } from './boundary-stubs.mjs';
+import { createElement } from 'react';
+import { boundaryStubs, toastMembersCalledInSource, namedImportsFromSource } from './boundary-stubs.mjs';
+import { loadTsx, renderStatic } from './render-tsx.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -108,7 +127,82 @@ function callersOf(member) {
   );
 }
 
+// --- 3: every name the source *binds* is offered, for every covered module -----------------------
+//
+// The predicate is **property access**, and that is not a stylistic choice. `lucide-react`'s stub is
+// a `Proxy` with a `get` trap and no `has` trap, so `Object.keys(stub)` is `[]` and `'Camera' in stub`
+// is `false`, while `stub.Camera !== undefined` is `true`. A check written either of the first two
+// ways reports all 67 lucide names as missing — it would fail loudly for the wrong reason, which is
+// the better of the two bad outcomes, but it would also be rewritten to "skip the Proxy" and the
+// coverage would quietly vanish.
+// The derivation is pinned before it is consumed, for the reason section 1 gives: a derived set that
+// nothing pins moves silently. And here it is worse than silent. A control found it -- changing
+// `[^}]*` to `[^}\n]*`, which drops both multi-line `lucide-react` statements and the 23 names they
+// carry, left this section **green**, because the only module with multi-line imports is the one
+// whose Proxy answers every name. So the multi-line reader was unobservable: real, and asserted by
+// nothing. The count is what makes it observable.
+//
+// `sonner` is pinned by name because it is the module where a name can actually be missing.
+// `lucide-react` is pinned by count: 67 icon names would be noise, its stub is total by construction
+// so the *content* cannot fail, and the number is exactly what a line-based reader would move.
+const BOUND_IN_SOURCE = { sonner: ['Toaster', 'toast'], 'lucide-react': 67 };
+
+{
+  const { modules, covered } = boundaryStubs();
+
+  assert.deepEqual(
+    [...namedImportsFromSource('sonner')].sort(),
+    BOUND_IN_SOURCE.sonner,
+    'the names this application binds from `sonner` have moved.\n' +
+      '  now: ' + [...namedImportsFromSource('sonner')].sort().join(', ') + '\n' +
+      '  pinned: ' + BOUND_IN_SOURCE.sonner.join(', ')
+  );
+  assert.equal(
+    namedImportsFromSource('lucide-react').size,
+    BOUND_IN_SOURCE['lucide-react'],
+    'the number of `lucide-react` names bound in src/ has moved.\n' +
+      `  now: ${namedImportsFromSource('lucide-react').size}, pinned: ${BOUND_IN_SOURCE['lucide-react']}\n\n` +
+      '  If this dropped by roughly 23, the import reader stopped spanning newlines and the two ' +
+      'multi-line statements in ImportAudioDialog.tsx and Sidebar/index.tsx went unread.'
+  );
+
+  const missing = [];
+  for (const module of covered) {
+    for (const name of [...namedImportsFromSource(module)].sort()) {
+      if (modules[module][name] === undefined) missing.push(`${module} does not offer ${name}`);
+    }
+  }
+  assert.deepEqual(
+    missing,
+    [],
+    'the application binds a name the boundary layer does not offer:\n    ' +
+      missing.join('\n    ') +
+      '\n\n  A component importing this name cannot render through the layer at all — it fails with ' +
+      '"Element type is invalid ... got: undefined", three frames from anything that names the ' +
+      'cause. Add it to the stub in boundary-stubs.mjs.'
+  );
+}
+
+// --- 4: the file the hole was observable on renders through the layer -----------------------------
+//
+// Section 3 is a set comparison and a set comparison can be satisfied by a stub that is present and
+// useless. This renders the real component through the real layer, which is the thing section 3 is a
+// proxy for. `AppToaster.tsx` is the one file in the tree that imports a non-`toast` name from a
+// covered module, so it is the whole subject of the defect.
+{
+  const { AppToaster } = loadTsx('src/components/AppToaster.tsx', boundaryStubs().modules);
+  const markup = renderStatic(createElement(AppToaster));
+  assert.match(
+    markup,
+    /data-toaster="yes"/,
+    'AppToaster did not render through the boundary layer. Before #104 this threw ' +
+      '"Element type is invalid ... got: undefined" because the layer offered no `Toaster`.\n' +
+      `  got: ${markup}`
+  );
+}
+
 console.log(
   `ok - boundary layer: ${[...toastMembersCalledInSource()].sort().join(', ')} derived from src/, ` +
-    'and no test rebuilds a covered module'
+    `${namedImportsFromSource('sonner').size} sonner + ${namedImportsFromSource('lucide-react').size} ` +
+    'lucide names bound in src/ and all offered, and no test rebuilds a covered module'
 );

@@ -60,7 +60,6 @@ const BACKLOG = new Set([
   'src/components/AISummary/Section.tsx',
   'src/components/AISummary/index.tsx',
   'src/components/About.tsx',
-  'src/components/AppToaster.tsx',
   'src/components/AudioBackendSelector.tsx',
   'src/components/AudioPlayer.tsx',
   'src/components/BlockNoteEditor/BasicBlockNoteTest.tsx',
@@ -174,7 +173,7 @@ assertSetEquals(
 // --- and the count of rendered components never falls ---------------------------------------------
 //
 // Set equality alone would let a rendered component and its test disappear together in silence.
-const FLOOR = 10;
+const FLOOR = 11;
 assert.ok(
   rendered.size >= FLOOR,
   `${rendered.size} components are rendered by a test; the floor is ${FLOOR}. Something that had a ` +

@@ -17,6 +17,7 @@
 // tests/lib/*.test.mjs | grep -v "sonner:"` → empty) and is exactly the kind of fact that stops being
 // true. When an assertion needs to see `toast.error` called, it passes `extra` rather than editing
 // this file.
+import { createElement } from 'react';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +48,56 @@ export function toastMembersCalledInSource(dir = path.join(root, 'src')) {
   return members;
 }
 
+/**
+ * Every name bound by `import { … } from '<module>'` across `src/`, read from the source rather than
+ * from what a test happened to need. Companion to `toastMembersCalledInSource`, and a *different*
+ * question: that one asks which members are invoked on `toast`, this one asks which names the
+ * application binds at all. Knowing `toast` is imported says nothing about `toast.warning`, and
+ * knowing the members says nothing about `Toaster` — which is exactly the hole this closes (#104).
+ *
+ * Three things the obvious version gets wrong, all present in this tree:
+ *   * **Multi-line statements.** A line-based reader misses `lucide-react`'s two multi-line imports
+ *     and the 23 names they carry. What carries that is the file being read whole and `[^}]*`
+ *     spanning newlines — **not** the `s` flag, which only governs `.` and is inert in this pattern
+ *     (measured: with and without it, a multi-line import matches; changing `[^}]*` to `[^}\n]*`
+ *     is what drops it). The flag is kept because the pattern is a `String.raw` block a future edit
+ *     may add a `.` to, but it is not what makes this work and the control targets `[^}]*`.
+ *   * **Aliases.** `import { Database as DatabaseIcon }` requires the module to offer **`Database`**;
+ *     the local name is the importer's business. The part before `as` is what is taken.
+ *   * **Type-only bindings.** `import { type Foo }` needs no runtime value. None exist for these two
+ *     modules today, and dropping them keeps that true if one appears.
+ */
+export function namedImportsFromSource(module, dir = path.join(root, 'src')) {
+  const names = new Set();
+  const pattern = new RegExp(
+    String.raw`import\s*\{([^}]*)\}\s*from\s*['"]` +
+      module.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`) +
+      String.raw`['"]`,
+    'gs'
+  );
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(e.name)) {
+        const body = fs
+          .readFileSync(full, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        for (const m of body.matchAll(pattern)) {
+          for (const raw of m[1].split(',')) {
+            const part = raw.trim();
+            if (!part || part.startsWith('type ')) continue;
+            names.add(part.split(/\s+as\s+/)[0].trim());
+          }
+        }
+      }
+    }
+  };
+  walk(dir);
+  return names;
+}
+
 /** Icons render as SVG and no assertion in this repository looks at one. */
 const lucide = () => new Proxy({}, { get: () => () => null });
 
@@ -63,7 +114,19 @@ function sonner() {
       [...toastMembersCalledInSource()].map((m) => [m, (...args) => calls.push({ member: m, args })])
     )
   );
-  return { module: { toast }, calls };
+  // `Toaster` is the container, imported by `AppToaster.tsx` and offered by nothing until #104.
+  // It renders a marker rather than `null` for the same reason `toast` records its calls: the props
+  // that matter here are `theme` and `position`, and the component exists *because* bottom-center is
+  // the recording transport's slot. A test that wants to assert that should not have to fork this
+  // stub. Icons get a Proxy of `() => null` because 69 markers would be noise; this is one component
+  // with two meaningful props, which is a different case and is decided differently.
+  const Toaster = (props = {}) =>
+    createElement('div', {
+      'data-toaster': 'yes',
+      'data-theme': props.theme ?? '',
+      'data-position': props.position ?? '',
+    });
+  return { module: { toast, Toaster }, calls };
 }
 
 /**
