@@ -23,8 +23,16 @@ import {
 
 // Registered but never invoked. One line each; the reason is the point of the list.
 const NEVER_INVOKED = new Set([
-  // Deliberate and permanent: #[cfg(debug_assertions)], invoked from the devtools console
-  // by hand. Its own header says so. This entry can never leave the list.
+  // NOT permanent — pending a measurement (#87). `#[cfg(debug_assertions)]`, invoked from the
+  // devtools console by hand, so no frontend source can ever reference it and this check cannot
+  // see it any other way.
+  //
+  // The previous comment here said "this entry can never leave the list" and cited the probe's
+  // own header as saying so. That header says the opposite: the probe "exists to produce the one
+  // number nobody in this repo has, and then to be deleted or kept as an instrument", with an
+  // exit criterion written before the body. That number has still not been taken -- it is not in
+  // `docs/milestones/`, which measures the decode half, not capture start -- so this entry
+  // records an open question, not a settled exception. It leaves the list when #87 closes.
   'dictation_probe',
 ]);
 
