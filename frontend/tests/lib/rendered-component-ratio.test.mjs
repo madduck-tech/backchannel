@@ -65,7 +65,7 @@ for (const file of testFiles) {
 // Raising `RENDERED`: a component gained a test that renders it. Good — raise it.
 // Raising `TOTAL`: a component was added. That is not automatically bad, but it dilutes the ratio,
 // and the point of failing here is that the dilution is acknowledged rather than absorbed.
-const RENDERED = 9;
+const RENDERED = 10;
 const TOTAL = 75;
 
 const ratio = ((rendered.size / components.size) * 100).toFixed(1);
