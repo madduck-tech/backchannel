@@ -1,3 +1,4 @@
+pub mod latency;
 // src/audio/mod.rs
 pub mod audio_processing;
 pub mod decoder;
