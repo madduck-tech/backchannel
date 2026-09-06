@@ -279,6 +279,50 @@ const PROVENANCE = '.built-from';
   );
 }
 
+// --- #101: a probe that always exits 0 must not be deletable in silence -------------------------
+//
+// Both probes in this workflow are *measurements*: they exit 0 whatever they find, following ADR 0019
+// and `environment-record.sh` ("It is a record, not a check"). That is right -- the honest answer may
+// be "no", and a probe that fails the build when the answer is no is one nobody can afford to run.
+//
+// But it means nothing fails if either one is deleted, renamed, or quietly stops running. Before
+// this, the test pinned the deb-install step and **nothing** about either probe: an always-green step
+// could vanish and no check would notice. That is the `#[ignore]` shape in a third costume.
+//
+// The probe steps are pinned by their `run:`, never by their `name:` -- `workflowStep` filters on
+// `run` (see its definition), so a rename would stay green. A control that renames the step and
+// expects red is a control that does nothing.
+{
+  for (const script of ['headless-launch-probe.sh', 'webdriver-probe.sh']) {
+    const step = workflowStep(script);
+    assert.match(
+      String(step.keys.run),
+      new RegExp(script.replace('.', '\\.')),
+      `stage2-artifact.yml no longer runs ${script}. An always-exit-0 probe that stops running looks ` +
+        'exactly like one that runs and finds nothing.'
+    );
+  }
+
+  // And the verdict line itself, because a probe whose output nobody can parse cannot distinguish
+  // "measured, and the answer was no" from "never ran". Only #101's probe is held to this:
+  // `headless-launch-probe.sh` predates the contract and emits a prose line, and changing it is not
+  // this change's business.
+  const probe = fs.readFileSync(path.join(repo, 'scripts/webdriver-probe.sh'), 'utf8');
+  assert.match(
+    probe,
+    /verdict=%s/,
+    'scripts/webdriver-probe.sh no longer prints a machine-readable `verdict=` line, so a reader ' +
+      'cannot tell an answered NO from a probe that silently did nothing.'
+  );
+  for (const outcome of ['YES', 'NO', 'NOT_ATTEMPTED']) {
+    assert.ok(
+      probe.includes(`verdict ${outcome}`),
+      `scripts/webdriver-probe.sh can never print verdict=${outcome}. All three outcomes must be ` +
+        'reachable, or the probe is not measuring what it claims.'
+    );
+  }
+}
+
 console.log(
   `ok - stage 2 artifact: ${steps.length} steps on pnpm ${pnpmDeclared[1]} / rust ${rustDeclared[1]}, on=[${wf.on.join(', ')}] unfiltered, the sidecar ` +
     'and AppImage commands are gopnik stage 2 verbatim, nothing is switched off, and a missing ' +
