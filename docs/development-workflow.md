@@ -112,7 +112,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | a control that was published before the runner existed quietly ceasing to hold its line | `published-controls-still-hold.test.mjs`, the side of the runner's oracle nobody could tune |
 | a control that does nothing: a mutation that never landed, an anchor that no longer matches the line, a check that stayed green, a check that died without asserting, or a tree left changed | `controls-are-real.test.mjs`, over the runner in `control-runner.mjs` |
 | a boundary module the application calls but the shared stub layer does not offer, or a test rebuilding a stub the layer already covers | `boundary-is-complete.test.mjs`, over the layer in `boundary-stubs.mjs` |
-| the share of components a test has ever rendered falling, whether because a test stopped rendering one or because components were added faster than tests | `rendered-component-ratio.test.mjs`, which holds both the numerator and the denominator |
+| a component arriving with no test that renders it, a number being raised to absorb it, or a rendered component losing its test | `no-invisible-component.test.mjs`, which holds the unrendered set under equality and the rendered count under a floor |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
 so wiring a thing up, deleting it, or adding a new unreached one all force an edit. Every other row
