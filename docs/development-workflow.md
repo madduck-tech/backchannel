@@ -108,6 +108,7 @@ What is machine-enforced rather than asked for, and the check that does it:
 | the retranscribe dialog naming a meeting other than the one it was opened for, starting without the recording it would re-read, sending "auto" as a language, being dismissable mid-rewrite, cancelling without cancelling, or stranding the user after a failed start | `retranscribe-dialog.test.mjs`, rendered and driven in jsdom |
 | the model manager offering Download on a row that is already downloading, letting Download, Cancel or Delete name a different row, leaving a cancelled download stuck, or auto-selecting a model that is corrupted or absent | `model-manager.test.mjs`, rendered and driven in jsdom |
 | the first-run screen letting a new user past with no transcription engine, trusting the downloaded flag instead of asking the backend, completing onboarding twice on a double press, or stranding the user on a spinner after a failed completion | `first-run-step.test.mjs`, rendered and driven in jsdom |
+| the import dialog starting an import with no file, being dismissable while one is running, still offering Import during it, or dropping the path, the filename fallback, the null language for auto, or either half of the model choice | `import-dialog.test.mjs`, rendered and driven in jsdom |
 | the share of components a test has ever rendered falling, whether because a test stopped rendering one or because components were added faster than tests | `rendered-component-ratio.test.mjs`, which holds both the numerator and the denominator |
 
 The three reachability checks — and only those three — hold their allowlists under **set equality**,
@@ -115,7 +116,7 @@ so wiring a thing up, deleting it, or adding a new unreached one all force an ed
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 27 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 28 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and
