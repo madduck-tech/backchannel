@@ -322,6 +322,36 @@ assert.match(
     'line look the same in the output that a verdict pastes'
 );
 
+// --- no workflow builds the sidecar with a feature that cannot build ---------------------
+// #6. `build-devtest.yml` built `llama-helper` for Windows with `--features vulkan` and died in
+// `llama-cpp-sys-2`'s cmake script before reaching the Tauri build. `build.yml:560-566` had
+// already decided against it *and written down why* — "Vulkan build has CMake race condition
+// issues with llama-cpp-sys-2" — and the other file did not know.
+//
+// The rule is narrow on purpose: the Tauri app itself DOES build with `--features vulkan` on
+// Windows (whisper-rs, `build-devtest.yml:333`) and that is correct. Only the sidecar is
+// forbidden, so this looks at lines that build llama-helper.
+const workflowDir = path.join(repo, '.github/workflows');
+const sidecarVulkan = [];
+for (const name of fs.readdirSync(workflowDir).filter((f) => f.endsWith('.yml'))) {
+  const text = fs.readFileSync(path.join(workflowDir, name), 'utf8');
+  const lines = text.split('\n');
+  lines.forEach((line, i) => {
+    if (line.trim().startsWith('#')) return;
+    const buildsSidecar = /LLAMA_FEATURES\s*=.*vulkan/.test(line)
+      || (/cargo build .*-p llama-helper/.test(line) && /vulkan/.test(line));
+    if (buildsSidecar) sidecarVulkan.push(`${name}:${i + 1}  ${line.trim()}`);
+  });
+}
+assert.deepEqual(
+  sidecarVulkan,
+  [],
+  'a workflow builds llama-helper with Vulkan:\n  ' + sidecarVulkan.join('\n  ') +
+    '\n\n  build.yml:560-566 records why that fails — a cmake race in llama-cpp-sys-2 — and #6 was ' +
+    'the Windows leg dying there before it reached the Tauri build. The app\'s own Vulkan feature ' +
+    'is fine and untouched by this check; only the sidecar is forbidden.'
+);
+
 // --- the eslint config is backed by what it imports -------------------------------------
 // The original defect: `eslint.config.mjs` was committed importing `@eslint/eslintrc`, which
 // was never installed, so it threw on import before reaching a rule. Deleting the file is a
