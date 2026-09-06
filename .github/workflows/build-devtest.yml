@@ -373,8 +373,12 @@ jobs:
             LLAMA_FEATURES="--features metal"
             echo "Using Metal GPU acceleration for macOS"
           elif [[ "${{ matrix.platform }}" == *"windows"* ]]; then
-            LLAMA_FEATURES="--features vulkan"
-            echo "Using Vulkan GPU acceleration for Windows"
+            # CPU-only, matching build.yml:562-565, which says why: "Vulkan build has CMake race
+            # condition issues with llama-cpp-sys-2". This file did not know that and the Windows
+            # leg failed in llama-cpp-sys-2's build script before it ever reached the Tauri build
+            # (#6). The Tauri app still uses Vulkan for transcription; llama-helper is LLM
+            # inference and runs fine on CPU.
+            echo "Using CPU-only mode for Windows (see build.yml: Vulkan + llama-cpp-sys-2)"
           else
             echo "Using CPU-only mode for Linux"
           fi
