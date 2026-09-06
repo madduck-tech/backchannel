@@ -22,6 +22,11 @@ let dom;
 export async function setupDom() {
   dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     pretendToBeVisual: true,
+    // Without a URL, jsdom serves an *opaque* origin and every `localStorage` access throws
+    // `SecurityError: localStorage is not available for opaque origins`. The theme toggle in the
+    // sidebar's tree reads it, so the component died on a line that has nothing to do with the
+    // component. A real origin is also the more faithful mirror: the application always has one.
+    url: 'http://localhost/',
   });
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
@@ -51,6 +56,26 @@ export async function setupDom() {
   dom.window.alert = globalThis.alert;
   dom.window.confirm = globalThis.confirm;
   dom.window.prompt = globalThis.prompt;
+
+  // jsdom implements no `matchMedia` at all, and the theme hook calls it during render through
+  // `useSyncExternalStore`. This returns a permanently non-matching query with working listener
+  // methods, which is the light-theme branch — enough for a component that only asks, and honest
+  // about what it is: a test cannot change the OS colour scheme, so no test may assert on the dark
+  // branch through this. A component whose behaviour depends on the media query needs its own stub.
+  if (typeof dom.window.matchMedia !== 'function') {
+    const mql = (media) => ({
+      media,
+      matches: false,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => false,
+    });
+    dom.window.matchMedia = mql;
+    globalThis.matchMedia = mql;
+  }
 
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 

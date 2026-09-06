@@ -5,9 +5,18 @@
 //
 // Deliberately not a bundler. It resolves exactly two kinds of specifier — local files, by
 // the same rules tsconfig declares, and bare package names, through Node's own resolver —
-// and it lets the caller override any of them. A component that grows a dependency the test
-// has not accounted for fails loudly here rather than silently pulling half the application
-// into the run.
+// and it lets the caller override any of them.
+//
+// This header used to claim that a component growing an unaccounted dependency "fails loudly
+// here". It did not, and #66 condition 2 rested on that claim. A bare specifier that resolves in
+// `node_modules` — which is every dependency the application actually has — was loaded silently by
+// `nodeRequire`; only a package that does not exist ever threw. Measured: adding a *used*
+// `import { getVersion } from '@tauri-apps/api/app'` to a component under test changed nothing.
+//
+// So the promise is made true a different way: pass a `Set` as the third argument and every bare
+// package the load reached is recorded into it. A test then holds that set, and a new dependency
+// moves it. Loudness by set equality in the caller, not by an exception here — the same idiom the
+// reachability checks use.
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -36,7 +45,7 @@ function resolveLocal(spec, fromFile) {
  * @param entry     path relative to the frontend package
  * @param overrides map of specifier -> module object, consulted before anything else
  */
-export function loadTsx(entry, overrides = {}) {
+export function loadTsx(entry, overrides = {}, barePackages = null) {
   const cache = new Map();
 
   function load(file) {
@@ -58,6 +67,8 @@ export function loadTsx(entry, overrides = {}) {
         if (Object.prototype.hasOwnProperty.call(overrides, spec)) return overrides[spec];
         const local = resolveLocal(spec, file);
         if (local) return load(local);
+        // A bare package. Recorded before it is loaded, so the caller can hold the set.
+        if (barePackages) barePackages.add(spec);
         return nodeRequire(spec);
       },
       console,
