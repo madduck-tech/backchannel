@@ -105,6 +105,21 @@ jobs:
           echo "built $APP ($(du -h "$APP" | cut -f1))"
           echo "APPIMAGE=$APP" >> "$GITHUB_ENV"
 
+      # #67 conditions 1 and 2, and the observation #5 could not be made without.
+      #
+      # The `.deb` is built here and installed in a CLEAN container — not on this runner, which has
+      # every build dependency and would pass while the package is still broken. That is the whole
+      # point of the check and not a detail of how it is run: #5 (`libopenblas.so.0` linked and
+      # undeclared) was found by hand, once, on a bundle somebody had to produce by hand first.
+      #
+      # Unlike the headless probe below, this one FAILS. A package that cannot be installed, or
+      # that installs and cannot start, is a release nobody should be able to cut.
+      - name: Build the .deb
+        run: cd frontend && ./node_modules/.bin/tauri build --bundles deb --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Install the .deb in a clean container and launch it
+        run: scripts/deb-install-check.sh "$(ls -t target/release/bundle/deb/*.deb | head -1)" 20
+
       # #67 condition 0: can this application start with no desktop at all? Every other
       # condition in that issue rests on the answer and nothing in this repository has ever
       # measured it. A measurement, not a check — the probe always exits 0 and prints a verdict,
