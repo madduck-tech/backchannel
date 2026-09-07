@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>Backchannel — reference components</title>
+<link rel="stylesheet" href="./tokens.css">
+<style>
+  /* Every rule below reads only from tokens.css. A value written literally here
+     would be a token this system does not declare — which is exactly what the
+     fixture exists to make impossible. */
+
+  body {
+    margin: 0;
+    padding: var(--space-8);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: var(--leading-body);
+  }
+
+  .stack { display: flex; flex-direction: column; gap: var(--space-6); max-width: var(--measure); }
+
+  /* --- surfaces: border-first elevation, no drop shadows on the app window --- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+  }
+  .panel-warm { background: var(--surface-warm); border-color: var(--border-soft); }
+  .well {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--meta);
+  }
+
+  /* --- typography --- */
+  .title { font-family: var(--font-display); font-size: var(--text-2xl); line-height: var(--leading-tight); margin: 0; }
+  .subtitle { font-size: var(--text-md); color: var(--fg-2); margin: var(--space-1) 0 0; }
+  .caption { font-size: var(--text-xs); color: var(--muted); }
+
+  /* --- buttons --- */
+  .btn {
+    font: inherit;
+    font-size: var(--text-sm);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--fg);
+    transition: background var(--motion-fast) var(--ease-standard);
+  }
+  .btn:hover { background: var(--surface-warm); }
+  .btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .btn-primary { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:active { background: var(--accent-active); }
+  .btn-quiet { background: var(--accent-soft); color: var(--accent-soft-on); border-color: transparent; }
+  .btn-danger { background: var(--danger); color: var(--danger-on); border-color: var(--danger); }
+
+  /* --- form controls --- */
+  .field { display: flex; flex-direction: column; gap: var(--space-1); }
+  .label { font-size: var(--text-sm); color: var(--fg-2); }
+  .input {
+    font: inherit;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
+
+  /* --- status --- */
+  .badge {
+    display: inline-block;
+    font-size: var(--text-2xs);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-pill);
+  }
+  .badge-info { background: var(--info-soft); color: var(--info); }
+  .badge-danger { background: var(--danger-soft); color: var(--danger); }
+  .badge-success { background: var(--accent-soft); color: var(--success); }
+
+  /* --- overlay: the second surface, floating over other applications --- */
+  .overlay {
+    width: var(--overlay-w);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-float);
+    padding: var(--space-4);
+  }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <header>
+      <h1 class="title">Backchannel</h1>
+      <p class="subtitle">Reference components. Every visible value comes from <code>tokens.css</code>.</p>
+    </header>
+
+    <section class="panel">
+      <h2 class="title" style="font-size: var(--text-lg)">Buttons</h2>
+      <p class="caption">Border-first elevation: a control is a border and a fill, never a shadow.</p>
+      <p>
+        <button class="btn">Cancel</button>
+        <button class="btn btn-primary">Start recording</button>
+        <button class="btn btn-quiet">Import audio</button>
+        <button class="btn btn-danger">Stop</button>
+      </p>
+    </section>
+
+    <section class="panel panel-warm">
+      <h2 class="title" style="font-size: var(--text-lg)">Inputs</h2>
+      <div class="field">
+        <label class="label" for="meeting">Meeting name</label>
+        <input class="input" id="meeting" value="Weekly architecture">
+      </div>
+      <p class="well">parakeet-tdt-0.6b-v3-q8 · 16 kHz · local</p>
+    </section>
+
+    <section class="panel">
+      <h2 class="title" style="font-size: var(--text-lg)">Status</h2>
+      <p>
+        <span class="badge badge-info">Transcribing</span>
+        <span class="badge badge-success">Saved</span>
+        <span class="badge badge-danger">Recording</span>
+      </p>
+    </section>
+
+    <aside class="overlay">
+      <p class="caption">Overlay surface — floats over other applications at a fixed width.</p>
+    </aside>
+  </div>
+</body>
+</html>
