@@ -217,7 +217,13 @@ const TranscriptLine = memo(function TranscriptLine({
     return (
         <p
             id={`segment-${id}`}
-            className={cn('min-w-0 text-md leading-relaxed', isSilence && 'italic opacity-70')}
+            className={cn(
+                // `break-words` is not cosmetic: a single 141-character token measured
+                // `scrollWidth` 1062 against `clientWidth` 359 on the geometry this replaces,
+                // so the transcript already scrolled sideways. #118 condition 7.
+                'min-w-0 break-words text-md leading-relaxed',
+                isSilence && 'italic opacity-70'
+            )}
         >
             {speaker && (
                 <SpeakerTag speaker={speaker} speakerNames={speakerNames} onRename={onRenameSpeaker} />
@@ -257,7 +263,13 @@ const ConversationTurn = memo(function ConversationTurn({
         <article
             aria-label={SIDE_LABEL[turn.side ?? 'others']}
             className={cn(
-                'flex max-w-[78%] flex-col gap-1 pb-3.5',
+                // `min(60ch, 78%)`, and both halves earn their place. Measured at the
+                // application's minimum window (720px, rail expanded, pane 432, content 400):
+                // 60ch resolves to 503.98px, larger than the box, so a bare character cap
+                // stops capping and both sides render the same 400px box -- the side is the
+                // only label this design has, and it disappears. The 78% floor keeps that
+                // cell identical to what shipped: 312px bubbles, 88px offset.
+                'flex max-w-[min(60ch,78%)] flex-col gap-1 pb-3.5',
                 isYou ? 'ml-auto items-end' : 'mr-auto items-start'
             )}
         >

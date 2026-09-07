@@ -109,7 +109,14 @@ export function TranscriptPanel({
 
       {/* pb leaves room for the floating transport */}
       <div className="min-h-0 flex-1 pb-24">
-        <div className="mx-auto h-full max-w-measure">
+        {/* No `max-w-measure` here, deliberately. `--measure` is a *prose* measure and the
+            transcript is a conversation: the bubble already caps its own line length, so
+            capping the column as well spent the pane twice. Measured before removing it --
+            from 796px of pane upward the bubble was pinned at 446px and the offset between
+            the two sides at 126px however wide the window, and the sides overlapped by 320px
+            at every width. See #118. The permission warning above and the error banner in
+            RecordingControls keep the measure; they are prose. */}
+        <div className="h-full">
           <VirtualizedTranscriptView
             segments={segments}
             isRecording={isRecording}
