@@ -105,7 +105,7 @@ const PUBLISHED = [
     // inside `handleContinue`. Mutating the mount one instead would test a different claim.
     id: '#93 first run: Continue stops asking the backend',
     file: 'src/components/onboarding/steps/DownloadProgressStep.tsx',
-    line: 374,
+    line: 387,
     anchor: "invoke<boolean>('transcribe_has_available_models')",
     replace: '      const actuallyAvailable = true;',
     check: ['node', 'tests/lib/first-run-step.test.mjs'],

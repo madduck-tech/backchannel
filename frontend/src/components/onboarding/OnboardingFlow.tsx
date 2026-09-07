@@ -1,6 +1,11 @@
 import React, { useEffect } from 'react';
 import { useOnboarding } from '@/contexts/OnboardingContext';
-import { PermissionsStep, DownloadProgressStep } from './steps';
+import {
+  TranscriptionModelStep,
+  SummariserStep,
+  PermissionsStep,
+  DownloadProgressStep,
+} from './steps';
 
 interface OnboardingFlowProps {
   onComplete: () => void;
@@ -42,12 +47,16 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   // is persisted (`OnboardingContext.tsx:417-428`), and renumbering would send anyone mid-flow to
   // the wrong screen.
   //
-  // Step 3: Download - the transcription model, and the summary model if one was chosen
+  // Step 1: Transcription - which model turns speech into text, out of a catalogue of 86
+  // Step 2: Summariser  - which one writes the summary, and whether anything leaves this machine
+  // Step 3: Download    - what the two choices above selected, and nothing else
   // Step 4: Permissions - microphone and system audio (macOS only)
 
   return (
     <div className="onboarding-flow">
-      {currentStep <= 3 && <DownloadProgressStep />}
+      {currentStep === 1 && <TranscriptionModelStep />}
+      {currentStep === 2 && <SummariserStep />}
+      {currentStep === 3 && <DownloadProgressStep />}
       {currentStep === 4 && isMac && <PermissionsStep />}
     </div>
   );

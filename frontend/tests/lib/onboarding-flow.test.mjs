@@ -24,6 +24,8 @@ async function chosen(currentStep) {
   const { OnboardingFlow } = loadTsx('src/components/onboarding/OnboardingFlow.tsx', {
     '@/contexts/OnboardingContext': { useOnboarding: () => ({ currentStep }) },
     './steps': {
+      TranscriptionModelStep: () => { seen.push('transcription'); return null; },
+      SummariserStep: () => { seen.push('summariser'); return null; },
       DownloadProgressStep: () => { seen.push('download'); return null; },
       PermissionsStep: () => { seen.push('permissions'); return null; },
     },
@@ -37,27 +39,41 @@ async function chosen(currentStep) {
   return seen;
 }
 
-// --- 1: a new user lands on the download step, with nothing before it ----------------------------
+// --- 1: the first screen is a decision, and it is the one that cannot be skipped -----------------
 {
   assert.deepEqual(
     await chosen(1),
-    ['download'],
-    'step 1 must be the download step. Two screens that asked nothing used to come first, so a ' +
-      'Linux user clicked twice before anything happened'
+    ['transcription'],
+    'step 1 must ask which model turns speech into text. Two screens that asked nothing used to ' +
+      'come first, so a Linux user clicked twice before anything happened — and the download used ' +
+      'to begin before either choice was made'
   );
 }
 
-// --- 2: a half-finished onboarding resumes where it was ------------------------------------------
+// --- 2: every persisted step lands on a screen ----------------------------------------------------
 {
-  // `currentStep` is persisted (`OnboardingContext.tsx:417-428`). Renumbering the steps would send
-  // anyone mid-flow to the wrong screen, so the numbers are unchanged and 1..3 all mean "download".
-  for (const step of [2, 3]) {
+  // `currentStep` is persisted (`OnboardingContext.tsx:417-428`), so a profile saved mid-flow must
+  // still resolve. The order is: transcription, summariser, download, permissions.
+  for (const [step, expected] of [
+    [2, 'summariser'],
+    [3, 'download'],
+  ]) {
     assert.deepEqual(
       await chosen(step),
-      ['download'],
-      `a profile persisted at step ${step} must still reach the download step, not a blank screen`
+      [expected],
+      `a profile persisted at step ${step} must reach the ${expected} step, not a blank screen`
     );
   }
+}
+
+// --- 2b: the download comes after both choices, not before them ----------------------------------
+{
+  // The order is the point of cycle B: 3.6 GiB used to start downloading on mount, before anyone
+  // had been asked anything. Whatever else changes, the download step must not precede either
+  // choice.
+  const order = [];
+  for (const step of [1, 2, 3]) order.push((await chosen(step))[0]);
+  assert.deepEqual(order, ['transcription', 'summariser', 'download']);
 }
 
 // --- 3: the deleted screens are gone, not merely unrendered --------------------------------------

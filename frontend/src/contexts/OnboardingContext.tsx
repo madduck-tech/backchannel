@@ -44,6 +44,10 @@ interface OnboardingContextType {
   summaryModelProgressInfo: SummaryModelProgressInfo;
   selectedSummaryModel: string;
   recommendedSummaryModel: string;
+  /** Which summariser provider the user picked. Five of the seven reach a third party. */
+  summaryProvider: string;
+  /** Which transcription model the user picked, out of a catalogue of 86. */
+  selectedTranscribeModel: string;
   databaseExists: boolean;
   isBackgroundDownloading: boolean;
   // Permissions
@@ -57,6 +61,8 @@ interface OnboardingContextType {
   setParakeetDownloaded: (value: boolean) => void;
   setSummaryModelDownloaded: (value: boolean) => void;
   setSelectedSummaryModel: (value: string) => void;
+  setSummaryProvider: (value: string) => void;
+  setSelectedTranscribeModel: (value: string) => void;
   setDatabaseExists: (value: boolean) => void;
   setPermissionStatus: (permission: keyof OnboardingPermissions, status: PermissionStatus) => void;
   setPermissionsSkipped: (skipped: boolean) => void;
@@ -93,6 +99,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     speedMbps: 0,
   });
   const [selectedSummaryModel, setSelectedSummaryModel] = useState<string>('');
+  // The two choices the first run now asks for. Defaults are what the flow wrote as constants
+  // before #111, so a user who changes nothing gets exactly what they used to.
+  const [summaryProvider, setSummaryProvider] = useState<string>('builtin-ai');
+  const [selectedTranscribeModel, setSelectedTranscribeModel] =
+    useState<string>('parakeet-tdt-0.6b-v3-q8');
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
   const [databaseExists, setDatabaseExists] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
@@ -488,8 +499,13 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       }
 
       // Onboarding always uses builtin-ai with selected model
+      // The two choices reach the backend now. `complete_onboarding` used to write "builtin-ai"
+      // and DEFAULT_TRANSCRIBE_MODEL as constants, so whatever the first run had shown the user was
+      // thrown away on the last step. #111.
       await invoke('complete_onboarding', {
         model: modelToSave,
+        provider: summaryProvider,
+        transcribeModel: selectedTranscribeModel,
       });
       setCompleted(true);
       console.log('[OnboardingContext] Onboarding completed with model:', modelToSave);
@@ -612,6 +628,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         summaryModelProgress,
         summaryModelProgressInfo,
         selectedSummaryModel,
+        summaryProvider,
+        selectedTranscribeModel,
         recommendedSummaryModel,
         databaseExists,
         isBackgroundDownloading,
@@ -623,6 +641,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setParakeetDownloaded,
         setSummaryModelDownloaded,
         setSelectedSummaryModel,
+        setSummaryProvider,
+        setSelectedTranscribeModel,
         setDatabaseExists,
         setPermissionStatus,
         setPermissionsSkipped,
