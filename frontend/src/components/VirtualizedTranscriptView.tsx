@@ -5,7 +5,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { RecordingStatusBar } from "./RecordingStatusBar";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { TranscriptSegmentData } from "@/types";
 import { speakerLabel, SpeakerNames } from "@/lib/speaker";
@@ -513,6 +512,14 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // decoder's uncommitted tail if it has one, otherwise the Listening pulse.
     // Outside the virtualizer — this text is rewritten several times a second
     // and re-measuring a virtual row on every keystroke-sized change thrashes.
+    // The streaming decoder's uncommitted tail, when it has one.
+    //
+    // There is no "Listening" pulse under it any more. Its one job was marking the live edge
+    // of the transcript, and it made the same claim the transport bar makes two rows below --
+    // where a level meter moves continuously, which is stronger evidence that audio is
+    // arriving than a word that is printed whether or not it is. It was also the one live
+    // signal that could lie: unlike the empty state's identical word, it was not gated on
+    // `captureArmed`. #114.
     const liveTail =
         !isStopping && isRecording && !isPaused && !isProcessing ? (
             partialText ? (
@@ -521,25 +528,18 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         {partialText}
                     </p>
                 </div>
-            ) : segments.length > 0 ? (
-                <div className={cn('mt-4 flex items-center gap-2 animate-fade-in', !twoSided && 'pl-[4.25rem]')}>
-                    <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-danger animate-live" />
-                    <span className="text-sm text-ink-muted">Listening</span>
-                </div>
             ) : null
         ) : null;
 
     return (
         <div ref={scrollRef} className="scrollbar-slim flex h-full flex-col overflow-y-auto px-4 py-2">
-            {/* Recording Status Bar - Sticky at top, always visible when recording */}
-            {isRecording && (
-                <div className="sticky top-0 z-sticky bg-canvas pb-2">
-                    <RecordingStatusBar isPaused={isPaused} />
-                </div>
-            )}
-
-            {/* Content - add padding when recording to prevent overlap */}
-            <div className={isRecording ? 'pt-2' : ''}>
+            {/* No sticky capture banner here. It was the third rendering of a state the
+                transport bar already carries, and the fifth signal on screen counting the
+                rail and "Listening". Its one piece of unique content -- the pause-excluded
+                duration -- moved into the transport as `recorded`, labelled beside
+                `elapsed`, because deleting it outright would have lost the number the saved
+                file's length is written from. #114. */}
+            <div>
             {/* Two of the three states render as one column and must say which. */}
             {segments.length > 0 && !twoSided && <ChannelNotice coverage={coverage} />}
             {/* A partial with no committed segments yet is still text on screen —

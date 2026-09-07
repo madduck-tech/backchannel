@@ -83,7 +83,6 @@ const BACKLOG = new Set([
   'src/components/PermissionWarning.tsx',
   'src/components/PreferenceSettings.tsx',
   'src/components/RecordingSettings.tsx',
-  'src/components/RecordingStatusBar.tsx',
   'src/components/SettingTabs.tsx',
   'src/components/Sidebar/SidebarProvider.tsx',
   'src/components/SpeakerLabelSettings.tsx',

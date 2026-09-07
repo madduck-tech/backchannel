@@ -9,6 +9,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { RecordingClocks } from '@/components/RecordingClocks';
 import { AudioLevelMeter } from '@/components/AudioLevelMeter';
 import type { StartPhase } from '@/hooks/useRecordingStart';
 import { cn } from '@/lib/utils';
@@ -522,8 +523,16 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
             <div className="mx-1 h-5 w-px bg-line" />
 
-            {/* State in three channels at once: shape, word, advancing timer. */}
+            {/* State in three channels at once: shape, word, advancing timer.
+                `compact` drops the word on the narrow layout; the clocks beside
+                it carry the timing. */}
             <LiveIndicator />
+
+            {/* Both clocks, labelled. `recorded` is the one that used to live in
+                a sticky banner above the transcript -- the only place it was
+                rendered, and the number the saved file's length is written from
+                (`recording_manager.rs:329`). #114. */}
+            <RecordingClocks className="ml-1" />
 
             {/* The fourth channel, and the only one that stops when capture
                 does. The three above keep running through a disconnected
