@@ -203,6 +203,7 @@ const TranscriptLine = memo(function TranscriptLine({
     speaker,
     speakerNames,
     onRenameSpeaker,
+    trailing,
 }: {
     id: string;
     text: string;
@@ -211,13 +212,21 @@ const TranscriptLine = memo(function TranscriptLine({
     speaker?: string;
     speakerNames?: SpeakerNames;
     onRenameSpeaker?: (speaker: string, name: string) => void;
+    /** Floated into this line's trailing edge. Only the turn's last line gets one. */
+    trailing?: React.ReactNode;
 }) {
     const isSilence = text.trim() === '';
 
     return (
         <p
             id={`segment-${id}`}
-            className={cn('min-w-0 text-md leading-relaxed', isSilence && 'italic opacity-70')}
+            className={cn(
+                // `break-words` is not cosmetic: a single 141-character token measured
+                // `scrollWidth` 1062 against `clientWidth` 359 on the geometry this replaces,
+                // so the transcript already scrolled sideways. #118 condition 7.
+                'min-w-0 break-words text-md leading-relaxed',
+                isSilence && 'italic opacity-70'
+            )}
         >
             {speaker && (
                 <SpeakerTag speaker={speaker} speakerNames={speakerNames} onRename={onRenameSpeaker} />
@@ -229,6 +238,11 @@ const TranscriptLine = memo(function TranscriptLine({
                     <ConfidenceIndicator confidence={confidence} showIndicator />
                 </>
             )}
+            {/* AFTER the text, as the prototype places it. A float that precedes the inline
+                content is placed at the top of the block, so it lands on the paragraph's FIRST
+                line — measured on screen before this was corrected. Placed last, it descends to
+                the line where it fits, which is the last one. */}
+            {trailing}
         </p>
     );
 });
@@ -257,7 +271,13 @@ const ConversationTurn = memo(function ConversationTurn({
         <article
             aria-label={SIDE_LABEL[turn.side ?? 'others']}
             className={cn(
-                'flex max-w-[78%] flex-col gap-1 pb-3.5',
+                // `min(60ch, 78%)`, and both halves earn their place. Measured at the
+                // application's minimum window (720px, rail expanded, pane 432, content 400):
+                // 60ch resolves to 503.98px, larger than the box, so a bare character cap
+                // stops capping and both sides render the same 400px box -- the side is the
+                // only label this design has, and it disappears. The 78% floor keeps that
+                // cell identical to what shipped: 312px bubbles, 88px offset.
+                'flex max-w-[min(60ch,78%)] flex-col pb-1.5',
                 isYou ? 'ml-auto items-end' : 'mr-auto items-start'
             )}
         >
@@ -268,13 +288,13 @@ const ConversationTurn = memo(function ConversationTurn({
                     // --elevated and --bg are both oklch(1 0 0): the other side's bubble
                     // would be white on white. Measured lightness distance from the
                     // canvas: elevated 0.000 light / 0.070 dark, sunken 0.032 / 0.030.
-                    'min-w-0 rounded-lg px-3 py-2 [&>p+p]:mt-2',
+                    'min-w-0 rounded-lg px-3 py-1.5 [&>p+p]:mt-1',
                     isYou
                         ? 'rounded-br-sm bg-brand-soft text-brand-soft-ink'
                         : 'rounded-bl-sm bg-sunken text-ink'
                 )}
             >
-                {turn.segments.map((segment) => (
+                {turn.segments.map((segment, i) => (
                     <TranscriptLine
                         key={segment.id}
                         id={segment.id}
@@ -284,22 +304,32 @@ const ConversationTurn = memo(function ConversationTurn({
                         speaker={segment.speaker}
                         speakerNames={speakerNames}
                         onRenameSpeaker={onRenameSpeaker}
+                        trailing={
+                            i === turn.segments.length - 1 ? (
+                                // Inside the last line, not under the turn. A line of its own
+                                // cost 15px of the 49px a turn spent on chrome, to carry five
+                                // characters. `inline-end` rather than `right` so a
+                                // right-to-left transcript floats it to the trailing edge and
+                                // not the leading one -- the app transcribes Arabic.
+                                <time
+                                    dateTime={`PT${Math.floor(turn.timestamp)}S`}
+                                    title={
+                                        turn.segments.length > 1
+                                            ? `${turn.segments.length} segments from here`
+                                            : 'Position in recording'
+                                    }
+                                    className={cn(
+                                        'readout float-end ms-3 mt-[5px] select-none text-2xs',
+                                        isYou ? 'text-brand-soft-ink/70' : 'text-ink-faint'
+                                    )}
+                                >
+                                    {formatRecordingTime(turn.timestamp)}
+                                </time>
+                            ) : undefined
+                        }
                     />
                 ))}
             </div>
-
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <span className="readout select-none px-0.5 text-2xs text-ink-faint">
-                        {formatRecordingTime(turn.timestamp)}
-                    </span>
-                </TooltipTrigger>
-                <TooltipContent side={isYou ? 'right' : 'left'}>
-                    {turn.segments.length > 1
-                        ? `${turn.segments.length} segments from here`
-                        : 'Position in recording'}
-                </TooltipContent>
-            </Tooltip>
         </article>
     );
 });

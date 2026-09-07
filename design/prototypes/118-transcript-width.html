@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Backchannel · transcript width, corrected: one cap, not two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@400&display=swap" rel="stylesheet">
+<style>
+/* design/backchannel/tokens.css — pasted verbatim. */
+:root {
+  /* ─── Surface ─────────────────────────────────────────────────── */
+  --bg: oklch(1 0 0);                       /* canvas: transcript and review are documents */
+  --surface: oklch(1 0 0);                  /* cards, popovers, dialogs (app: --elevated) */
+  --surface-warm: oklch(0.976 0.004 190);   /* rails, toolbars (app: --panel) */
+  --surface-sunken: oklch(0.968 0.005 190); /* extension: input wells, code, inset readouts */
+
+  /* ─── Foreground ramp ─────────────────────────────────────────── */
+  --fg: oklch(0.215 0.013 190);
+  --fg-2: var(--fg);
+  --muted: oklch(0.46 0.014 190);
+  --meta: oklch(0.54 0.012 190);
+
+  /* ─── Border ──────────────────────────────────────────────────── */
+  --border: oklch(0.912 0.006 190);
+  --border-soft: var(--border);
+  --border-strong: oklch(0.855 0.008 190); /* extension: input outlines */
+
+  /* ─── Accent = brand ──────────────────────────────────────────── */
+  --accent: oklch(0.365 0.082 190);
+  --accent-on: oklch(1 0 0);
+  --accent-hover: oklch(0.315 0.078 190);
+  --accent-active: var(--accent-hover);
+  --accent-soft: oklch(0.955 0.022 190);   /* extension: selection / active-row tint */
+  --accent-soft-on: oklch(0.33 0.075 190);
+
+  /* ─── Signals ─────────────────────────────────────────────────── */
+  --success: var(--accent);                 /* the brand is the success color */
+  --warn: oklch(0.72 0.15 72);
+  --warn-on: oklch(0.47 0.11 72);
+  --warn-soft: oklch(0.966 0.03 72);
+  --danger: oklch(0.545 0.205 25);
+  --danger-on: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.962 0.022 25);
+  --info: oklch(0.52 0.115 262);            /* extension: local-model and device readouts */
+  --info-soft: oklch(0.962 0.018 262);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-display: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 0.6875rem;  /* 11 · mono readouts */
+  --text-xs: 0.75rem;     /* 12 · captions */
+  --text-sm: 0.8125rem;   /* 13 · dense labels, buttons */
+  --text-base: 0.875rem;  /* 14 · UI body, overlay hint */
+  --text-md: 0.9375rem;   /* 15 · transcript */
+  --text-lg: 1.0625rem;   /* 17 · summary body */
+  --text-xl: 1.25rem;     /* 20 · panel title */
+  --text-2xl: 1.5625rem;  /* 25 · page title */
+  --text-3xl: 1.9375rem;  /* 31 · meeting title */
+  --text-4xl: var(--text-3xl);
+  --leading-body: 1.5;
+  --leading-tight: 1.2;
+  --tracking-display: -0.01em;
+  --measure: 68ch;
+
+  /* ─── Shape ───────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* ─── Elevation (border-first) ────────────────────────────────── */
+  --elev-flat: none;
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 1px 2px oklch(0.2 0.01 190 / 0.06), 0 4px 12px oklch(0.2 0.01 190 / 0.08);
+  --elev-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06), 0 12px 32px oklch(0.2 0.01 190 / 0.12);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.5 0.1 190);
+
+  /* ─── Motion ──────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Spacing ─────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-20: 80px;
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  --container-max: 1100px;                  /* desktop app: the two-pane breakpoint */
+  --container-gutter-desktop: 24px;
+  --container-gutter-tablet: 16px;
+  --container-gutter-phone: 12px;
+  --section-y-desktop: 32px;
+  --section-y-tablet: 24px;
+  --section-y-phone: 16px;
+  --rail-w: 19rem;
+  --rail-w-collapsed: 3.5rem;
+  --overlay-w: 420px;                       /* extension: overlay default width (360–480) */
+}
+
+/* Dark theme: independent values, not a filter. The overlay uses this block by default. */
+.dark,
+[data-theme="dark"] {
+  --bg: oklch(0.155 0.004 190);
+  --surface: oklch(0.225 0.006 190);
+  --surface-warm: oklch(0.185 0.005 190);
+  --surface-sunken: oklch(0.125 0.004 190);
+  --fg: oklch(0.945 0.006 190);
+  --muted: oklch(0.72 0.011 190);
+  --meta: oklch(0.625 0.01 190);
+  --border: oklch(0.285 0.007 190);
+  --border-strong: oklch(0.37 0.009 190);
+  --accent: oklch(0.8 0.115 190);
+  --accent-on: oklch(0.16 0.03 190);        /* bright aqua takes dark ink */
+  --accent-hover: oklch(0.855 0.12 190);
+  --accent-soft: oklch(0.255 0.032 190);
+  --accent-soft-on: oklch(0.845 0.1 190);
+  --warn: oklch(0.78 0.145 72);
+  --warn-on: oklch(0.82 0.13 72);
+  --warn-soft: oklch(0.245 0.045 72);
+  --danger: oklch(0.55 0.21 25);
+  --danger-on: oklch(0.72 0.16 25);
+  --danger-soft: oklch(0.245 0.055 25);
+  --info: oklch(0.66 0.13 262);
+  --info-soft: oklch(0.245 0.045 262);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
+  --elev-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.8 0.115 190);
+}
+
+/* ─── Base ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--surface-warm); color: var(--fg); font-family: var(--font-body); font-size: var(--text-base); line-height: var(--leading-body); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+p { text-wrap: pretty; }
+::selection { background: var(--accent-soft); color: var(--accent-soft-on); }
+
+/* ─── Board ────────────────────────────────────────────────────── */
+.board { --zm: 0.7; max-width: 1392px; margin: 0 auto; padding: 40px var(--container-gutter-desktop) 80px; }
+.page-head { max-width: 84ch; }
+.page-head h1 { margin: 0 0 8px; font-size: var(--text-2xl); line-height: 31px; font-weight: 600; letter-spacing: var(--tracking-display); text-wrap: balance; }
+.lede { margin: 0; color: var(--muted); font-size: var(--text-base); line-height: 21px; }
+.lede code, .facts-strip code, .wcap code, .cap code { font-family: var(--font-mono); font-size: 0.92em; }
+.facts-strip { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 14px 0 0; padding: 0; list-style: none; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 17px; color: var(--meta); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 20px; }
+.ctl { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); }
+.ctl span { margin-right: 4px; }
+.chip { appearance: none; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard); }
+.chip:hover { border-color: var(--border-strong); color: var(--fg); }
+.chip.on { border-color: var(--accent); color: var(--fg); }
+.chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.section { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--border); }
+.shead { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; align-items: baseline; margin-bottom: 18px; }
+.shead .num { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--meta); }
+.shead h2 { margin: 0; font-size: var(--text-xl); line-height: 27px; font-weight: 500; }
+.shead p { grid-column: 2; margin: 4px 0 0; max-width: 84ch; color: var(--muted); font-size: var(--text-sm); line-height: 19px; }
+.widths { display: grid; gap: 22px; overflow-x: auto; padding-bottom: 4px; }
+.wcap { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 8px; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 17px; color: var(--meta); }
+.wcap b { font-weight: 500; color: var(--fg); }
+.wcap .off { color: var(--fg); }
+.frame { width: max-content; }
+.wrow .frame { zoom: var(--zm); }
+.egrid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.thumb .frame { zoom: 0.5; border-radius: var(--radius-lg); overflow: hidden; }
+.cap { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: baseline; margin-top: 10px; }
+.cap .k { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); }
+.cap b { font-size: var(--text-sm); line-height: 19px; font-weight: 500; }
+.cap p { grid-column: 2; margin: 2px 0 0; font-size: var(--text-xs); line-height: 17px; color: var(--muted); }
+
+/* ─── App window. The 1px frame is a shadow, so the window's inner widths are exact. ── */
+.win { display: grid; grid-template-columns: auto minmax(0, 1fr); height: 600px; overflow: hidden; background: var(--bg); color: var(--fg); border-radius: var(--radius-lg); box-shadow: 0 0 0 1px var(--border-strong); font-size: var(--text-base); line-height: 21px; }
+.thumb .win { border-radius: 0; box-shadow: none; }
+
+/* Rail: --rail is min(var(--rail-w), 40vw) in the app; here 40% of the window. */
+.rail { width: min(var(--rail-w), 40cqw); display: grid; grid-template-rows: auto auto auto 1fr auto; gap: 8px; padding: 8px; background: var(--surface-warm); border-right: 1px solid var(--border); min-height: 0; }
+.win { container-type: inline-size; }
+.rz { padding: 0 8px; min-width: 0; }
+.rail .id { display: flex; align-items: center; gap: 10px; height: 36px; font-size: var(--text-sm); font-weight: 500; }
+.mark { flex: none; width: 24px; height: 24px; border-radius: var(--radius-md); background: var(--accent-soft); color: var(--accent-soft-on); font: 500 13px/24px var(--font-mono); text-align: center; }
+.btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 500; line-height: 1; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-standard); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.btn-primary { width: 100%; background: var(--accent); color: var(--accent-on); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:active { background: var(--accent-active); }
+.well { display: flex; align-items: center; height: 28px; padding: 0 10px; background: var(--surface-sunken); border: 1px solid var(--border-strong); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--meta); white-space: nowrap; overflow: hidden; }
+.lbl { padding: 10px 8px 4px; font-family: var(--font-mono); font-size: var(--text-2xs); line-height: 15px; color: var(--meta); }
+.rrow { position: relative; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; }
+.rrow.open { color: var(--fg); }
+.rrow.open::before { content: ""; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
+.rrow .m { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--meta); }
+
+/* Pane header is the same at every width. */
+.pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+.ph { padding: 20px 16px 0; border-bottom: 1px solid var(--border); }
+.mt { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); line-height: 37px; font-weight: 400; letter-spacing: var(--tracking-display); text-wrap: balance; }
+.mm { margin: 4px 0 10px; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 17px; color: var(--meta); }
+.tabs { display: flex; gap: 20px; }
+.tabs span { padding: 6px 0 8px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: var(--text-sm); line-height: 19px; color: var(--muted); }
+.tabs .on { color: var(--fg); border-bottom-color: var(--accent); }
+/* The scroll area reserves an 8px gutter at all times, so the content box is pane − 16 − 16 − 8. */
+.scroll { overflow-y: auto; min-height: 0; scrollbar-gutter: stable; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+/* ─── Variant 1, corrected ─────────────────────────────────────── */
+.thread { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 24px; font-size: var(--text-md); line-height: 24px; }
+/* The cap is the smaller of two: 60ch stops a wide window stretching the line; 78% of the
+   content box keeps the two sides apart when the pane is small. */
+.turn { display: grid; grid-template-columns: minmax(0, 1fr); max-width: min(60ch, 78%); }
+.turn.them { align-self: flex-start; }
+.turn.you { align-self: flex-end; }
+.turn p { margin: 0; overflow-wrap: anywhere; }             /* the fix for the 141-character token */
+.turn p + p { margin-top: 4px; }
+.body { min-width: 0; padding: 6px 12px; border-radius: var(--radius-lg); background: var(--surface-sunken); }
+.turn.them .body { border-bottom-left-radius: var(--radius-sm); }
+.turn.you .body { background: var(--accent-soft); color: var(--accent-soft-on); border-bottom-right-radius: var(--radius-sm); }
+.ts { font-family: var(--font-mono); font-size: var(--text-2xs); line-height: 15px; color: var(--meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn.you .ts, .turn.you .spk { color: var(--accent-soft-on); }
+/* Time on the trailing edge of the last line: a 33.0px box, 12px margin, 15px tall. When the
+   line has less than 45px of slack it takes a line of its own, +15px. */
+.ts.in { float: right; margin: 0 0 0 12px; position: relative; top: 5px; }
+.spk { margin-right: 8px; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--meta); }
+.gut { display: none; }
+/* The two single-column states are rows, not bubbles: a 3.25rem mono gutter, no background. */
+.turn.none { grid-template-columns: 3.25rem minmax(0, 1fr); max-width: none; align-self: stretch; }
+.turn.none .gut { display: block; }
+.turn.none .gut .ts { line-height: 24px; }
+.turn.none .body { padding: 0; border-radius: 0; background: transparent; }
+.turn.none .ts.in { display: none; }
+.notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius-md); font-size: var(--text-xs); line-height: 17px; }
+.notice code { font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
+.notice p { margin: 0; }
+.notice.info { background: var(--info-soft); color: var(--info); }
+.notice.warn { background: var(--warn-soft); color: var(--warn-on); }
+.tok { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1000px) { .egrid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .chip, .btn { transition-duration: 1ms; } }
+</style>
+</head>
+<body>
+<div class="board">
+
+  <header class="page-head" data-od-id="page-head">
+    <h1 data-od-id="page-title">Transcript width, corrected: one cap, not two</h1>
+    <p class="lede">Issue #118. Variant 1 is approved. Review found two faults in it: its captions were computed against the fallback font, and at the 720 px minimum, with the rail expanded to 288 px, a 60ch cap is wider than the content box, so both sides land on the same edge and the only label the design has is gone. The cap is now the smaller of two, <code>max-width: min(60ch, 78%)</code>: the character half stops a 1920 px window stretching the line, the per-cent half keeps the sides apart when the pane is small. Everything else stands: time inside the bubble on the trailing edge of the last line, 6 px between turns, sides at the pane edges, no prose measure.</p>
+    <ul class="facts-strip" data-od-id="facts-strip">
+      <li>ch with the webfont loaded · 8.3998 px at 14 px · 8.9998 px at 15 px (this prototype draws the transcript at text-md 15/24)</li>
+      <li>60ch · 539.97 px at 15 px · 503.98 px at 14 px · 68ch at 14 px · 571.19 px</li>
+      <li>rail min(304, 40vw) · 288 at 720 · content box = pane − 16 − 16 − 8 px scrollbar gutter</li>
+      <li>P = 78% · offset between the sides at 720 = 86.24 px · floor 64 px · the ch half governs from 1037 px of window width</li>
+    </ul>
+    <div class="controls" data-od-id="controls">
+      <div class="ctl" role="group" aria-label="Scale"><span>scale</span><button type="button" class="chip on" data-scale="0.7">70%</button><button type="button" class="chip" data-scale="1">100%</button></div>
+      <div class="ctl" role="group" aria-label="Theme"><span>theme</span><button type="button" class="chip on" data-theme="dark">dark</button><button type="button" class="chip" data-theme="light">light</button></div>
+    </div>
+  </header>
+
+  <section class="section" data-od-id="widths">
+    <div class="shead"><span class="num">1</span><h2>Four widths, rail expanded</h2><p>The rail is drawn expanded at every width, because the collapsed rail is what hid the defect. Each caption gives the pane, the content box, which half of the cap won, the bubble width it produced, and the offset between the two sides: the distance from the left edge of an others bubble to the left edge of a you bubble.</p></div>
+    <div class="widths" data-widths></div>
+  </section>
+
+  <section class="section" data-od-id="cases">
+    <div class="shead"><span class="num">2</span><h2>Three cases, at 1100 px</h2><p>The two single-column states, a last line with no room for the timestamp, and a single 141-character token.</p></div>
+    <div class="egrid" data-edges></div>
+  </section>
+
+</div>
+<script>
+(() => {
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const pad = n => String(n).padStart(2, '0');
+  const mmss = s => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+  const px = n => (Math.round(n * 100) / 100).toFixed(2).replace(/\.?0+$/, m => m === '.00' ? '.0' : m.replace(/0+$/, '') || '');
+
+  // Measured, webfont loaded: ch = 8.3998 px at 14 px. The transcript is text-md, 15 px.
+  const CH14 = 8.3998, CH15 = CH14 * 15 / 14, CAP60 = 539.97, P = 0.78, GUTTER = 8, PAD = 16, RAIL = 304;
+  const railAt = w => Math.min(RAIL, Math.round(w * 0.4));
+  const geo = w => { const rail = railAt(w), pane = w - rail, box = pane - PAD * 2 - GUTTER, pct = box * P, bubble = Math.min(CAP60, pct); return { rail, pane, box, pct, bubble, offset: box - bubble }; };
+
+  // The recording. R = the user's microphone, L = system audio. spk is the diarizer's label, not the side.
+  const LINES = [
+    { side: 'R', start: 1,  end: 2,  text: 'Так, ну-ка.' },
+    { side: 'L', start: 6,  end: 20, spk: 'Speaker 1', text: 'я бы сказал ну нахуй он сдался этот ваш опен код, да у меня своя система, и то работают гораздо лучше, когда качественнее выполняет задачу. много нежели чем вот это дерьмо.' },
+    { side: 'R', start: 24, end: 25, text: 'Продолжай.' },
+    { side: 'L', start: 29, end: 41, spk: 'Speaker 1', text: 'Не знаю, что продолжать, продолжать нечего на самом деле. Я просто я же экспериментировал, помню, я это раз. Подходы. У меня были, например, список задач, которые я сформировал, например, GPT-PRO.' },
+    { side: 'L', start: 42, end: 53, text: 'Вот эти задачи надо сделать. Агент начинает делать эти задачи. Я потом в новом чате перепроверяю, насколько это. Задача, например, была сделана. На сколько процентов?' },
+    { side: 'R', start: 57, end: 65, text: 'Слушай, а посмотри, хорошо, по-моему, идет. Хорошо, транскрибация идет. Это полностью на локальных моделях.' },
+    { side: 'L', start: 69, end: 70, spk: 'Speaker 2', text: 'Отлично.' }
+  ];
+  // Case 2: a last line of 55 tabular digits = 55 × 8.9998 = 494.99 px in a 515.97 px line.
+  const DIGITS = '4081781009991000431240817810099910004312408178100999100';
+  // Case 3: one 141-character token.
+  const TOKEN = "https://wiki.internal.example/architecture/adr/0007-kafka-over-rabbitmq-for-the-auth-service-queue?revision=14&highlight=retries%2Cbackoff%2C";
+  const PAUSE = 3;
+
+  const FIX = {
+    main: () => ({ state: 'two', lines: LINES }),
+    none: () => ({ state: 'none', lines: LINES.map(l => ({ ...l, side: null })) }),
+    one:  () => ({ state: 'one', lines: LINES.map(l => ({ ...l, side: 'R' })) }),
+    tsdrop: () => ({ state: 'two', lines: [
+      { side: 'R', start: 200, end: 203, text: 'Диктую номер счёта, записывай:' },
+      { side: 'R', start: 204, end: 214, text: DIGITS, tok: true },
+      { side: 'L', start: 218, end: 219, spk: 'Speaker 1', text: 'Записал.' },
+      { side: 'R', start: 223, end: 224, text: 'Продолжай.' }
+    ] }),
+    token: () => ({ state: 'two', lines: [
+      { side: 'L', start: 300, end: 304, spk: 'Speaker 1', text: 'Вот ссылка на обсуждение, там всё расписано:' },
+      { side: 'L', start: 305, end: 306, text: TOKEN, tok: true },
+      { side: 'R', start: 310, end: 311, text: 'Открыл.' }
+    ] })
+  };
+  function merge(lines) {
+    const turns = [];
+    for (const l of lines) {
+      const prev = turns[turns.length - 1];
+      if (prev && prev.side === l.side && l.start - prev.end <= PAUSE) { prev.rows.push(l); prev.end = l.end; }
+      else turns.push({ side: l.side, start: l.start, end: l.end, rows: [l] });
+    }
+    return turns;
+  }
+  const turnHTML = (t, i, prefix, state) => {
+    const cls = state !== 'two' ? 'none' : t.side === 'L' ? 'them' : 'you';   // single-column states are rows, whatever the side
+    const ts = extra => `<time class="ts${extra}" datetime="PT${t.start}S">${mmss(t.start)}</time>`;
+    const rows = t.rows.map((r, j) => `<p>${r.spk ? `<span class="spk">${esc(r.spk)}</span>` : ''}${r.tok ? `<span class="tok">${esc(r.text)}</span>` : esc(r.text)}${j === t.rows.length - 1 ? ts(' in') : ''}</p>`).join('');
+    return `<article class="turn ${cls}" lang="ru" data-od-id="${prefix}-turn-${i + 1}"><span class="gut">${ts('')}</span><div class="body">${rows}</div></article>`;
+  };
+  const NOTICE = {
+    none: `<div class="notice info" role="status"><code>channels: none</code><p>This recording was made with the streaming model, which records no channel, so lines cannot be placed by side. They are shown in order, in one column.</p></div>`,
+    one:  `<div class="notice warn" role="status"><code>channels: 1</code><p>Only one channel carried speech, so there is no other side to place. Lines are shown in order, in one column.</p></div>`
+  };
+  const META = { two: '14 Aug · 2 channels · microphone and system audio', none: '14 Aug · streaming model · no channel data', one: '14 Aug · 1 channel · microphone only' };
+  const rail = () => `<nav class="rail" aria-label="Sidebar">
+    <div class="rz id"><span class="mark" aria-hidden="true">B</span>Backchannel</div>
+    <div class="rz"><button type="button" class="btn btn-primary" tabindex="-1">Start meeting</button></div>
+    <div class="rz"><div class="well">Find in meetings</div></div>
+    <div class="rz"><div class="lbl">My agents</div><div class="rrow">Architecture Copilot</div><div class="lbl">Meetings</div><div class="rrow open">Architecture sync<span class="m">14 Aug</span></div></div>
+    <div class="rz"><div class="rrow">Settings</div></div>
+  </nav>`;
+  function windowHTML(width, height, fixture, id) {
+    const fx = FIX[fixture](), turns = merge(fx.lines);
+    return `<div class="win" style="width:${width}px;height:${height}px" data-od-id="${id}" role="group" aria-label="Backchannel window, ${width} px">${rail()}<section class="pane" aria-label="Transcript">
+      <header class="ph"><h1 class="mt">Architecture sync</h1><div class="mm">${META[fx.state]}</div><nav class="tabs" aria-label="Meeting views"><span>Summary</span><span class="on" aria-current="page">Transcript</span><span>Ask</span></nav></header>
+      <div class="scroll"><div class="thread ${fx.state}">${NOTICE[fx.state] || ''}${turns.map((t, i) => turnHTML(t, i, id, fx.state)).join('')}</div></div></section></div>`;
+  }
+
+  const WIDTHS = [[720, 520], [1100, 600], [1400, 600], [1920, 600]];
+  const caption = w => {
+    const g = geo(w), chWins = CAP60 <= g.pct;
+    return `<b>${w} px</b><span>rail ${g.rail}</span><span>pane ${g.pane}</span><span>content box ${g.box}</span><span>60ch = ${px(CAP60)}</span><span>78% = ${px(g.pct)}</span><span>bubble ${px(g.bubble)} px, ${chWins ? 'the ch half' : 'the per-cent half'}</span><span class="off">offset between the sides ${px(g.offset)} px</span>`;
+  };
+  const line = geo(1100).bubble - 24, digitsW = DIGITS.length * CH15, slack = line - digitsW;
+  const EDGE = [
+    { k: 'a', fixture: 'none', title: 'No channel: rows, not bubbles', text: 'The streaming model sets channel None on every row. The state renders as rows with a 3.25 rem mono timestamp gutter, no bubble background and no inline time, under an info notice. The cap does not apply to rows.' },
+    { k: 'b', fixture: 'one', title: 'One side only: rows, not bubbles', text: 'The same rows under an amber notice: only one channel carried speech, so there is no other side to place.' },
+    { k: 'c', fixture: 'tsdrop', title: 'A last line with no room for the timestamp', text: `At 1100 px the bubble is ${px(CAP60)} px and the line ${px(line)} px. The last line is ${DIGITS.length} tabular digits, ${px(digitsW)} px, leaving ${px(slack)} px of slack. The ${px(5 * 0.6 * 11)} px time box needs ${px(5 * 0.6 * 11 + 12)} px with its 12 px margin, so it takes a line of its own at +15 px. The turn below keeps its time inline.` },
+    { k: 'd', fixture: 'token', title: 'A single 141-character token', text: 'overflow-wrap: anywhere on the paragraph. The token breaks inside the bubble at the cap. Today the transcript has no overflow-wrap and measures scrollWidth 1062 against clientWidth 359.' }
+  ];
+
+  document.querySelector('[data-widths]').innerHTML = WIDTHS.map(([w, h]) =>
+    `<div class="wrow" data-od-id="width-${w}"><div class="wcap">${caption(w)}</div><div class="frame">${windowHTML(w, h, 'main', `w${w}`)}</div></div>`).join('');
+  document.querySelector('[data-edges]').innerHTML = EDGE.map(c =>
+    `<div class="thumb" data-od-id="case-${c.k}"><div class="frame" inert>${windowHTML(1100, 600, c.fixture, `case-${c.k}`)}</div><div class="cap"><span class="k">${c.k}</span><b>${c.title}</b><p>${c.text}</p></div></div>`).join('');
+
+  const board = document.querySelector('.board');
+  document.querySelectorAll('[data-scale]').forEach(b => b.addEventListener('click', () => {
+    board.style.setProperty('--zm', b.dataset.scale);
+    document.querySelectorAll('[data-scale]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark', b.dataset.theme === 'dark');
+    document.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+})();
+</script>
+</body>
+</html>
