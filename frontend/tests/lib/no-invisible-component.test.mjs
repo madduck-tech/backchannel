@@ -46,7 +46,6 @@ import { sourceFiles, rel, assertSetEquals, componentFiles } from './reachabilit
 const BACKLOG = new Set([
   'src/app/_components/SettingsModal.tsx',
   'src/app/_components/StatusOverlays.tsx',
-  'src/app/_components/TranscriptPanel.tsx',
   'src/components/AISummary/Block.tsx',
   'src/components/AISummary/BlockNoteSummaryView.tsx',
   'src/components/AISummary/Section.tsx',
@@ -79,7 +78,6 @@ const BACKLOG = new Set([
   'src/components/MeetingDetails/SummaryPanel.tsx',
   'src/components/MeetingDetails/SummaryUpdaterButtonGroup.tsx',
   'src/components/MeetingDetails/TranscriptButtonGroup.tsx',
-  'src/components/MeetingDetails/TranscriptPanel.tsx',
   'src/components/MessageToast.tsx',
   'src/components/PaneDivider.tsx',
   'src/components/PermissionWarning.tsx',
