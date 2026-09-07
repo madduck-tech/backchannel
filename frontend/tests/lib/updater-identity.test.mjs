@@ -27,48 +27,80 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const config = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
 
-const FORK = '/madduck-tech/backchannel/';
+const FORK_ORIGIN = 'https://github.com';
+const FORK_PATH = '/madduck-tech/backchannel/';
 const artifacts = config.bundle?.createUpdaterArtifacts;
-const endpoints = config.plugins?.updater?.endpoints ?? [];
+const updater = config.plugins?.updater;
+const endpoints = updater?.endpoints ?? [];
+const pubkey = updater?.pubkey ?? '';
 
 // `createUpdaterArtifacts` is tri-state in tauri 2: `false`, `true`, or a string for the v1
 // compatible zip. Anything that is not literally `false` enables the updater path
 // (`rust.rs:855` compares against `Updater::Bool(false)`), so that is the test.
 const artifactsEnabled = artifacts !== false;
 
+// **Origin as well as path, and #79 is why.** The first version checked only
+// `new URL(url).pathname.startsWith(FORK)`, which is host-blind: measured, it accepts
+// `https://evil.example.com/madduck-tech/backchannel/latest.json` and
+// `http://10.0.0.1/madduck-tech/backchannel/latest.json`. A path prefix is not an identity.
 const foreign = endpoints.filter((url) => {
   try {
-    return !new URL(url).pathname.startsWith(FORK);
+    const u = new URL(url);
+    return u.origin !== FORK_ORIGIN || !u.pathname.startsWith(FORK_PATH);
   } catch {
     return true; // an unparseable endpoint is not this fork's
   }
 });
 
-assert.ok(
-  !artifactsEnabled || foreign.length === 0,
-  'updater artifacts are enabled while the updater endpoint does not belong to this fork.\n' +
-    `  createUpdaterArtifacts: ${JSON.stringify(artifacts)}\n` +
-    `  endpoints outside ${FORK}:\n    ${foreign.join('\n    ') || '(none)'}\n\n` +
-    '  Producing signed updater artifacts for a feed this fork does not control is worse than\n' +
-    '  producing none. Move the endpoint and the pubkey to this fork first (#79), then enable\n' +
-    '  the artifacts and give the repository a TAURI_SIGNING_PRIVATE_KEY — without one the\n' +
-    '  Windows and macOS bundles fail outright (#4).'
+// --- 1: unconditional. The app must not reach a feed this fork does not own -----------------------
+//
+// #4 made this conditional on `createUpdaterArtifacts`, which held the *publishing* side: do not
+// sign artifacts for someone else's feed. It said nothing about *consuming* one. So the check was
+// green while the application polled upstream's release feed on every launch and trusted upstream's
+// key -- a green test beside a live defect, which is the shape this repository refuses. #79.
+assert.deepEqual(
+  foreign,
+  [],
+  'the application would fetch an update from a feed this fork does not own.\n' +
+    `  endpoints not under ${FORK_ORIGIN}${FORK_PATH}:\n    ${foreign.join('\n    ')}\n\n` +
+    '  `check()` compares only the platform key (`get_urls`, updater.rs:568-598); nothing compares\n' +
+    '  the app identifier, product name or bundle identity. A manifest carrying the right platform\n' +
+    '  key and a signature under the configured pubkey is accepted whoever published it.'
 );
 
-// The state this repository is actually in, asserted so that *changing* it is a deliberate act
-// rather than a side effect of editing a neighbouring key.
+// --- 2: the key, asserted positively --------------------------------------------------------------
+//
+// Not "the pubkey is not upstream's" -- that is a denylist of one, and it passes for any *other*
+// foreign key. The fork either owns no updater identity (empty) or owns its own, and there is no
+// third acceptable state. Upstream's key is named so a paste-back is caught by name rather than by
+// inequality.
+const UPSTREAM_KEY_ID = '4FECE404B2F95298';
+const decoded = pubkey ? Buffer.from(pubkey, 'base64').toString('utf8') : '';
+assert.ok(
+  !decoded.includes(UPSTREAM_KEY_ID),
+  `the updater pubkey is upstream's (minisign key ${UPSTREAM_KEY_ID}). A signature from upstream\n` +
+    '  would then verify against it, and the update would install whoever published it.'
+);
+assert.ok(
+  pubkey === '' || endpoints.length > 0,
+  'a pubkey is configured with no endpoints. Either is defensible alone; together they mean a key\n' +
+    '  is being carried for a feed that does not exist, which is how the wrong one gets re-used.'
+);
+
+// --- 3: the state this repository is in, so changing it is deliberate ------------------------------
+//
+// The tripwire that stood here -- `assert.ok(foreign.length > 0)`, asserting #79 was still broken --
+// is **deleted**, as its own message instructed. It was a state-pin, and the state changed.
 assert.equal(
   artifactsEnabled,
   false,
-  'this fork owns no updater identity yet, so it must produce no updater artifacts'
-);
-assert.ok(
-  foreign.length > 0,
-  'the endpoint now belongs to this fork — #79 is resolved, and the first assertion above has ' +
-    'become the only one that matters. Delete this one and enable the artifacts deliberately.'
+  'this fork owns no updater identity yet, so it must produce no updater artifacts.\n' +
+    '  Enabling them needs an endpoint under this fork, a pubkey this fork owns, and a\n' +
+    '  TAURI_SIGNING_PRIVATE_KEY in the repository -- without one the Windows and macOS bundles\n' +
+    '  fail outright (#4).'
 );
 
 console.log(
-  `ok - updater artifacts off, ${endpoints.length} endpoint(s) still outside ${FORK} (#79): ` +
-    `${foreign.join(', ')}`
+  `ok - updater identity: ${endpoints.length} endpoint(s), all under ${FORK_ORIGIN}${FORK_PATH}; ` +
+    `pubkey ${pubkey ? 'set and not upstream\'s' : 'empty'}; artifacts off`
 );

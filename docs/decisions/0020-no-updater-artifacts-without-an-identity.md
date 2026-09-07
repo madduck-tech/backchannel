@@ -48,8 +48,22 @@ Dated facts, each read from source or measured on the day.
    signed artifacts advertised through a feed the fork does not own is worse than producing none.
    `frontend/tests/lib/updater-identity.test.mjs` holds that coupling: artifacts may be enabled only
    when every `plugins.updater.endpoints` URL is under `/madduck-tech/backchannel/`.
+
+   **Amended 2026-09-07 by #79.** That coupling was conditional on `createUpdaterArtifacts`, so it
+   held the *publishing* side and said nothing about *consuming*: it was green while the application
+   polled upstream's feed on every launch and trusted upstream's key. And with `endpoints: []` — the
+   state #79 leaves — the endpoint rule is **vacuous**, so it could not carry the decision alone.
+   The check is now unconditional, asserts the endpoint's **origin** as well as its path (a path
+   prefix accepts `https://evil.example.com/madduck-tech/backchannel/…`, measured), and asserts the
+   pubkey **positively** rather than as "not upstream's", which was a denylist of one.
 4. **The application keeps the updater plugin compiled in and registered.** This ADR changes what is
    *built*, not what the app does at runtime. The runtime pointer at upstream is #79's to remove.
+
+   **Still true after #79**, and deliberately: the fix empties `endpoints` and the pubkey rather than
+   removing the `plugins.updater` block. Removing it **panics the application at startup** —
+   `tauri-plugin-updater-2.10.1/src/config.rs:122` gives `pubkey` no `#[serde(default)]` (while
+   `endpoints` at `:121` has one), so the plugin receives `Value::Null`, fails to deserialize, and
+   `lib.rs:681`'s `.expect(…)` aborts. Read from source at the locked version.
 5. **This is not a decision about whether Backchannel has an updater.** It records that it has none
    *yet*, and that the wrong one stops being produced while the right one is chosen. That choice is
    the product owner's (ADR 0014).
