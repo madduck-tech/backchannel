@@ -265,9 +265,12 @@ const PROVENANCE = '.built-from';
   //    is the exception and the only one: it BUILDS the bundle, so it is what writes the provenance
   //    file rather than a consumer of it. Before #103 there were five independent `ls -t` sites, and
   //    that is what made a stale binary reachable from four separate places.
+  // The needle allows a leading `../`: entry 3 runs after `cd frontend`, and `target/` is the cargo
+  // workspace root at the repository root. Matching only the bare form made this check pass
+  // vacuously the moment that path was corrected -- it found zero entries and expected one.
   const raw = stage2
     .map((c, i) => [i + 1, c])
-    .filter(([, c]) => c.includes('ls -t target/release/bundle/appimage'))
+    .filter(([, c]) => /ls -t (\.\.\/)?target\/release\/bundle\/appimage/.test(c))
     .map(([i]) => i);
   assert.deepEqual(
     raw,

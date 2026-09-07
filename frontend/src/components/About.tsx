@@ -33,7 +33,11 @@ export function About() {
     } catch (error: any) {
       console.error('Failed to check for updates:', error);
       toast.error('Could not check for updates', {
-        description: error?.message || 'Unknown error',
+        // The plugin serialises its error as a bare string (`error.rs` -> `serialize_str`) and the
+        // IPC layer rejects with that raw value, so `error?.message` is `undefined` and this line
+        // used to print "Unknown error" for *every* failure -- a missing platform key, a denied
+        // capability and a network error were indistinguishable. #79's own oracle could not read it.
+        description: error?.message ?? (typeof error === 'string' ? error : String(error)),
       });
     } finally {
       setIsChecking(false);
