@@ -2,7 +2,7 @@
 
 Package guide for OpenDesign agents and reviewers.
 
-## Read order
+## Read Order
 
 1. Read this file to understand the package contract.
 2. Read `DESIGN.md` for product principles, visual intent, constraints and the two surfaces.
@@ -11,7 +11,7 @@ Package guide for OpenDesign agents and reviewers.
 4. Reuse the component rules in `DESIGN.md` before inventing new controls; the app's primitives
    are shadcn/ui-based and live in `frontend/src/components/ui/`.
 
-## Design highlights
+## Design Highlights
 
 - Canvas `--bg` pure white in light, `oklch(0.155 0.004 190)` in dark; surfaces are tinted neutrals.
 - One brand color `--accent` (teal 190°) for identity, primary action and selection. It is also the success color.
