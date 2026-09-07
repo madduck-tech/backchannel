@@ -3,8 +3,9 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import {
   TranscriptionModelStep,
   SummariserStep,
-  PermissionsStep,
   DownloadProgressStep,
+  AudioCheckStep,
+  PermissionsStep,
 } from './steps';
 
 interface OnboardingFlowProps {
@@ -50,14 +51,18 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   // Step 1: Transcription - which model turns speech into text, out of a catalogue of 86
   // Step 2: Summariser  - which one writes the summary, and whether anything leaves this machine
   // Step 3: Download    - what the two choices above selected, and nothing else
-  // Step 4: Permissions - microphone and system audio (macOS only)
+  // Step 4: Audio check - prove each device with words, not a moving bar. Offered, not mandatory.
+  // Step 5: Permissions - microphone and system audio (macOS only)
+  //
+  // macOS keeps its permissions step last, because the audio check needs the permission it grants.
 
   return (
     <div className="onboarding-flow">
       {currentStep === 1 && <TranscriptionModelStep />}
       {currentStep === 2 && <SummariserStep />}
       {currentStep === 3 && <DownloadProgressStep />}
-      {currentStep === 4 && isMac && <PermissionsStep />}
+      {currentStep === 4 && <AudioCheckStep />}
+      {currentStep === 5 && isMac && <PermissionsStep />}
     </div>
   );
 }

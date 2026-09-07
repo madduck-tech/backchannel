@@ -27,6 +27,7 @@ async function chosen(currentStep) {
       TranscriptionModelStep: () => { seen.push('transcription'); return null; },
       SummariserStep: () => { seen.push('summariser'); return null; },
       DownloadProgressStep: () => { seen.push('download'); return null; },
+      AudioCheckStep: () => { seen.push('audio'); return null; },
       PermissionsStep: () => { seen.push('permissions'); return null; },
     },
     '@tauri-apps/plugin-os': { platform: () => 'linux' },
@@ -57,6 +58,7 @@ async function chosen(currentStep) {
   for (const [step, expected] of [
     [2, 'summariser'],
     [3, 'download'],
+    [4, 'audio'],
   ]) {
     assert.deepEqual(
       await chosen(step),
@@ -72,8 +74,21 @@ async function chosen(currentStep) {
   // had been asked anything. Whatever else changes, the download step must not precede either
   // choice.
   const order = [];
-  for (const step of [1, 2, 3]) order.push((await chosen(step))[0]);
-  assert.deepEqual(order, ['transcription', 'summariser', 'download']);
+  for (const step of [1, 2, 3, 4]) order.push((await chosen(step))[0]);
+  assert.deepEqual(order, ['transcription', 'summariser', 'download', 'audio']);
+}
+
+// --- 2c: the audio check comes after the download, and permissions after both -------------------
+{
+  // The microphone is proven by transcribed words, so the transcription model has to be on disk
+  // first. And on macOS the permission that lets the microphone open at all is granted on the last
+  // step, which is why it is last rather than first.
+  assert.deepEqual(
+    await chosen(5),
+    [],
+    'step 5 is macOS-only, and this harness reports linux — nothing renders, rather than a blank ' +
+      'screen with a step number nobody reaches'
+  );
 }
 
 // --- 3: the deleted screens are gone, not merely unrendered --------------------------------------

@@ -568,6 +568,7 @@ pub fn run() {
             audio::recording_commands::get_active_audio_output,
             // Capture-start measurement, debug builds only (audio/dictation_probe.rs)
             #[cfg(debug_assertions)]
+            audio::device_check::check_capture_device,
             audio::dictation_probe::dictation_probe,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
