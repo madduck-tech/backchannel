@@ -110,13 +110,12 @@ const clear = async () => {
 /**
  * The step's own forward control.
  *
- * **Not found by its text, and that is a finding.** It reads "Continue" only when the model is
- * present and nothing is completing; otherwise it renders a bare spinner
- * (`DownloadProgressStep.tsx:530-534`) with no text, no `aria-label` and no `title`. So on the
- * first screen a new user meets, the one control on it has **no accessible name for most of the
- * time it is on screen** — a screen-reader user is offered an unlabelled, disabled button and told
- * nothing about what it is waiting for. Out of scope for a test-only change; located structurally
- * here so the assertions can run, and written down so it is not rediscovered.
+ * **Not found by its text**, historically because it had none: it read "Continue" only when the
+ * model was present and nothing was completing, and otherwise rendered a bare spinner with no text,
+ * no `aria-label` and no `title`. On the first screen a new user meets, the one control on it had
+ * **no accessible name for most of the time it was on screen**. #92 fixed that — assertion 5 below
+ * holds it — and the structural lookup stays, because the button's name now changes with its state
+ * and finding it by text would make the test depend on which state it is in.
  */
 const continueButton = (container) => {
   const wrap = [...container.querySelectorAll('div')].find((d) =>
@@ -152,28 +151,45 @@ const click = async (el) => {
     parakeetDownloaded: false,
     hasAvailableModels: true,
   });
-  // The repair branch needs this flag false; the button is disabled by this flag. So the branch
-  // cannot be entered from the UI at all — asserted here rather than described, because it is the
-  // whole of finding 3.
+  // This assertion used to record the trap: the repair branch needs the flag false, the button was
+  // disabled by exactly that flag, so the rescue could never run from the screen it lived on. #92
+  // inverts it. The verification now runs on mount, gated by nothing, so a user whose model is on
+  // disk while the flag disagrees is repaired before they ever reach for a control.
+  assert.ok(
+    stubs.calls.some((c) => c.cmd === 'transcribe_has_available_models'),
+    'the backend must be asked on mount, not only behind a button the stuck user cannot press'
+  );
+  assert.deepEqual(
+    seen.parakeetSet,
+    [true],
+    'and when the backend says the model is there, the flag is repaired — exactly once'
+  );
+  // What is NOT asserted here, and why. The button stays disabled in this render, because
+  // `parakeetDownloaded` is a constant in the harness and `setParakeetDownloaded` only records the
+  // call -- in the application it comes from the onboarding context and re-renders the step.
+  // Simulating that re-render would assert the simulation, so instead the two halves are held
+  // separately: assertion 1 above holds "flag false -> the control is disabled", and the two
+  // assertions here hold "the flag is repaired, on mount, without the user touching anything".
+  // Together they are the whole of #92; neither over-claims.
   assert.equal(
     continueButton(container).disabled,
     true,
-    'with the flag false the only control is disabled, so `handleContinue` — and the state-drift ' +
-      'repair inside it — can never run. The rescue path is unreachable from the screen it lives on'
+    'still disabled in THIS render, because the harness holds the flag constant — see the note above'
   );
-  assert.equal(
-    seen.parakeetSet.length,
-    0,
-    'and nothing has repaired the flag, which is what leaves the user stuck'
-  );
-  void stubs;
 
   await clear();
   const ok = await render({ parakeetDownloaded: true, hasAvailableModels: true });
+  // Counted across the click, not merely "did it ever happen". Since #92 the same call also runs on
+  // mount, so `some(...)` is satisfied by the mount one and would pass with Continue's own call
+  // removed — measured: the published control for exactly that assertion went `check-stayed-green`
+  // the moment the second call site existed. The runner's message is the rule this file lives by:
+  // "something else guarantees the same behaviour and both need mutating."
+  const asked = () => ok.stubs.calls.filter((c) => c.cmd === 'transcribe_has_available_models').length;
+  const before = asked();
   await click(continueButton(ok.container));
   assert.ok(
-    ok.stubs.calls.some((c) => c.cmd === 'transcribe_has_available_models'),
-    'Continue must ask the backend whether a model is really there — the component says this ' +
+    asked() > before,
+    'Continue must ask the backend ITSELF whether a model is really there — the component says this ' +
       'catches state drift, and trusting the flag is how a deleted model becomes a broken first run'
   );
   assert.equal(ok.seen.completed, 1, 'and with everything in place it must complete onboarding');
@@ -208,3 +224,41 @@ console.log(
   'ok - first run: no engine means no way past, Continue asks the backend rather than trusting the ' +
     'flag, onboarding completes once per press, and a failure gives the button back'
 );
+
+// --- 5: the control says what it is waiting for, in every state ----------------------------------
+//
+// The other half of #92, which the issue files as "one line of the same fix": while disabled the
+// button rendered a bare spinner. A screen-reader user was offered an unlabelled, disabled control
+// on the first screen of the application and told nothing about why.
+{
+  await clear();
+  const waiting = await render({ parakeetDownloaded: false, hasAvailableModels: false });
+  const button = continueButton(waiting.container);
+  const name = (button.getAttribute('aria-label') || button.textContent || '').trim();
+  assert.ok(
+    name.length > 0,
+    'a disabled control must still have an accessible name — this is the state it is in for most ' +
+      'of the first run'
+  );
+  assert.match(
+    name,
+    /transcription model/i,
+    `and the name must say what it is waiting for, not merely that it is waiting; got ${JSON.stringify(name)}`
+  );
+  assert.ok(
+    waiting.container.textContent.includes('Waiting for the transcription model'),
+    'the words are on screen too, not only in the accessibility tree — a sighted user watching a ' +
+      'spinner is owed the same sentence'
+  );
+
+  await clear();
+  const ready = await render({ parakeetDownloaded: true, hasAvailableModels: true });
+  const readyButton = continueButton(ready.container);
+  assert.equal(
+    (readyButton.getAttribute('aria-label') || readyButton.textContent).trim(),
+    'Continue',
+    'and once there is nothing to wait for it is simply Continue'
+  );
+}
+
+console.log('ok - first run: the control is named in every state it can be in');

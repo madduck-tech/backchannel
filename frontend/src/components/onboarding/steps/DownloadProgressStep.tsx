@@ -328,6 +328,45 @@ export function DownloadProgressStep() {
     }
   };
 
+  /**
+   * Ask the backend whether the transcription model is really on disk, and repair the flag if it
+   * disagrees.
+   *
+   * This used to live only inside `handleContinue`, which is reached only through a button
+   * `disabled={!parakeetDownloaded}` -- the very flag the repair exists to correct. A user whose
+   * model was present while the flag said otherwise (a reinstall over an existing model directory,
+   * a completed download whose state write failed, an interrupted first run) met a permanent
+   * spinner on the first screen of the application, and the code written to rescue them ran only
+   * after they pressed the button they could not press. #92.
+   *
+   * It runs on mount now, gated by nothing. Continue still calls it too, so drift the other way --
+   * flag true, model gone -- is caught as before.
+   */
+  const verifyModelPresence = React.useCallback(async () => {
+    await invoke('transcribe_init');
+    const actuallyAvailable = await invoke<boolean>('transcribe_has_available_models');
+    if (actuallyAvailable && !parakeetDownloaded) {
+      setParakeetDownloaded(true);
+      setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
+    }
+    return actuallyAvailable;
+  }, [parakeetDownloaded, setParakeetDownloaded]);
+
+  // On mount, before the user reaches for anything.
+  useEffect(() => {
+    void verifyModelPresence().catch((error) => {
+      console.error('[DownloadProgressStep] Could not verify model presence:', error);
+    });
+    // Once. Re-running on every change of the flag it sets would loop.
+  }, []);
+
+  // What the control is waiting for, in words. `null` when it is not waiting.
+  const waitingLabel = isCompleting
+    ? 'Finishing setup…'
+    : !parakeetDownloaded
+      ? 'Waiting for the transcription model…'
+      : null;
+
   const handleContinue = async () => {
     // Verify actual model availability (catches state drift)
     try {
@@ -520,15 +559,24 @@ export function DownloadProgressStep() {
           )}
         </AnimatePresence>
 
-        {/* Continue Button */}
+        {/* Continue.
+            It spends most of its time on screen disabled, and while disabled it used to render a
+            bare spinner: no text, no label, no title. So for most of the first run the only control
+            on the first screen of the application had **no accessible name at all**. It says what it
+            is waiting for now, in words, to everyone. #92. */}
         <div className="w-full max-w-xs">
           <Button
             onClick={handleContinue}
             disabled={!parakeetDownloaded || isCompleting}
+            aria-label={waitingLabel ?? 'Continue'}
+            title={waitingLabel ?? undefined}
             className="w-full h-11 bg-ink hover:bg-ink/90 text-canvas disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {(isCompleting || !parakeetDownloaded) ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
+                {waitingLabel}
+              </>
             ) : (
               'Continue'
             )}
