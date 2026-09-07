@@ -3,7 +3,11 @@ import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
-import { withSpeaker } from '@/lib/speaker';
+import {
+    buildSummaryTranscriptPayload,
+    payloadCarriesSides,
+    sideAwareCustomPrompt,
+} from '@/lib/summary-payload';
 import { useSpeakerNames } from '@/hooks/useSpeakerNames';
 import { toast } from 'sonner';
 import { isOllamaNotInstalledError } from '@/lib/utils';
@@ -382,27 +386,13 @@ export function useSummaryGeneration({
     }
   }, []);
 
-  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[]) => {
-    const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
-      if (seconds === undefined) {
-        return fallbackTimestamp;
-      }
-      const totalSecs = Math.floor(seconds);
-      const mins = Math.floor(totalSecs / 60);
-      const secs = totalSecs % 60;
-      return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
-    };
-
-    return {
-      transcriptText: allTranscripts
-        .map(
-          t =>
-            `${formatTime(t.audio_start_time, t.timestamp)} ${withSpeaker(t.text, t.speaker, speakerNames)}`
-        )
-        .join('\n'),
-      transcriptTexts: allTranscripts.map(t => t.text),
-    };
-  }, [speakerNames]);
+  // Extracted to `@/lib/summary-payload` so it can be asserted without React, a model or a
+  // meeting. #113: the control that used to guard this compared two generated summaries, which
+  // cannot fail -- the summariser is stochastic by construction. The check is on the input now.
+  const buildSummaryPayload = useCallback(
+    (allTranscripts: Transcript[]) => buildSummaryTranscriptPayload(allTranscripts, speakerNames),
+    [speakerNames]
+  );
 
   // Public API: Generate summary from transcripts
   const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {
@@ -560,13 +550,15 @@ export function useSummaryGeneration({
       }
     }
 
-    const summaryPayload = buildSummaryTranscriptPayload(allTranscripts);
+    const summaryPayload = buildSummaryPayload(allTranscripts);
 
     await processSummary({
       ...summaryPayload,
-      customPrompt,
+      // The side instruction only when the rows have two sides. It is appended to whatever the
+      // user typed, never in place of it. #113.
+      customPrompt: sideAwareCustomPrompt(customPrompt, payloadCarriesSides(allTranscripts)),
     });
-  }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary, modelConfig, isModelConfigLoading, selectedTemplate]);
+  }, [meeting.id, fetchAllTranscripts, buildSummaryPayload, processSummary, modelConfig, isModelConfigLoading, selectedTemplate]);
 
   // Public API: Regenerate summary from the current saved transcript
   const handleRegenerateSummary = useCallback(async () => {
@@ -579,10 +571,11 @@ export function useSummaryGeneration({
     }
 
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
+      ...buildSummaryPayload(allTranscripts),
+      customPrompt: sideAwareCustomPrompt('', payloadCarriesSides(allTranscripts)),
       isRegeneration: true
     });
-  }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);
+  }, [meeting.id, fetchAllTranscripts, buildSummaryPayload, processSummary]);
 
   // Public API: Stop ongoing summary generation
   const handleStopGeneration = useCallback(async () => {
