@@ -5,6 +5,7 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
+import { MeetingActionBar } from '@/components/MeetingDetails/MeetingActionBar';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 
@@ -193,7 +194,7 @@ export default function PageContent({
 
   return (
     // No mount choreography — see /design/backchannel/DESIGN.md → Motion.
-    <div className="flex h-screen flex-col bg-canvas">
+    <div className="relative flex h-screen flex-col bg-canvas">
       <div className="flex flex-1 overflow-hidden">
         <TranscriptPanel
           transcripts={meetingData.transcripts}
@@ -250,6 +251,27 @@ export default function PageContent({
           onTemplateSelect={templates.handleTemplateSelection}
           isModelConfigLoading={false}
           onOpenModelSettings={handleRegisterModalOpen}
+        />
+      </div>
+
+      {/* The meeting's own control bar, floating over the panes exactly as the
+          recording screen's transport does. It replaces a four-button row that sat
+          in the transcript pane's header and overflowed it at the default window,
+          because its labels hid on a *viewport* query while the buttons lived in a
+          pane. #114.
+
+          `recorded` is shown only once every page is loaded: the length is derived
+          from the last row's end time, and a partial page would understate it. The
+          meeting record carries no duration of its own. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-sticky px-4">
+        <MeetingActionBar
+          recordedSeconds={hasMore ? null : (segments?.[segments.length - 1]?.endTime ?? null)}
+          transcriptCount={totalCount ?? segments?.length ?? 0}
+          onCopyTranscript={copyOperations.handleCopyTranscript}
+          onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
+          meetingId={meeting.id}
+          meetingFolderPath={meeting.folder_path}
+          onRefetchTranscripts={onRefetchTranscripts}
         />
       </div>
     </div>

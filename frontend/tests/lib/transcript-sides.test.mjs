@@ -258,7 +258,6 @@ const bubbles = (container) =>
   const { TranscriptPanel: DetailsPanel } = loadTsx('src/components/MeetingDetails/TranscriptPanel.tsx', {
     ...stubs,
     ...recordingCtx,
-    './TranscriptButtonGroup': { TranscriptButtonGroup: () => null },
     '@/components/PaneDivider': { PaneDivider: () => null },
     '@/hooks/useSpeakerNames': { useSpeakerNames: () => ({ speakerNames: {}, renameSpeaker: () => {} }) },
   });

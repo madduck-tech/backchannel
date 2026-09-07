@@ -40,7 +40,7 @@ const MEETINGS = [
 ];
 
 /** One render's worth of state, with everything the assertions observe recorded. */
-function harness({ isRecording = false, currentId = 'm-1' } = {}) {
+function harness({ isRecording = false, currentId = 'm-1', pathname = '/' } = {}) {
   const seen = { pushed: [], meetings: null, currentMeeting: null };
   const stubs = tauriStubs({
     extra: { api_delete_meeting: null, api_save_meeting_title: null },
@@ -67,9 +67,10 @@ function harness({ isRecording = false, currentId = 'm-1' } = {}) {
     '@tauri-apps/api/event': stubs.event,
     'next/navigation': {
       useRouter: () => ({ push: (to) => seen.pushed.push(to) }),
-      // Home. The rail reports capture state here rather than duplicating the in-page transport,
-      // which is the branch assertion 6 is about (`isHome = pathname === '/'`).
-      usePathname: () => '/',
+      // `isHome = pathname === '/'`, and `/` is the recording screen. Assertion 6 turns on this,
+      // so it is a knob rather than a constant: since #114 the rail's live badge is *navigation*,
+      // and it is absent on the screen it would navigate to.
+      usePathname: () => pathname,
     },
     './SidebarProvider': { useSidebar: () => sidebar },
     '@/contexts/RecordingStateContext': { useRecordingState: () => ({ isRecording }) },
@@ -232,10 +233,30 @@ const click = async (el) => { await act(async () => { el.dispatchEvent(new windo
     !statuses(live.container).some((t) => t.includes('Not recording')),
     'while recording, the rail must not still claim it is idle'
   );
-  assert.ok(
+
+  // #114 changed this deliberately, and the change is the point rather than an accommodation.
+  // On `/` the recording IS the screen: the transport a few rows below carries the state, the two
+  // clocks and the level meter. A badge here was the same claim a second time -- one of five on
+  // screen at once -- and clicking it offered to take you where you already were.
+  assert.equal(
     live.container.querySelector('[role="status"][aria-live="polite"]'),
-    'while recording, the rail must carry the live readout — the status every other screen reads'
+    null,
+    'on the recording screen the rail carries no live badge: the transport below already does, and ' +
+      'the badge is navigation to a screen you are on'
   );
+
+  // Everywhere else it is navigation, and must still be there and still be clickable.
+  const away = await render({ isRecording: true, pathname: '/meeting-details' });
+  assert.ok(
+    away.container.querySelector('[role="status"][aria-live="polite"]'),
+    'away from the recording screen the rail must carry the live readout — this is the half that ' +
+      'must NOT be lost, and a fix that deletes the badge outright passes the assertion above and ' +
+      'fails this one'
+  );
+  const openButton = [...away.container.querySelectorAll('button')].find((b) =>
+    b.textContent.includes('Open')
+  );
+  assert.ok(openButton, 'and it must be clickable, because now it goes somewhere');
 }
 
 // --- condition 2: an unaccounted dependency moves a set someone holds ------------------------
