@@ -69,7 +69,7 @@ const PUBLISHED = [
     // virtualiser is told one item fewer — and the anchor drift is what caught the rename.
     id: '#84 transcript: the virtualiser is told one row fewer',
     file: 'src/components/VirtualizedTranscriptView.tsx',
-    line: 373,
+    line: 401,
     anchor: 'count: turns.length,',
     replace: '        count: turns.length - 1,',
     check: ['node', 'tests/lib/transcript-view.test.mjs'],
