@@ -1,11 +1,6 @@
 import React, { useEffect } from 'react';
 import { useOnboarding } from '@/contexts/OnboardingContext';
-import {
-  WelcomeStep,
-  PermissionsStep,
-  DownloadProgressStep,
-  SetupOverviewStep,
-} from './steps';
+import { PermissionsStep, DownloadProgressStep } from './steps';
 
 interface OnboardingFlowProps {
   onComplete: () => void;
@@ -31,17 +26,28 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     checkPlatform();
   }, []);
 
-  // 4-Step Onboarding Flow (System-Recommended Models):
-  // Step 1: Welcome - Introduce Conversationaly features
-  // Step 2: Setup Overview - Database initialization + show recommended downloads
-  // Step 3: Download Progress - Download Parakeet + Summary Model (auto-selected based on platform/RAM)
-  // Step 4: Permissions - Request mic + system audio (macOS only)
+  // The flow opens on the first real decision.
+  //
+  // Two screens used to come before it. `WelcomeStep` was a heading, three claims and one button;
+  // `SetupOverviewStep` was 113 lines whose only computed value was `totalSteps={isMac ? 4 : 3}`.
+  // On Linux and Windows a new user clicked twice through screens that asked nothing before
+  // anything happened. Both are deleted. #111.
+  //
+  // The three claims went with them, and that is the point rather than a loss: "Your data never
+  // leaves your device" was an absolute the user could falsify a minute later by choosing a cloud
+  // summariser, with nothing at the point of choice saying so. Each provider option now names its
+  // own destination.
+  //
+  // Step numbers are unchanged so a half-finished onboarding resumes where it was: `currentStep`
+  // is persisted (`OnboardingContext.tsx:417-428`), and renumbering would send anyone mid-flow to
+  // the wrong screen.
+  //
+  // Step 3: Download - the transcription model, and the summary model if one was chosen
+  // Step 4: Permissions - microphone and system audio (macOS only)
 
   return (
     <div className="onboarding-flow">
-      {currentStep === 1 && <WelcomeStep />}
-      {currentStep === 2 && <SetupOverviewStep />}
-      {currentStep === 3 && <DownloadProgressStep />}
+      {currentStep <= 3 && <DownloadProgressStep />}
       {currentStep === 4 && isMac && <PermissionsStep />}
     </div>
   );

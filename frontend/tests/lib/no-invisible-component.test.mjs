@@ -99,13 +99,10 @@ const BACKLOG = new Set([
   'src/components/molecules/form-components/form-input-switch.tsx',
   'src/components/molecules/form-components/form-select-item.tsx',
   'src/components/onboarding/OnboardingContainer.tsx',
-  'src/components/onboarding/OnboardingFlow.tsx',
   'src/components/onboarding/shared/PermissionRow.tsx',
   'src/components/onboarding/shared/ProgressIndicator.tsx',
   'src/components/onboarding/shared/StatusIndicator.tsx',
   'src/components/onboarding/steps/PermissionsStep.tsx',
-  'src/components/onboarding/steps/SetupOverviewStep.tsx',
-  'src/components/onboarding/steps/WelcomeStep.tsx',
   'src/components/shared/DownloadProgressToast.tsx',
 ]);
 
