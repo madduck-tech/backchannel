@@ -104,7 +104,7 @@ jobs:
       # flags, a person downloading it would be running Stage 2 against something the gate
       # never described, which is worse than building it themselves.
       - name: Build the AppImage
-        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && BUILT=$(ls -t target/release/bundle/appimage/*.AppImage | head -1) && [ -n "$BUILT" ] && git rev-parse HEAD > "$BUILT.built-from"
+        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && BUILT=$(ls -t ../target/release/bundle/appimage/*.AppImage | head -1) && [ -n "$BUILT" ] && git rev-parse HEAD > "$BUILT.built-from"
 
       # A bundle step that produces nothing still exits 0 in some tauri failure modes, so
       # assert the file rather than the command's return value -- `.claude/rules/testing.md`,
