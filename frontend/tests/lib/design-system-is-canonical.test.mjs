@@ -154,6 +154,18 @@ const declaredTokens = new Set(
       `fixture references ${referenced.size}. The cache is stale — regenerate it with OpenDesign's ` +
       'extractComponentsManifest.'
   );
+  // The count the cache records must be the count the fixture produces. A control found this
+  // missing: editing `selectorCount` by hand left the check green, so the cache could claim any
+  // shape at all. This is the dimension that drifts when someone edits the fixture and forgets to
+  // regenerate.
+  const style = fixtureHtml.match(/<style>([\s\S]*?)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.equal(
+    cm.fixture?.selectorCount,
+    (style.match(/\{/g) ?? []).length,
+    `components.manifest.json records ${cm.fixture?.selectorCount} selectors but the fixture has ` +
+      `${(style.match(/\{/g) ?? []).length}. The cache is stale — regenerate it.`
+  );
+
   const groupsPresent = (cm.groups ?? []).filter((g) => g.present).length;
   assert.ok(
     groupsPresent >= 4,
