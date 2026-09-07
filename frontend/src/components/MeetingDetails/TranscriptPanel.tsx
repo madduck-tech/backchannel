@@ -2,7 +2,6 @@
 
 import { Transcript, TranscriptSegmentData } from '@/types';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
-import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { PaneDivider } from '@/components/PaneDivider';
 import { useMemo } from 'react';
 import { useSpeakerNames } from '@/hooks/useSpeakerNames';
@@ -80,17 +79,6 @@ export function TranscriptPanel({
     >
       <PaneDivider pane="transcript" label="Resize transcript" />
 
-      {/* Title area */}
-      <div className="border-b border-line p-3">
-        <TranscriptButtonGroup
-          transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
-          onCopyTranscript={onCopyTranscript}
-          onOpenMeetingFolder={onOpenMeetingFolder}
-          meetingId={meetingId}
-          meetingFolderPath={meetingFolderPath}
-          onRefetchTranscripts={onRefetchTranscripts}
-        />
-      </div>
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">

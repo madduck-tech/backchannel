@@ -315,9 +315,12 @@ const Sidebar: React.FC = () => {
                 <span className="h-2 w-2 rounded-full bg-danger animate-live" />
               </RailRow>
             ) : isHome ? (
-              <div className="flex h-9 items-center rounded-md border border-danger/30 bg-danger-soft px-gutter">
-                <LiveIndicator />
-              </div>
+              /* Nothing. The recording IS this screen: its transport carries the
+                 state, the clocks and the level meter a few rows below, and a
+                 badge here would be the same claim a second time. Elsewhere the
+                 badge is navigation — see the branch below — but on the screen it
+                 points at, it offers to take you where you already are. #114. */
+              null
             ) : (
               <button
                 onClick={openSession}

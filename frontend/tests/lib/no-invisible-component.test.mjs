@@ -77,7 +77,6 @@ const BACKLOG = new Set([
   'src/components/MeetingDetails/SummaryGeneratorButtonGroup.tsx',
   'src/components/MeetingDetails/SummaryPanel.tsx',
   'src/components/MeetingDetails/SummaryUpdaterButtonGroup.tsx',
-  'src/components/MeetingDetails/TranscriptButtonGroup.tsx',
   'src/components/MessageToast.tsx',
   'src/components/PaneDivider.tsx',
   'src/components/PermissionWarning.tsx',

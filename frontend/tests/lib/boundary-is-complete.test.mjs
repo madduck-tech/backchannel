@@ -145,7 +145,7 @@ function callersOf(member) {
 // `sonner` is pinned by name because it is the module where a name can actually be missing.
 // `lucide-react` is pinned by count: 67 icon names would be noise, its stub is total by construction
 // so the *content* cannot fail, and the number is exactly what a line-based reader would move.
-const BOUND_IN_SOURCE = { sonner: ['Toaster', 'toast'], 'lucide-react': 67 };
+const BOUND_IN_SOURCE = { sonner: ['Toaster', 'toast'], 'lucide-react': 68 };
 
 {
   const { modules, covered } = boundaryStubs();
