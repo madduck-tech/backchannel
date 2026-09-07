@@ -6,6 +6,7 @@ use super::common::{
     create_transcript_segments, markdown_segments, split_segment_at_silence, write_transcript_md,
     write_transcripts_json, MAX_SEGMENT_SAMPLES,
 };
+use crate::api::TranscriptSegment;
 use super::constants::AUDIO_EXTENSIONS;
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
@@ -169,6 +170,131 @@ pub(crate) fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     }
 
     Err(anyhow!("No audio file found in: {}", folder.display()))
+}
+
+/// One row as it stood before retranscription: when it ran, and which side carried it.
+#[derive(Debug, Clone)]
+pub struct PriorRow {
+    pub start: f64,
+    pub end: f64,
+    pub channel: Option<String>,
+}
+
+/// Carry the capture channel across a re-segmentation, by time overlap.
+///
+/// Retranscription does not rewrite rows. It deletes them and runs a fresh VAD pass over the whole
+/// file, producing new ids (`common.rs:169`), new boundaries and a different row count -- so there
+/// is **no join key** between old and new. Only time relates them.
+///
+/// The rule, stated here because it is a decision and not an implementation detail:
+///
+/// * a new segment takes the channel of the prior row it overlaps **most**;
+/// * ties go to the earlier row, so the result does not depend on row order;
+/// * a new segment that overlaps nothing keeps `None` rather than being snapped to a neighbour;
+/// * segments are never split, because the new boundaries are what the user asked for.
+///
+/// **This is lossy where both sides speak at once, and that is measured, not assumed.** On the
+/// reference recording -- 137 rows -- there are 16 cross-channel overlapping row pairs, 38.6 s of
+/// overlap, touching 29 of 137 rows (21.2%). A new segment spanning one of those stretches contains
+/// both sides and can be given only one. The alternative is dropping the column entirely, which is
+/// what happened before and is strictly worse.
+pub fn carry_channels_by_overlap(prior: &[PriorRow], segments: &mut [TranscriptSegment]) {
+    for segment in segments.iter_mut() {
+        let (Some(start), Some(end)) = (segment.audio_start_time, segment.audio_end_time) else {
+            continue;
+        };
+
+        let mut best: Option<(&str, f64)> = None;
+        for row in prior {
+            let Some(channel) = row.channel.as_deref() else { continue };
+            let overlap = end.min(row.end) - start.max(row.start);
+            if overlap <= 0.0 {
+                continue;
+            }
+            // Strictly greater, so the earliest row wins a tie and the result is order-stable.
+            if best.is_none_or(|(_, best_overlap)| overlap > best_overlap) {
+                best = Some((channel, overlap));
+            }
+        }
+
+        segment.channel = best.map(|(channel, _)| channel.to_string());
+    }
+}
+
+/// Read what the rows carried, before they are deleted.
+pub async fn prior_rows(pool: &sqlx::SqlitePool, meeting_id: &str) -> Result<Vec<PriorRow>> {
+    let rows: Vec<(Option<f64>, Option<f64>, Option<String>)> = sqlx::query_as(
+        "SELECT audio_start_time, audio_end_time, channel FROM transcripts
+         WHERE meeting_id = ? AND channel IS NOT NULL ORDER BY audio_start_time",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| anyhow!("Failed to read prior transcript rows: {}", e))?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(start, end, channel)| match (start, end) {
+            (Some(start), Some(end)) => Some(PriorRow { start, end, channel }),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Replace every transcript row of one meeting, in one transaction.
+///
+/// Extracted from `run_retranscription` so it can be driven by a test. It cannot be reached through
+/// the command: that needs an `AppHandle`, `AppState`, an audio file, VAD and a loaded model, and
+/// there is no Tauri mock runtime in this workspace (`grep mock_builder|tauri::test|MockRuntime`
+/// over `src-tauri/src` returns nothing; `[dev-dependencies]` is `tempfile` only). Driving it
+/// through the command would be testing the harness.
+pub async fn replace_meeting_transcripts(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    segments: &[TranscriptSegment],
+) -> Result<()> {
+    // Before the DELETE, because afterwards there is nothing to read. #122.
+    let prior = prior_rows(pool, meeting_id).await?;
+    let mut segments = segments.to_vec();
+    carry_channels_by_overlap(&prior, &mut segments);
+    let segments = &segments[..];
+
+    let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
+    let mut tx = sqlx::Connection::begin(&mut *conn)
+        .await
+        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
+
+    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
+
+    for segment in segments {
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, channel)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&segment.id)
+        .bind(meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .bind(&segment.speaker)
+        .bind(&segment.channel)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+
+    info!("Updated {} transcripts for meeting {} in transaction", segments.len(), meeting_id);
+    Ok(())
 }
 
 /// Internal function to run retranscription
@@ -423,45 +549,8 @@ async fn run_retranscription<R: Runtime>(
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    // Wrap delete+insert+update in a transaction to prevent data loss
     let pool = app_state.db_manager.pool();
-    let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
-    let mut tx = sqlx::Connection::begin(&mut *conn)
-        .await
-        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
-
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
-        .bind(&meeting_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
-
-    for segment in &segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .bind(&segment.speaker)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
-    }
-
-    tx.commit().await
-        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
-
-    info!(
-        "Updated {} transcripts for meeting {} in transaction",
-        segments.len(),
-        meeting_id
-    );
+    replace_meeting_transcripts(pool, &meeting_id, &segments).await?;
 
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
@@ -675,6 +764,191 @@ pub async fn cancel_retranscription_command() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
+
+    /// The same in-memory schema `repositories/transcript.rs:190` uses. One connection, because
+    /// `sqlite::memory:` gives each connection its own database.
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn seed_two_sided(pool: &SqlitePool, meeting_id: &str) {
+        sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind(meeting_id)
+            .bind("two sides")
+            .bind("2026-09-07T10:00:00Z")
+            .bind("2026-09-07T10:00:00Z")
+            .execute(pool)
+            .await
+            .unwrap();
+        for (id, text, start, end, channel) in [
+            ("old-1", "so what did you think", 0.0_f64, 4.0_f64, "you"),
+            ("old-2", "honestly not much", 4.5_f64, 9.0_f64, "others"),
+        ] {
+            sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, channel)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(meeting_id)
+            .bind(text)
+            .bind("2026-09-07T10:00:00Z")
+            .bind(start)
+            .bind(end)
+            .bind(end - start)
+            .bind(channel)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    fn seg(start: f64, end: f64) -> TranscriptSegment {
+        create_transcript_segments(&[("x".to_string(), start * 1000.0, end * 1000.0, None)])
+            .pop()
+            .unwrap()
+    }
+
+    fn prior(start: f64, end: f64, channel: &str) -> PriorRow {
+        PriorRow { start, end, channel: Some(channel.to_string()) }
+    }
+
+    /// The rule where it is hard: a new segment spanning both sides takes the one it overlaps more.
+    ///
+    /// This is not a corner. Measured on the reference recording, 16 cross-channel row pairs overlap
+    /// in time -- 38.6 s, touching 29 of 137 rows, 21.2%. Every fifth row is part of a stretch where
+    /// both people speak at once, and a mono VAD segment covering one carries both voices.
+    #[test]
+    fn a_segment_spanning_both_sides_takes_the_one_it_overlaps_more() {
+        let rows = vec![prior(0.0, 5.0, "you"), prior(4.0, 12.0, "others")];
+
+        // 4.0-5.0 overlaps `you` by 1.0 and `others` by 1.0 -- but extend to 8.0 and `others` wins.
+        let mut segments = vec![seg(3.0, 8.0)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(
+            segments[0].channel.as_deref(),
+            Some("others"),
+            "2.0s of `you` against 4.0s of `others`: the larger overlap takes it"
+        );
+
+        // Flip which is larger, and the answer flips. Without this the assertion above passes for a
+        // function that always returns the last row it saw.
+        let mut segments = vec![seg(0.0, 5.5)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(
+            segments[0].channel.as_deref(),
+            Some("you"),
+            "5.0s of `you` against 1.5s of `others`: the answer must move with the overlap"
+        );
+    }
+
+    /// A tie must not depend on which order the rows came back in.
+    #[test]
+    fn a_tie_goes_to_the_earlier_row() {
+        let rows = vec![prior(0.0, 4.0, "you"), prior(4.0, 8.0, "others")];
+        let mut segments = vec![seg(2.0, 6.0)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(segments[0].channel.as_deref(), Some("you"));
+
+        // Same overlaps, rows the other way round.
+        let reversed = vec![prior(4.0, 8.0, "others"), prior(0.0, 4.0, "you")];
+        let mut segments = vec![seg(2.0, 6.0)];
+        carry_channels_by_overlap(&reversed, &mut segments);
+        assert_eq!(
+            segments[0].channel.as_deref(),
+            Some("others"),
+            "the earliest row in the slice wins a tie, so the caller's ORDER BY is what decides -- \
+             `prior_rows` sorts by start time and this documents that the two must stay together"
+        );
+    }
+
+    /// Silence between two people is nobody's.
+    #[test]
+    fn a_segment_that_overlaps_nothing_is_left_alone() {
+        let rows = vec![prior(0.0, 2.0, "you")];
+        let mut segments = vec![seg(5.0, 9.0)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(
+            segments[0].channel, None,
+            "a segment nothing overlaps must not be snapped to the nearest row -- inventing a side \
+             is worse than admitting there is none, because the side is the only label the \
+             transcript shows"
+        );
+    }
+
+    /// A meeting that never had a channel does not gain one.
+    #[test]
+    fn a_channel_less_meeting_stays_channel_less() {
+        let rows = vec![PriorRow { start: 0.0, end: 9.0, channel: None }];
+        let mut segments = vec![seg(1.0, 4.0)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(segments[0].channel, None);
+    }
+
+    /// Touching intervals are not overlapping ones.
+    #[test]
+    fn an_interval_that_only_touches_does_not_count() {
+        let rows = vec![prior(0.0, 4.0, "you")];
+        let mut segments = vec![seg(4.0, 9.0)];
+        carry_channels_by_overlap(&rows, &mut segments);
+        assert_eq!(
+            segments[0].channel, None,
+            "zero-length overlap is not overlap; otherwise every segment inherits from whatever \
+             row happens to end where it begins"
+        );
+    }
+
+    /// Retranscribing a two-sided meeting must not silently turn it into a single column.
+    ///
+    /// #122. Since #112 the transcript renders from `channel` -- one side is you, the other is
+    /// everyone else, and nothing is spelled out, so the side IS the label. This path deletes every
+    /// row and re-inserts from a fresh pass, and the INSERT never carried the column. The audio is
+    /// mono (measured on the reference recording: `codec_name=aac, channels=1`), so nothing can
+    /// recover it afterwards.
+    #[tokio::test]
+    async fn retranscribing_keeps_the_side_each_line_came_from() {
+        let pool = migrated_pool().await;
+        seed_two_sided(&pool, "m-1").await;
+
+        // What a fresh VAD pass produces: different ids, different boundaries, a different count.
+        // There is no join key back to the old rows -- only time.
+        let new_segments = create_transcript_segments(&[
+            ("so what did you think".to_string(), 100.0, 3900.0, None),
+            ("honestly".to_string(), 4600.0, 6000.0, None),
+            ("not much".to_string(), 6100.0, 8900.0, None),
+        ]);
+
+        replace_meeting_transcripts(&pool, "m-1", &new_segments)
+            .await
+            .unwrap();
+
+        let sides: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT channel FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+                .bind("m-1")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            sides,
+            vec![
+                Some("you".to_string()),
+                Some("others".to_string()),
+                Some("others".to_string())
+            ],
+            "each new segment must take the side of the old row it overlaps most. Got {sides:?} -- \
+             all None means the column was dropped, which turns a two-sided conversation into one \
+             column permanently, with no warning and no undo"
+        );
+    }
+
     use super::*;
 
     #[test]

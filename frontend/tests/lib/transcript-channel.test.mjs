@@ -104,11 +104,22 @@ assert.equal(
     'binds NULL where nothing overlapped, so anything else it touches is erased for rows the ' +
     'diarizer did not hear. The channel is a fact of capture and must survive it.'
 );
+// This used to assert that `diarization.rs` contains `channel: row.channel.clone()`, on the stated
+// grounds that otherwise "a diarization pass would blank it in transcripts.json". **That assertion
+// was scaffolding, and measurably so**: it passed while the diarized 137-segment `transcripts.json`
+// in a real profile had no `channel` key on 137 of 137 segments. The value was carried into the
+// struct and then dropped by `common.rs::write_transcripts_json`, one call later, which the grep
+// could not see because it never opened the file.
+//
+// The replacement is in Rust, where the file is actually written:
+// `import.rs::test_write_transcripts_json` builds a channel-bearing segment, writes it, and reads
+// the key back. #122. What stays here is the half a source grep can hold honestly:
 assert.match(
   diarization,
   /channel: row\.channel\.clone\(\)/,
-  'diarization.rs rewrites the meeting transcript files without carrying the channel across, so a ' +
-    'diarization pass would blank it in transcripts.json and transcript.md'
+  'diarization.rs must still carry the channel into the struct it rewrites the meeting files from ' +
+    '— necessary but NOT sufficient, and the sufficiency is asserted against the written file in ' +
+    '`import.rs::test_write_transcripts_json`'
 );
 
 console.log(

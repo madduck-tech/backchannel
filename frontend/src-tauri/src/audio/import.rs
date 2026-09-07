@@ -1117,7 +1117,7 @@ mod tests {
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
                 speaker: Some("2".to_string()),
-                channel: None,
+                channel: Some("others".to_string()),
             },
         ];
 
@@ -1133,6 +1133,17 @@ mod tests {
         assert_eq!(parsed["total_segments"], 2);
         assert_eq!(parsed["version"], "1.0");
         assert_eq!(parsed["segments"][0]["text"], "Hello world");
+
+        // The capture channel, which this writer dropped until #122. Measured in a real profile
+        // before the fix: the diarized 137-segment file had no `channel` key on 137 of 137 segments
+        // while the database still held every value. The live writer in `recording_saver.rs` has
+        // always carried it, so the same filename had two shapes -- and `stage2-two-channel-check.sh`
+        // reads the live one as its only oracle, which is why nobody noticed.
+        assert_eq!(
+            parsed["segments"][1]["channel"], "others",
+            "the export must carry the capture channel, or a diarization pass writes a file that \
+             has less in it than the row it was built from"
+        );
         assert_eq!(parsed["segments"][1]["text"], "Second segment");
         assert_eq!(parsed["segments"][0]["sequence_id"], 0);
         assert_eq!(parsed["segments"][1]["sequence_id"], 1);

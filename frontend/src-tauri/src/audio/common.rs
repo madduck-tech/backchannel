@@ -199,6 +199,13 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
                 "speaker": s.speaker,
+                // The capture channel, which this writer used to drop on the floor. Measured in a
+                // real profile before the fix: the diarized 137-segment file had no `channel` key
+                // at all while the database still held all 137 values, so `diarization.rs:405`'s
+                // `channel: row.channel.clone()` was discarded one call later. The live writer in
+                // `recording_saver.rs` has always carried it -- these two files had different
+                // shapes for the same name. #122.
+                "channel": s.channel,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()
