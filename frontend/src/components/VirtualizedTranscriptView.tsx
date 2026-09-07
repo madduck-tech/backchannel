@@ -228,9 +228,6 @@ const TranscriptLine = memo(function TranscriptLine({
                 isSilence && 'italic opacity-70'
             )}
         >
-            {/* First in source order so the float reserves space on the line boxes that
-                follow it, which is what lets it sit on the last line rather than below. */}
-            {trailing}
             {speaker && (
                 <SpeakerTag speaker={speaker} speakerNames={speakerNames} onRename={onRenameSpeaker} />
             )}
@@ -241,6 +238,11 @@ const TranscriptLine = memo(function TranscriptLine({
                     <ConfidenceIndicator confidence={confidence} showIndicator />
                 </>
             )}
+            {/* AFTER the text, as the prototype places it. A float that precedes the inline
+                content is placed at the top of the block, so it lands on the paragraph's FIRST
+                line — measured on screen before this was corrected. Placed last, it descends to
+                the line where it fits, which is the last one. */}
+            {trailing}
         </p>
     );
 });

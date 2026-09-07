@@ -131,6 +131,23 @@ const check = (what, protoValue, implValue, why) => {
   check("the timestamp's leading margin", leading, spacing(Number(ms[1])), 'It separates the time from the words it follows.');
   check("the timestamp's optical nudge", px(declared('.ts.in', 'top')), Number(ms[2]), 'Aligns the mono readout to the text baseline.');
 
+  // Order, not only numbers. The prototype emits `<p>{speaker}{text}{timestamp}</p>` — the float
+  // comes last. Placed first it is put at the top of the block and rides the paragraph's FIRST
+  // line, which is what shipped in the first draft of this change and what a numbers-only check
+  // cannot see.
+  const line = view.match(/const TranscriptLine = memo\([\s\S]*?\n\}\);/);
+  assert.ok(line, 'TranscriptLine must be findable to check the order of its children');
+  const textPos = line[0].indexOf("{isSilence ? 'Silence' : text}");
+  const trailingPos = line[0].lastIndexOf('{trailing}');
+  assert.ok(textPos > 0 && trailingPos > 0, 'both the text and the trailing slot must be present');
+  assert.ok(
+    trailingPos > textPos,
+    'the timestamp must come AFTER the text in source order, as the prototype emits it. A float ' +
+      'placed before the inline content is positioned at the top of the block and lands on the ' +
+      "paragraph's first line instead of its last."
+  );
+  checks.push('the timestamp comes after the text');
+
   assert.ok(
     !/float-\[/.test(view),
     '`float-[inline-end]` does not compile — the built stylesheet contained no `float:inline-end` ' +
