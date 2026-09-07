@@ -8,8 +8,8 @@
 // **Mounted inside the application's own provider stack, not bare.** v1 of #107 mounted with no
 // props and drew 21 of 78 -- measured, that is the always-on-screen chrome the AppImage shows best,
 // and *zero* onboarding steps, *zero* dialogs. Wrapping in the stack `src/app/layout.tsx` mounts
-// unconditionally takes it to **38**, all four onboarding steps included, at **no per-component
-// fixtures**. `WelcomeStep` renders 2083 characters of the real screen; bare it dies with
+// unconditionally takes it to **38**, every onboarding step included, at **no per-component
+// fixtures**. (Four steps when that was measured; #111 deleted two that asked the user nothing.) `PermissionsStep` renders the real screen; bare it dies with
 // "useOnboarding must be used within OnboardingProvider".
 //
 // **One subprocess per component, and that is not tidiness.** Three components throw from a passive
@@ -107,8 +107,6 @@ export const DRAWN_PIN = [
   'src/components/onboarding/shared/StatusIndicator.tsx',
   'src/components/onboarding/steps/DownloadProgressStep.tsx',
   'src/components/onboarding/steps/PermissionsStep.tsx',
-  'src/components/onboarding/steps/SetupOverviewStep.tsx',
-  'src/components/onboarding/steps/WelcomeStep.tsx',
 ];
 
 /** The five kinds a card can be. A component always gets one; a missing card is the failure mode. */
@@ -307,8 +305,6 @@ export const DRAWN = [
   'src/components/onboarding/shared/StatusIndicator.tsx',
   'src/components/onboarding/steps/DownloadProgressStep.tsx',
   'src/components/onboarding/steps/PermissionsStep.tsx',
-  'src/components/onboarding/steps/SetupOverviewStep.tsx',
-  'src/components/onboarding/steps/WelcomeStep.tsx',
 ];
 export const DRAWN_FLOOR = 38;
 

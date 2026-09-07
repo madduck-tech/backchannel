@@ -856,14 +856,22 @@ export function ModelSettingsModal({
               <SelectTrigger>
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
+              {/* Each option says where the words go, on the option itself. The first-run screen
+                  used to promise "Your data never leaves your device" as an absolute and then let
+                  the user pick a provider that sends whole transcripts to a third party, with
+                  nothing on this screen saying so. Five of the seven reach one. #111. */}
               <SelectContent className="max-h-64 overflow-y-auto">
-                <SelectItem value="builtin-ai">Built-in AI (Offline, No API needed)</SelectItem>
-                <SelectItem value="claude">Claude</SelectItem>
-                <SelectItem value="custom-openai">Custom Server (OpenAI)</SelectItem>
-                <SelectItem value="groq">Groq</SelectItem>
-                <SelectItem value="ollama">Ollama</SelectItem>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="openrouter">OpenRouter</SelectItem>
+                <SelectItem value="builtin-ai">Built-in AI — runs here, nothing leaves</SelectItem>
+                <SelectItem value="ollama">Ollama — runs here, nothing leaves</SelectItem>
+                <SelectItem value="claude">Claude — transcripts are sent to Anthropic</SelectItem>
+                <SelectItem value="openai">OpenAI — transcripts are sent to OpenAI</SelectItem>
+                <SelectItem value="groq">Groq — transcripts are sent to Groq</SelectItem>
+                <SelectItem value="openrouter">
+                  OpenRouter — transcripts are sent to OpenRouter and on to the model&apos;s provider
+                </SelectItem>
+                <SelectItem value="custom-openai">
+                  Custom server — transcripts are sent to the address you enter
+                </SelectItem>
               </SelectContent>
             </Select>
 
