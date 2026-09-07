@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Backchannel · transcript view, three variants</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* design/backchannel/tokens.css — pasted verbatim. */
+:root {
+  /* ─── Surface ─────────────────────────────────────────────────── */
+  --bg: oklch(1 0 0);                       /* canvas: transcript and review are documents */
+  --surface: oklch(1 0 0);                  /* cards, popovers, dialogs (app: --elevated) */
+  --surface-warm: oklch(0.976 0.004 190);   /* rails, toolbars (app: --panel) */
+  --surface-sunken: oklch(0.968 0.005 190); /* extension: input wells, code, inset readouts */
+
+  /* ─── Foreground ramp ─────────────────────────────────────────── */
+  --fg: oklch(0.215 0.013 190);
+  --fg-2: var(--fg);
+  --muted: oklch(0.46 0.014 190);
+  --meta: oklch(0.54 0.012 190);
+
+  /* ─── Border ──────────────────────────────────────────────────── */
+  --border: oklch(0.912 0.006 190);
+  --border-soft: var(--border);
+  --border-strong: oklch(0.855 0.008 190); /* extension: input outlines */
+
+  /* ─── Accent = brand ──────────────────────────────────────────── */
+  --accent: oklch(0.365 0.082 190);
+  --accent-on: oklch(1 0 0);
+  --accent-hover: oklch(0.315 0.078 190);
+  --accent-active: var(--accent-hover);
+  --accent-soft: oklch(0.955 0.022 190);   /* extension: selection / active-row tint */
+  --accent-soft-on: oklch(0.33 0.075 190);
+
+  /* ─── Signals ─────────────────────────────────────────────────── */
+  --success: var(--accent);                 /* the brand is the success color */
+  --warn: oklch(0.72 0.15 72);
+  --warn-on: oklch(0.47 0.11 72);
+  --warn-soft: oklch(0.966 0.03 72);
+  --danger: oklch(0.545 0.205 25);
+  --danger-on: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.962 0.022 25);
+  --info: oklch(0.52 0.115 262);            /* extension: local-model and device readouts */
+  --info-soft: oklch(0.962 0.018 262);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-display: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 0.6875rem;  /* 11 · mono readouts */
+  --text-xs: 0.75rem;     /* 12 · captions */
+  --text-sm: 0.8125rem;   /* 13 · dense labels, buttons */
+  --text-base: 0.875rem;  /* 14 · UI body, overlay hint */
+  --text-md: 0.9375rem;   /* 15 · transcript */
+  --text-lg: 1.0625rem;   /* 17 · summary body */
+  --text-xl: 1.25rem;     /* 20 · panel title */
+  --text-2xl: 1.5625rem;  /* 25 · page title */
+  --text-3xl: 1.9375rem;  /* 31 · meeting title */
+  --text-4xl: var(--text-3xl);
+  --leading-body: 1.5;
+  --leading-tight: 1.2;
+  --tracking-display: -0.01em;
+  --measure: 68ch;
+
+  /* ─── Shape ───────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* ─── Elevation (border-first) ────────────────────────────────── */
+  --elev-flat: none;
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 1px 2px oklch(0.2 0.01 190 / 0.06), 0 4px 12px oklch(0.2 0.01 190 / 0.08);
+  --elev-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06), 0 12px 32px oklch(0.2 0.01 190 / 0.12);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.5 0.1 190);
+
+  /* ─── Motion ──────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Spacing ─────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-20: 80px;
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  --container-max: 1100px;                  /* desktop app: the two-pane breakpoint */
+  --container-gutter-desktop: 24px;
+  --container-gutter-tablet: 16px;
+  --container-gutter-phone: 12px;
+  --section-y-desktop: 32px;
+  --section-y-tablet: 24px;
+  --section-y-phone: 16px;
+  --rail-w: 19rem;
+  --rail-w-collapsed: 3.5rem;
+  --overlay-w: 420px;                       /* extension: overlay default width (360–480) */
+}
+
+/* Dark theme: independent values, not a filter. The overlay uses this block by default. */
+.dark,
+[data-theme="dark"] {
+  --bg: oklch(0.155 0.004 190);
+  --surface: oklch(0.225 0.006 190);
+  --surface-warm: oklch(0.185 0.005 190);
+  --surface-sunken: oklch(0.125 0.004 190);
+  --fg: oklch(0.945 0.006 190);
+  --muted: oklch(0.72 0.011 190);
+  --meta: oklch(0.625 0.01 190);
+  --border: oklch(0.285 0.007 190);
+  --border-strong: oklch(0.37 0.009 190);
+  --accent: oklch(0.8 0.115 190);
+  --accent-on: oklch(0.16 0.03 190);        /* bright aqua takes dark ink */
+  --accent-hover: oklch(0.855 0.12 190);
+  --accent-soft: oklch(0.255 0.032 190);
+  --accent-soft-on: oklch(0.845 0.1 190);
+  --warn: oklch(0.78 0.145 72);
+  --warn-on: oklch(0.82 0.13 72);
+  --warn-soft: oklch(0.245 0.045 72);
+  --danger: oklch(0.55 0.21 25);
+  --danger-on: oklch(0.72 0.16 25);
+  --danger-soft: oklch(0.245 0.055 25);
+  --info: oklch(0.66 0.13 262);
+  --info-soft: oklch(0.245 0.045 262);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
+  --elev-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.8 0.115 190);
+}
+
+/* ─── Base ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--surface-warm);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--accent-soft); color: var(--accent-soft-on); }
+
+.board { max-width: 1440px; margin: 0 auto; padding: 40px var(--container-gutter-desktop) 80px; }
+
+/* ─── Page head ────────────────────────────────────────────────── */
+.page-head { max-width: 76ch; margin-bottom: 36px; }
+.page-head h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-2xl);
+  line-height: 31px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-display);
+  text-wrap: balance;
+}
+.lede { margin: 0; color: var(--muted); font-size: var(--text-base); line-height: 21px; text-wrap: pretty; }
+
+/* ─── Variant columns ──────────────────────────────────────────── */
+.variants { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.variant-label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: baseline;
+  margin-bottom: 12px;
+  min-height: 40px;
+}
+.num { font-family: var(--font-mono); font-size: var(--text-xs); line-height: 19px; color: var(--meta); }
+.variant-label h2 { margin: 0; font-size: var(--text-sm); line-height: 19px; font-weight: 500; }
+.variant-label p { grid-column: 2; margin: 0; font-size: var(--text-xs); line-height: 17px; color: var(--muted); text-wrap: pretty; }
+
+/* The transcript pane: canvas on a hairline. */
+.pane {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 20px 24px;
+}
+
+/* ─── Thread: shared structure ─────────────────────────────────── */
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: var(--text-md);
+  line-height: 24px;
+}
+.turn { display: flex; flex-direction: column; gap: 4px; max-width: 78%; }
+.turn.them { align-self: flex-start; align-items: flex-start; }
+.turn.you  { align-self: flex-end;   align-items: flex-end; }
+.turn.none { align-self: stretch;    align-items: flex-start; max-width: none; }
+.turn .head { order: 2; display: flex; align-items: center; }
+.turn .body { order: 1; min-width: 0; }
+.turn p { margin: 0; text-wrap: pretty; overflow-wrap: anywhere; }
+.turn p + p { margin-top: 8px; }
+.ts {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 15px;
+  color: var(--meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 1 · Messenger */
+.v-msg .body { padding: 8px 12px; border-radius: var(--radius-lg); background: var(--surface); }
+.v-msg .them .body { border-bottom-left-radius: var(--radius-sm); }
+.v-msg .you .body { background: var(--accent-soft); color: var(--accent-soft-on); border-bottom-right-radius: var(--radius-sm); }
+.v-msg .ts { padding: 0 2px; }
+
+/* 2 · Document: no boxes; the rule and the anchor carry the side. */
+.v-doc .thread { gap: 22px; }
+.v-doc .turn { max-width: 80%; gap: 6px; }
+.v-doc .turn .head { order: 0; width: 100%; gap: 10px; }
+.v-doc .turn .body { order: 1; }
+.v-doc .head::after { content: ""; flex: 1 1 48px; min-width: 48px; height: 1px; background: var(--border-strong); }
+.v-doc .you .head { flex-direction: row-reverse; }
+
+/* 3 · Asymmetric: they are a card, you are quiet text. */
+.v-asym .them .body { padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.v-asym .you { max-width: 70%; }
+.v-asym .you .body { color: var(--muted); padding: 1px 0; }
+
+/* No channel data: every variant falls back to one neutral column. */
+.thread.nochan .body,
+.thread.nochan .them .body,
+.thread.nochan .you .body { background: transparent; border: 0; padding: 0; color: var(--fg); }
+.thread.nochan .turn .head { order: 0; width: 100%; gap: 10px; }
+.thread.nochan .turn .body { order: 1; }
+.thread.nochan .head::after { content: ""; flex: 1 1 48px; height: 1px; background: var(--border-strong); }
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 18px;
+  padding: 8px 12px;
+  background: var(--warn-soft);
+  color: var(--warn-on);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  line-height: 17px;
+}
+.notice code { font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
+.notice p { margin: 0; text-wrap: pretty; }
+
+/* ─── Edge cases ───────────────────────────────────────────────── */
+.edges { margin-top: 64px; }
+.edges-head { max-width: 76ch; margin-bottom: 8px; }
+.edges-head h2 { margin: 0 0 4px; font-size: var(--text-lg); line-height: 27px; font-weight: 500; }
+.edges-head p { margin: 0; color: var(--muted); font-size: var(--text-sm); line-height: 19px; }
+.edge-row { margin-top: 28px; }
+.case {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  align-items: baseline;
+  max-width: 80ch;
+  margin-bottom: 12px;
+}
+.case h3 { margin: 0; font-size: var(--text-sm); line-height: 19px; font-weight: 500; }
+.case p { grid-column: 2; margin: 0; font-size: var(--text-xs); line-height: 17px; color: var(--muted); text-wrap: pretty; }
+.edge-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.thumb {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.thumb:has(.pane:focus-visible) { box-shadow: var(--focus-ring); }
+.thumb .pane {
+  zoom: 0.6;                 /* rendered small; the pane still lays out at its real measure */
+  border: 0;
+  border-radius: 0;
+  max-height: 760px;         /* 456px on screen; a real pane scrolls too */
+  overflow: auto;
+  outline: none;
+}
+.thumb .kicker {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--meta);
+}
+.thumb .kicker b { font-weight: 500; color: var(--muted); }
+
+/* ─── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .board { padding: 32px var(--container-gutter-tablet) 64px; }
+  .variants, .edge-grid { grid-template-columns: 1fr; }
+  .variant-label { min-height: 0; }
+}
+@media (max-width: 560px) {
+  .board { padding: 24px var(--container-gutter-phone) 48px; }
+  .turn, .v-doc .turn, .v-asym .you { max-width: 92%; }
+}
+</style>
+</head>
+<body>
+<div class="board">
+
+  <header class="page-head" data-od-id="page-head">
+    <h1 data-od-id="page-title">Transcript view</h1>
+    <p class="lede">Three treatments of the same recording. Left is the other participants, right is you; nothing is labelled, the side is the label. A new turn starts when the side changes or after a pause over 3 s, so consecutive lines from one side read as one turn. Timestamps are the turn start.</p>
+  </header>
+
+  <section class="variants" data-od-id="variants">
+
+    <div class="variant" data-od-id="variant-messenger">
+      <div class="variant-label">
+        <span class="num">1</span>
+        <h2>Messenger</h2>
+        <p>Rounded bubbles; your side takes the brand tint. The most familiar reading.</p>
+      </div>
+      <div class="pane v-msg">
+        <div class="thread" data-fixture="main" data-prefix="msg" data-od-id="thread-messenger"></div>
+      </div>
+    </div>
+
+    <div class="variant" data-od-id="variant-document">
+      <div class="variant-label">
+        <span class="num">2</span>
+        <h2>Document</h2>
+        <p>No bubbles. The anchor and a hairline rule carry the side; the transcript reads as a document.</p>
+      </div>
+      <div class="pane v-doc">
+        <div class="thread" data-fixture="main" data-prefix="doc" data-od-id="thread-document"></div>
+      </div>
+    </div>
+
+    <div class="variant" data-od-id="variant-asymmetric">
+      <div class="variant-label">
+        <span class="num">3</span>
+        <h2>Asymmetric</h2>
+        <p>The other side is a card, your side is quiet text. Reads as listening to them.</p>
+      </div>
+      <div class="pane v-asym">
+        <div class="thread" data-fixture="main" data-prefix="asym" data-od-id="thread-asymmetric"></div>
+      </div>
+    </div>
+
+  </section>
+
+  <section class="edges" data-od-id="edge-cases">
+    <div class="edges-head">
+      <h2>Edge cases</h2>
+      <p>Three recordings each variant must survive, shown at 60% under the variant they belong to. Panes scroll.</p>
+    </div>
+
+    <div class="edge-row" data-od-id="edge-a">
+      <div class="case">
+        <span class="num">a</span>
+        <h3>One turn of 4,000 characters</h3>
+        <p>A page of monologue from the other side, between two short lines of yours. The monologue is filler written for the stress test; the rest is the recording.</p>
+      </div>
+      <div class="edge-grid">
+        <div class="thumb" data-od-id="edge-a-messenger"><div class="kicker"><b>1</b>messenger</div><div class="pane v-msg" tabindex="0"><div class="thread" data-fixture="monologue" data-prefix="msg-a"></div></div></div>
+        <div class="thumb" data-od-id="edge-a-document"><div class="kicker"><b>2</b>document</div><div class="pane v-doc" tabindex="0"><div class="thread" data-fixture="monologue" data-prefix="doc-a"></div></div></div>
+        <div class="thumb" data-od-id="edge-a-asymmetric"><div class="kicker"><b>3</b>asymmetric</div><div class="pane v-asym" tabindex="0"><div class="thread" data-fixture="monologue" data-prefix="asym-a"></div></div></div>
+      </div>
+    </div>
+
+    <div class="edge-row" data-od-id="edge-b">
+      <div class="case">
+        <span class="num">b</span>
+        <h3>No channel data</h3>
+        <p>The audio arrived as one mixed stream, so no line has a side. Every variant falls back to the same single column and says why; only pauses split the turns.</p>
+      </div>
+      <div class="edge-grid">
+        <div class="thumb" data-od-id="edge-b-messenger"><div class="kicker"><b>1</b>messenger</div><div class="pane v-msg" tabindex="0">
+          <div class="notice" role="status"><code>channels: none</code><p>This recording has no channel data, so lines cannot be placed by side. They are shown in order, in one column.</p></div>
+          <div class="thread nochan" data-fixture="nochannel" data-prefix="msg-b"></div></div></div>
+        <div class="thumb" data-od-id="edge-b-document"><div class="kicker"><b>2</b>document</div><div class="pane v-doc" tabindex="0">
+          <div class="notice" role="status"><code>channels: none</code><p>This recording has no channel data, so lines cannot be placed by side. They are shown in order, in one column.</p></div>
+          <div class="thread nochan" data-fixture="nochannel" data-prefix="doc-b"></div></div></div>
+        <div class="thumb" data-od-id="edge-b-asymmetric"><div class="kicker"><b>3</b>asymmetric</div><div class="pane v-asym" tabindex="0">
+          <div class="notice" role="status"><code>channels: none</code><p>This recording has no channel data, so lines cannot be placed by side. They are shown in order, in one column.</p></div>
+          <div class="thread nochan" data-fixture="nochannel" data-prefix="asym-b"></div></div></div>
+      </div>
+    </div>
+
+    <div class="edge-row" data-od-id="edge-c">
+      <div class="case">
+        <span class="num">c</span>
+        <h3>Everything on one side</h3>
+        <p>The microphone carried the whole room, so every line is yours. Merged by side alone this would be one turn; the pause rule keeps the turns apart.</p>
+      </div>
+      <div class="edge-grid">
+        <div class="thumb" data-od-id="edge-c-messenger"><div class="kicker"><b>1</b>messenger</div><div class="pane v-msg" tabindex="0"><div class="thread" data-fixture="oneside" data-prefix="msg-c"></div></div></div>
+        <div class="thumb" data-od-id="edge-c-document"><div class="kicker"><b>2</b>document</div><div class="pane v-doc" tabindex="0"><div class="thread" data-fixture="oneside" data-prefix="doc-c"></div></div></div>
+        <div class="thumb" data-od-id="edge-c-asymmetric"><div class="kicker"><b>3</b>asymmetric</div><div class="pane v-asym" tabindex="0"><div class="thread" data-fixture="oneside" data-prefix="asym-c"></div></div></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(() => {
+  // The recording, as the engine delivers it: one segment per line, with the channel that
+  // carried it. R = the user's microphone, L = system audio. Times are seconds into the recording.
+  const LINES = [
+    { side: 'R', start: 1,  end: 2,  text: 'Так, ну-ка.' },
+    { side: 'L', start: 6,  end: 20, text: 'я бы сказал ну нахуй он сдался этот ваш опен код, да у меня своя система, и то работают гораздо лучше, когда качественнее выполняет задачу. много нежели чем вот это дерьмо.' },
+    { side: 'R', start: 24, end: 25, text: 'Продолжай.' },
+    { side: 'L', start: 29, end: 41, text: 'Не знаю, что продолжать, продолжать нечего на самом деле. Я просто я же экспериментировал, помню, я это раз. Подходы. У меня были, например, список задач, которые я сформировал, например, GPT-PRO.' },
+    { side: 'L', start: 42, end: 53, text: 'Вот эти задачи надо сделать. Агент начинает делать эти задачи. Я потом в новом чате перепроверяю, насколько это. Задача, например, была сделана. На сколько процентов?' },
+    { side: 'R', start: 57, end: 65, text: 'Слушай, а посмотри, хорошо, по-моему, идет. Хорошо, транскрибация идет. Это полностью на локальных моделях.' },
+    { side: 'L', start: 69, end: 70, text: 'Отлично.' }
+  ];
+
+  // Stress fixture (a): filler written for the test, in the speaker's register. Not a recording.
+  const MONOLOGUE = [
+    'Смотри, я объясню, как я это делал, потому что дело не в модели, а в процессе. Сначала я садился и формулировал задачу словами, как будто объясняю новому человеку в команде: что есть сейчас, что должно получиться в конце и какие есть ограничения. Потом эту формулировку отдавал в GPT-PRO и просил разложить её на список конкретных задач, у каждой свой критерий готовности. Не «сделать нормально», а «эндпоинт возвращает такой ответ, тесты зелёные, миграция откатывается». На этом шаге обычно уже видно, где я сам чего-то недодумал, и это само по себе полезно, даже если дальше ничего не запускать.',
+    'Дальше этот список я отдавал агенту. Просто как есть, по пунктам, без комментариев, чтобы не подсказывать. Агент начинает делать. Иногда он делает три задачи из десяти и говорит, что готово всё. Иногда он делает все десять, но половину так, что лучше бы не делал. И вот тут самый важный момент: я никогда не проверял результат в том же чате. Открываю новый чат, кладу туда тот же список и код после агента и спрашиваю по каждому пункту: сделано или нет, на сколько процентов, что именно не сделано. Новый чат не знает, что там до этого было написано, он не оправдывается и не защищает свою работу. Он просто смотрит на код.',
+    'Что получилось. По моим спискам в среднем выходило где-то шестьдесят, семьдесят процентов. Причём это не «семьдесят процентов задач сделано», а скорее «каждая задача сделана на семьдесят процентов». Тесты написаны, но не на граничные случаи. Обработка ошибок есть, но логирует не то. Миграция есть, но откат не проверен. То есть поверх этого всё равно нужен человек, который дочитает до конца, и лучше, если это будет не тот же агент, который делал.',
+    'Дальше я пробовал менять подход. Дробить задачи мельче, чтобы каждая помещалась в одну голову. Помогает, но ненамного, потому что мелкие задачи агент делает быстрее, но связи между ними теряет. Пробовал наоборот, давать одну большую задачу и просить самому декомпозировать. Хуже: он декомпозирует красиво, а потом делает первые две части и на третьей начинает выдумывать. Лучше всего работало, когда список составлял один инструмент, выполнял второй, а проверял третий, и они друг о друге не знали. Это и есть моя система, о которой я говорил. Ничего хитрого, просто три роли и запрет на проверку самого себя.',
+    'Ещё одна вещь, про которую все забывают. Список задач надо хранить отдельно от чата, в обычном файле, и после каждого прогона дописывать туда две колонки: что агент сказал про себя и что сказал проверяющий. Через пять, шесть прогонов у тебя появляется картинка, где он систематически приукрашивает. У меня это были тесты и документация: код он ещё как-то делал, а вот «написал тесты» почти всегда означало один тест на счастливый путь. Как только это видно в таблице, ты просто перестаёшь верить этому пункту и проверяешь его руками, а остальное можно и не трогать. Это экономит больше времени, чем любая новая модель, потому что ты знаешь, куда смотреть, а куда можно не смотреть. И это работает с любой моделью, локальной или нет, потому что таблица про процесс, а не про модель.',
+    'Теперь про то, что мы сейчас смотрим. Мне не нравится не сам инструмент, мне не нравится, что у него нет этой петли. Он выполняет и сам себе ставит галочку. Пока ты сидишь рядом и читаешь диф, это нормально. Как только ты отвлёкся на полчаса, ты получаешь десять галочек и не знаешь, какие из них настоящие. Проверка потом стоит дороже, чем если бы ты сделал сам с самого начала.',
+    'И последнее, про локальные модели, раз уж ты про них. Они медленнее, да. Но у них есть одно свойство, которое в этой схеме важнее скорости: они не меняются под тобой. Облачная модель сегодня решает задачу так, завтра иначе, и твои списки перестают воспроизводиться. Локальная стоит на месте, и если что-то сломалось, значит сломалось у меня, а не у них. Для проверяющей роли это принципиально. Вот, собственно, и всё, что я хотел сказать. Если хочешь, могу показать таблицу, там по каждому запуску проценты, что именно не сделано и сколько времени ушло на проверку.'
+  ];
+
+  const PAUSE = 3; // seconds of silence that start a new turn even on the same side
+
+  const FIXTURES = {
+    main: () => LINES,
+    oneside: () => LINES.map(l => ({ ...l, side: 'R' })),
+    nochannel: () => LINES.map(l => ({ ...l, side: null })),
+    monologue: () => {
+      const out = [LINES[2]];
+      let t = 29;
+      for (const p of MONOLOGUE) { out.push({ side: 'L', start: t, end: t + 44, text: p }); t += 46; }
+      out.push({ ...LINES[5], start: t + 2, end: t + 10 });
+      return out;
+    }
+  };
+
+  // One rule for every view: a new turn starts when the side changes or after a pause.
+  function merge(lines) {
+    const turns = [];
+    for (const l of lines) {
+      const prev = turns[turns.length - 1];
+      if (prev && prev.side === l.side && l.start - prev.end <= PAUSE) {
+        prev.lines.push(l.text);
+        prev.end = l.end;
+      } else {
+        turns.push({ side: l.side, start: l.start, end: l.end, lines: [l.text] });
+      }
+    }
+    return turns;
+  }
+
+  const pad = n => String(n).padStart(2, '0');
+  const hms = s => `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  function render(el, turns, prefix) {
+    el.replaceChildren(...turns.map((t, i) => {
+      const a = document.createElement('article');
+      a.className = 'turn ' + (t.side === 'L' ? 'them' : t.side === 'R' ? 'you' : 'none');
+      a.lang = 'ru';
+      a.dataset.odId = `${prefix}-turn-${i + 1}`;
+      a.innerHTML =
+        `<div class="head"><time class="ts" datetime="PT${t.start}S">${hms(t.start)}</time></div>` +
+        `<div class="body">${t.lines.map(x => `<p>${esc(x)}</p>`).join('')}</div>`;
+      return a;
+    }));
+  }
+
+  document.querySelectorAll('.thread').forEach(el => {
+    render(el, merge(FIXTURES[el.dataset.fixture]()), el.dataset.prefix);
+  });
+})();
+</script>
+</body>
+</html>

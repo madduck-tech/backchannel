@@ -132,4 +132,14 @@ export interface TranscriptSegmentData {
   text: string;
   confidence?: number;
   speaker?: string;
+  /**
+   * Which capture channel carried these words -- the fact the transcript is
+   * rendered from. Carried here so a saved meeting has sides too: every mapping
+   * layer that builds this type used to drop the column on the floor.
+   *
+   * Absent when the decoder cannot say, which includes every recording made on
+   * the streaming path (`streaming.rs:168`). Kept separate from `speaker`, a
+   * model's guess that a diarization pass rewrites in full.
+   */
+  channel?: 'you' | 'others';
 }

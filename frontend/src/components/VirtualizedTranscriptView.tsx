@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
+import { useRef, useReducer, startTransition, useEffect, useMemo, useState, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { ConfidenceIndicator } from "./ConfidenceIndicator";
@@ -9,6 +9,11 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { TranscriptSegmentData } from "@/types";
 import { speakerLabel, SpeakerNames } from "@/lib/speaker";
+import {
+    channelCoverage,
+    groupIntoTurns,
+    TranscriptTurn,
+} from "@/lib/transcript-turns";
 import { Loader2, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -185,6 +190,140 @@ const TranscriptSegment = memo(function TranscriptSegment({
     );
 });
 
+/**
+ * One segment inside a turn's bubble. Same content as a single-column row minus
+ * the timestamp gutter: a turn is many rows and carries one time, so repeating it
+ * per line would be the noise the grouping exists to remove.
+ */
+const TranscriptLine = memo(function TranscriptLine({
+    id,
+    text,
+    confidence,
+    showConfidence,
+    speaker,
+    speakerNames,
+    onRenameSpeaker,
+}: {
+    id: string;
+    text: string;
+    confidence?: number;
+    showConfidence: boolean;
+    speaker?: string;
+    speakerNames?: SpeakerNames;
+    onRenameSpeaker?: (speaker: string, name: string) => void;
+}) {
+    const isSilence = text.trim() === '';
+
+    return (
+        <p
+            id={`segment-${id}`}
+            className={cn('min-w-0 text-md leading-relaxed', isSilence && 'italic opacity-70')}
+        >
+            {speaker && (
+                <SpeakerTag speaker={speaker} speakerNames={speakerNames} onRename={onRenameSpeaker} />
+            )}
+            {isSilence ? 'Silence' : text}
+            {confidence !== undefined && showConfidence && (
+                <>
+                    {' '}
+                    <ConfidenceIndicator confidence={confidence} showIndicator />
+                </>
+            )}
+        </p>
+    );
+});
+
+// The side is the label — nothing on screen spells it out, which is the whole point
+// of rendering a conversation this way. Position is not available to a screen reader,
+// so the side becomes the bubble's accessible name. Same reasoning LiveIndicator
+// carries as "never colour alone".
+const SIDE_LABEL = { you: 'You', others: 'Others' } as const;
+
+/** A turn: one side's consecutive lines, as a bubble on that side. */
+const ConversationTurn = memo(function ConversationTurn({
+    turn,
+    showConfidence,
+    speakerNames,
+    onRenameSpeaker,
+}: {
+    turn: TranscriptTurn;
+    showConfidence: boolean;
+    speakerNames?: SpeakerNames;
+    onRenameSpeaker?: (speaker: string, name: string) => void;
+}) {
+    const isYou = turn.side === 'you';
+
+    return (
+        <article
+            aria-label={SIDE_LABEL[turn.side ?? 'others']}
+            className={cn(
+                'flex max-w-[78%] flex-col gap-1 pb-3.5',
+                isYou ? 'ml-auto items-end' : 'mr-auto items-start'
+            )}
+        >
+            <div
+                className={cn(
+                    // The bubble sits on --sunken, not on the design system's --surface.
+                    // --surface maps to the app's --elevated, and in the light theme
+                    // --elevated and --bg are both oklch(1 0 0): the other side's bubble
+                    // would be white on white. Measured lightness distance from the
+                    // canvas: elevated 0.000 light / 0.070 dark, sunken 0.032 / 0.030.
+                    'min-w-0 rounded-lg px-3 py-2 [&>p+p]:mt-2',
+                    isYou
+                        ? 'rounded-br-sm bg-brand-soft text-brand-soft-ink'
+                        : 'rounded-bl-sm bg-sunken text-ink'
+                )}
+            >
+                {turn.segments.map((segment) => (
+                    <TranscriptLine
+                        key={segment.id}
+                        id={segment.id}
+                        text={segment.text}
+                        confidence={segment.confidence}
+                        showConfidence={showConfidence}
+                        speaker={segment.speaker}
+                        speakerNames={speakerNames}
+                        onRenameSpeaker={onRenameSpeaker}
+                    />
+                ))}
+            </div>
+
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <span className="readout select-none px-0.5 text-2xs text-ink-faint">
+                        {formatRecordingTime(turn.timestamp)}
+                    </span>
+                </TooltipTrigger>
+                <TooltipContent side={isYou ? 'right' : 'left'}>
+                    {turn.segments.length > 1
+                        ? `${turn.segments.length} segments from here`
+                        : 'Position in recording'}
+                </TooltipContent>
+            </Tooltip>
+        </article>
+    );
+});
+
+/**
+ * Why this transcript has no sides.
+ *
+ * Two of the three states render as one column, and they are not the same state:
+ * one recording never carried a channel, the other carried exactly one. Saying so
+ * is the difference between a transcript and a dialogue with a silent participant.
+ */
+function ChannelNotice({ coverage }: { coverage: 'one-side' | 'none' }) {
+    return (
+        <div
+            role="status"
+            className="mb-3 rounded-md bg-warn-soft px-3 py-2 text-xs leading-relaxed text-warn-ink"
+        >
+            {coverage === 'none'
+                ? 'This recording has no channel data, so lines cannot be placed by side. They are shown in order, in one column.'
+                : 'Every line in this recording came from one capture channel, so there is no second side to show. They are shown in order, in one column.'}
+        </div>
+    );
+}
+
 export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps> = ({
     segments,
     isRecording = false,
@@ -206,6 +345,14 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // pane must not claim to be listening.
     const { captureArmed } = useRecordingState();
 
+    // What the recording's channel column can support, and the turns that follow
+    // from it. Grouping is the unit of everything below — the virtualiser counts
+    // turns, not rows — so a two-sided meeting of 137 rows measures as 33 turns
+    // while a channel-less one stays 137. `groupIntoTurns` says why.
+    const coverage = useMemo(() => channelCoverage(segments), [segments]);
+    const turns = useMemo(() => groupIntoTurns(segments), [segments]);
+    const twoSided = coverage === 'both';
+
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
     // Ref for infinite scroll trigger element
@@ -223,7 +370,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         // while `isScrolling`. Batched re-render is fine here — heights settle on
         // the next paint.
         useFlushSync: false,
-        count: segments.length,
+        count: turns.length,
         getScrollElement: () => scrollRef.current,
         estimateSize: () => 60, // Estimated height per segment
         overscan: 10, // Render extra items above/below viewport
@@ -237,7 +384,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Custom hook for auto-scrolling (supports both virtualized and non-virtualized)
     useAutoScroll({
         scrollRef,
-        segments,
+        // Turns, not rows: this is what the virtualiser indexes, and the hook uses
+        // the array only for its length and for an id lookup against that index.
+        segments: turns,
         isRecording,
         isPaused,
         virtualizer,
@@ -303,7 +452,32 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     }, [onLoadMore, hasMore, isLoadingMore, isRecording]);
 
     // Use simple rendering for small lists, virtualization for large lists
-    const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
+    const useVirtualization = turns.length >= VIRTUALIZATION_THRESHOLD;
+
+    // One call site for both rendering paths, so a turn cannot render one way above
+    // the virtualisation threshold and another below it.
+    const renderTurn = (turn: TranscriptTurn) =>
+        twoSided ? (
+            <ConversationTurn
+                turn={turn}
+                showConfidence={showConfidence}
+                speakerNames={speakerNames}
+                onRenameSpeaker={onRenameSpeaker}
+            />
+        ) : (
+            // One column. `groupIntoTurns` gives one turn per row here, so this is
+            // the row the app has always rendered.
+            <TranscriptSegment
+                id={turn.segments[0].id}
+                timestamp={turn.timestamp}
+                text={turn.segments[0].text}
+                confidence={turn.segments[0].confidence}
+                showConfidence={showConfidence}
+                speaker={turn.segments[0].speaker}
+                speakerNames={speakerNames}
+                onRenameSpeaker={onRenameSpeaker}
+            />
+        );
 
     // What sits below the last committed segment while recording: the streaming
     // decoder's uncommitted tail if it has one, otherwise the Listening pulse.
@@ -312,13 +486,13 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     const liveTail =
         !isStopping && isRecording && !isPaused && !isProcessing ? (
             partialText ? (
-                <div className="mt-2 flex items-baseline gap-3 py-1.5 pl-[4.25rem] animate-fade-in">
+                <div className={cn('mt-2 flex items-baseline gap-3 py-1.5 animate-fade-in', !twoSided && 'pl-[4.25rem]')}>
                     <p className="min-w-0 flex-1 text-md leading-relaxed text-ink-muted">
                         {partialText}
                     </p>
                 </div>
             ) : segments.length > 0 ? (
-                <div className="mt-4 flex items-center gap-2 pl-[4.25rem] animate-fade-in">
+                <div className={cn('mt-4 flex items-center gap-2 animate-fade-in', !twoSided && 'pl-[4.25rem]')}>
                     <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-danger animate-live" />
                     <span className="text-sm text-ink-muted">Listening</span>
                 </div>
@@ -336,6 +510,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
             {/* Content - add padding when recording to prevent overlap */}
             <div className={isRecording ? 'pt-2' : ''}>
+            {/* Two of the three states render as one column and must say which. */}
+            {segments.length > 0 && !twoSided && <ChannelNotice coverage={coverage} />}
             {/* A partial with no committed segments yet is still text on screen —
                 showing "Listening" underneath it would contradict itself. */}
             {segments.length === 0 && !partialText ? (
@@ -397,11 +573,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         }}
                     >
                         {virtualizer.getVirtualItems().map((virtualRow) => {
-                            const segment = segments[virtualRow.index];
+                            const turn = turns[virtualRow.index];
 
                             return (
                                 <div
-                                    key={segment.id}
+                                    key={turn.id}
                                     data-index={virtualRow.index}
                                     ref={virtualizer.measureElement}
                                     style={{
@@ -412,16 +588,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         transform: `translateY(${virtualRow.start}px)`,
                                     }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={segment.text}
-                                        confidence={segment.confidence}
-                                        showConfidence={showConfidence}
-                                        speaker={segment.speaker}
-                                        speakerNames={speakerNames}
-                                        onRenameSpeaker={onRenameSpeaker}
-                                    />
+                                    {renderTurn(turn)}
                                 </div>
                             );
                         })}
@@ -449,20 +616,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div>
-                        {segments.map((segment) => (
+                        {turns.map((turn) => (
                             // CSS keyframe rather than framer-motion: the reveal must
                             // survive a headless render and a hidden tab.
-                            <div key={segment.id} className="animate-segment-in">
-                                <TranscriptSegment
-                                    id={segment.id}
-                                    timestamp={segment.timestamp}
-                                    text={segment.text}
-                                    confidence={segment.confidence}
-                                    showConfidence={showConfidence}
-                                    speaker={segment.speaker}
-                                    speakerNames={speakerNames}
-                                    onRenameSpeaker={onRenameSpeaker}
-                                />
+                            <div key={turn.id} className="animate-segment-in">
+                                {renderTurn(turn)}
                             </div>
                         ))}
                     </div>
