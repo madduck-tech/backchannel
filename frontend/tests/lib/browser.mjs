@@ -6,7 +6,7 @@
 // lives outside it and brings jest 30, nyc, @swc/core and @babel/core besides. This speaks CDP to a
 // headless Chrome over Node 24's built-in WebSocket, so it adds no dependency at all.
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,8 +29,16 @@ process.on('exit', () => {
   }
 });
 
-/** Launch a headless Chrome and return { evaluate, close }. */
-export async function browser({ port = 9222 + (process.pid % 500) } = {}) {
+/**
+ * Launch a headless Chrome and return { evaluate, close }.
+ *
+ * **Chrome picks the port, not us.** The first version derived one from the pid, and on CI three of
+ * four story files failed with `never opened a debugging port` while the fourth passed: `node --test`
+ * runs files concurrently, pids 500 apart collide, and a ten-second poll is not enough for four
+ * browsers starting at once on a loaded runner. Passing 0 makes the kernel assign a free port and
+ * Chrome writes it to `DevToolsActivePort` in its profile, which is the only collision-free source.
+ */
+export async function browser({ startupMs = 60000 } = {}) {
   // Said plainly and early. Without this the failure is a ten-second poll ending in "never opened a
   // debugging port", which reads like a flake rather than a missing dependency.
   try { execFileSync('which', [CHROME], { stdio: 'pipe' }); }
@@ -44,20 +52,39 @@ export async function browser({ port = 9222 + (process.pid % 500) } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'bc-chrome-'));
   const child = spawn(CHROME, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
-    `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`,
+    // CI containers give /dev/shm 64 MB, and Chrome's default shared-memory use exceeds it.
+    '--disable-dev-shm-usage',
+    `--user-data-dir=${profile}`, '--remote-debugging-port=0',
     '--remote-allow-origins=*', 'about:blank',
   ], { stdio: 'ignore', detached: true });
   const entry = { child, profile };
   LIVE.add(entry);
 
-  // The port is not open the instant the process is: poll rather than sleep a guessed amount.
-  let version = null;
-  for (let i = 0; i < 100; i++) {
-    try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); break; }
-    catch { await new Promise((r) => setTimeout(r, 100)); }
+  // Chrome writes the port it chose here once it is listening. Polling the file is what makes this
+  // free of the collisions a guessed port has, and the wait is generous because CI starts several at
+  // once.
+  const portFile = join(profile, 'DevToolsActivePort');
+  let port = null;
+  const deadline = Date.now() + startupMs;
+  while (Date.now() < deadline) {
+    try {
+      const first = readFileSync(portFile, 'utf8').split('\n')[0].trim();
+      if (first) {
+        await fetch(`http://127.0.0.1:${first}/json/version`);
+        port = first;
+        break;
+      }
+    } catch { /* not listening yet */ }
+    await new Promise((r) => setTimeout(r, 100));
   }
-  if (!version) { child.kill('SIGKILL'); rmSync(profile, { recursive: true, force: true });
-    throw new Error(`${CHROME} never opened a debugging port on ${port}`); }
+  if (!port) {
+    child.kill('SIGKILL');
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(
+      `${CHROME} never wrote DevToolsActivePort in ${startupMs}ms.\n` +
+      '  It started but never began listening; on a container check /dev/shm and the sandbox flags.'
+    );
+  }
 
   const close = async () => {
     LIVE.delete(entry);
