@@ -28,6 +28,20 @@ record and `main` never disagrees with it.
    against the `backchannel` design system. The maintainer picks one in Studio or from screenshots; the
    chosen variant is linked in the issue and, once approved, committed to `design/prototypes/`.
    No implementation starts before the pick.
+
+   **The commit is the approval** (ADR 0022 decision 5, ADR 0023). A prototype that lives only in a
+   session directory cannot be produced later, and the repository could produce one for none of the
+   four onboarding screens #111 shipped. A screen with no committed prototype is a stop-and-ask, not
+   an implementation detail.
+
+   **An instruction that removes something becomes a test** (ADR 0023). "Take X off this screen" is a
+   requirement, and a requirement that is recorded but not asserted is one nobody holds: the sort
+   controls were moved behind a button and a test then required that button. Where the assertion
+   cannot land until the design does, the issue names it as owed.
+
+   **The pixel baseline that would make a prototype enforceable does not exist yet.** #132 is where
+   it is designed; until it lands, "matches the approved design" is held by a person looking, and a
+   verdict may not claim otherwise.
 4. **Implementation** on a branch from `main`. The Stage 0 matrix from the `gopnik` skill is
    posted to the issue before the first commit.
 5. **Gate.** `gopnik` attacks the finished change: Stage 1 against the repository, Stage 2 across

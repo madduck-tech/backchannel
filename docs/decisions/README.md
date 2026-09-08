@@ -24,6 +24,7 @@
 | [0020](0020-no-updater-artifacts-without-an-identity.md) | No updater artifacts until this fork owns an updater identity | accepted |
 | [0021](0021-carry-the-capture-channel-by-time-overlap.md) | Carry the capture channel across a re-segmentation by time overlap | accepted |
 | [0022](0022-a-check-that-skips-the-change-is-not-evidence.md) | A check that skips the change is not evidence | accepted |
+| [0023](0023-an-instruction-to-remove-ships-as-a-test.md) | An instruction to remove something ships as a test that fails while it is there | accepted |
 
 ## Deferred questions
 

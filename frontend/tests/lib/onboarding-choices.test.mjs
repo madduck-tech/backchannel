@@ -115,8 +115,16 @@ const click = async (el) => {
     null,
     'the 86-row picker must not be on the first screen'
   );
-  const all = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('86'));
-  assert.ok(all, 'but it must be one button away, for the person who came looking for one model');
+  // The assertion that used to stand here required a button labelled with the catalogue's row count,
+  // and it was wrong. The product owner's instruction on 2026-09-08 was to remove the catalogue's sort
+  // and filter controls; they were moved behind that button instead, and this line then *required* the
+  // arrangement that had been rejected. ADR 0023 decision 2: an assertion that conflicts with an
+  // instruction is wrong by definition and is deleted when the instruction is recorded, even when the
+  // implementation cannot follow yet.
+  //
+  // What is owed in its place -- that the catalogue offers no sort control -- is red on `6448f5f` and
+  // cannot land until the catalogue is redesigned, which needs an approved prototype (ADR 0022
+  // decision 5). The debt is #132.
 
   const go = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('Continue'));
   assert.ok(go && !go.disabled, 'with a model chosen the way forward is open');

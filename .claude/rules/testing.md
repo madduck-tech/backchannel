@@ -73,6 +73,24 @@ found six defects by hand in the flow that had just merged.*
   `design/prototypes/`, not a session directory. #111 shipped four onboarding screens and the
   repository can produce an approval for none. *Honesty-based; stop and ask.*
 
+## What an instruction becomes (ADR 0023)
+
+*Honesty-based. Nothing parses an issue, and the rule exists because the machine-enforced ones did
+not reach this.*
+
+- **An instruction that removes, hides or forbids something ships with a test that fails while the
+  thing is present.** Not a test that the replacement exists -- those are different assertions, and
+  only one of them can be satisfied by moving the thing somewhere else. Measured 2026-09-08: the
+  instruction was to remove the model catalogue's sort and filter controls; they were moved behind a
+  button, `Sort by` is still live at `TranscriptionModelManager.tsx:342`, and
+  `onboarding-choices.test.mjs` then **required that button**.
+- **A test may not assert an arrangement the product owner rejected.** When an instruction and an
+  existing assertion conflict, the assertion is wrong by definition and is deleted in the same change
+  that records the instruction -- even where the implementation cannot follow yet.
+- **The assertion is owed when the instruction is recorded, not when the design lands.** Where the
+  implementation is blocked -- on an approved prototype, say -- the issue names the assertion as owed.
+  An instruction with neither an assertion nor a written debt is one nobody is holding.
+
 ## What a claim must carry
 
 *Honesty-based, all of it. Nothing enforces any of the three.*
