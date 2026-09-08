@@ -99,7 +99,14 @@ export async function browser({ startupMs = 60000 } = {}) {
    * a fixed sleep is how a measurement of an unrendered page reads as a measurement.
    */
   const evaluate = async (
-    url, readFn, { readyFn = 'true', timeoutMs = 30000, clickFirst = null, settleMs = 400 } = {}
+    url, readFn,
+    // The default deadline is generous on purpose, and it is **not** a tolerance being widened to
+    // make something pass: the assertions' tolerance is 0.75px and unchanged. This is how long a
+    // render may take on a machine that is busy. Measured 2026-09-08: with the 156-second component
+    // census running alongside, two story files timed out at 25s waiting for a render that takes
+    // under a second idle. A deadline set for an idle machine is a deadline that fails on a loaded
+    // one, and that reads as a flake rather than as the contention it is.
+    { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400 } = {}
   ) => {
     const target = await (await fetch(
       `http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();

@@ -54,7 +54,7 @@ const b = await browser();
 for (const cell of CELLS) {
   const m = await b.evaluate(storyUrl(sb.origin, cell.story), read, {
     readyFn: `document.querySelector('[data-pane]')`,
-    timeoutMs: 25000,
+    
   });
 
   assert.equal(m.bubbles, 2, `${cell.story}: expected two sides, found ${m.bubbles} capped bubbles`);
