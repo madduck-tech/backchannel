@@ -14,7 +14,7 @@
 // the allowlist under pressure. The three `molecules/form-components/*` files are ours, not
 // vendored, and stay in scope.
 import assert from 'node:assert/strict';
-import { sourceFiles, rel, reachableFromEntries, entryFiles, assertSetEquals } from './reachability-shared.mjs';
+import { sourceFiles, rel, reachableFromEntries, entryFiles, assertSetEquals, STORY_FILES } from './reachability-shared.mjs';
 
 const UNREACHABLE = new Set([
   // Dead subtree: nothing imports CustomDialog, and SettingTabs dies with it. The components
@@ -50,7 +50,10 @@ const unreachable = new Set(
   files
     .filter((f) => !reachable.has(f))
     .map(rel)
-    .filter((f) => f.startsWith('src/components/') && !VENDORED.test(f))
+    // A story is unreachable from a Next entry **by construction** -- that is what a story is. Listing
+    // them in UNREACHABLE would grow that allowlist by one line per story forever, which is how an
+    // allowlist stops being read (#124).
+    .filter((f) => f.startsWith('src/components/') && !VENDORED.test(f) && !STORY_FILES.test(f))
 );
 
 assertSetEquals(

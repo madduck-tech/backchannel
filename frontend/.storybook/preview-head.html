@@ -1,0 +1,19 @@
+<script>
+// Publishes the calibration numbers into the DOM so a --dump-dom run can read them without a
+// WebDriver session. Cheap, and it is the same measurement the story test will make later.
+addEventListener('load', () => {
+  document.fonts.ready.then(() => setTimeout(() => {
+    const el = document.querySelector('[data-probe="ch60"]');
+    if (!el) return;
+    const pre = document.createElement('pre');
+    pre.id = 'calibration';
+    pre.textContent = JSON.stringify({
+      ch60: getComputedStyle(el).width,
+      fontFamily: getComputedStyle(el).fontFamily.split(',')[0],
+      plexLoaded: document.fonts.check("14px 'IBM Plex Sans'"),
+      bodyFontSize: getComputedStyle(document.body).fontSize,
+    }, null, 1);
+    document.body.appendChild(pre);
+  }, 900));
+});
+</script>

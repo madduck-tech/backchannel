@@ -159,9 +159,18 @@ export function reachableFromEntries(files = sourceFiles()) {
  * that matters here -- it mounts, it holds state, and the application cannot run without it.
  */
 export const VENDORED_COMPONENTS = /^src\/components\/ui\//;
+/**
+ * A story is not a component. `*.stories.tsx` files live beside the component they draw and end in
+ * `.tsx`, so without this every story added would enter the denominator, arrive with no test that
+ * renders *it*, and turn `no-invisible-component.test.mjs` red for doing exactly what #124 asks for.
+ */
+export const STORY_FILES = /\.stories\.tsx$/;
 export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/', 'src/contexts/'];
 export const isComponentFile = (f) =>
-  COMPONENT_ROOTS.some((r) => f.startsWith(r)) && f.endsWith('.tsx') && !VENDORED_COMPONENTS.test(f);
+  COMPONENT_ROOTS.some((r) => f.startsWith(r)) &&
+  f.endsWith('.tsx') &&
+  !VENDORED_COMPONENTS.test(f) &&
+  !STORY_FILES.test(f);
 
 /** Every component file in the tree, sorted -- the denominator both consumers hold. */
 export function componentFiles(files = sourceFiles()) {

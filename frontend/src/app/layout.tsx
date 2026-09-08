@@ -1,7 +1,7 @@
 'use client'
 
 import './globals.css'
-import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Serif } from 'next/font/google'
+import { fontVars } from './fonts'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider, useSidebar } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -32,29 +32,6 @@ import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioF
 // One superfamily, three optical registers. Sans carries all UI chrome and the
 // transcript; serif sets the generated summary (a document); mono sets machine
 // facts — timestamps, model ids, device names. See /design/backchannel/DESIGN.md.
-const plexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-sans',
-  display: 'swap',
-})
-
-const plexSerif = IBM_Plex_Serif({
-  subsets: ['latin'],
-  weight: ['400', '600'],
-  style: ['normal', 'italic'],
-  variable: '--font-serif',
-  display: 'swap',
-})
-
-const plexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500'],
-  variable: '--font-mono',
-  display: 'swap',
-})
-
-const fontVars = `${plexSans.variable} ${plexSerif.variable} ${plexMono.variable}`
 
 /**
  * Publishes the live rail width as `--rail` so the rail itself, the content
