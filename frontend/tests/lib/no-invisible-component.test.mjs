@@ -110,6 +110,27 @@ const BACKLOG = new Set([
  * A component that may ship without a test, deliberately. **Starts empty.** Each key needs its own
  * non-empty reason -- an entry cannot be added by pasting a path.
  */
+/**
+ * The six providers `src/contexts/` brought into the denominator in #130, minus the one that gained a
+ * test in the same change. **Entries only ever leave**, exactly like `BACKLOG`.
+ *
+ * A separate list rather than sixty-six lines in `BACKLOG`, for the reason this file already gives
+ * about `NEVER_INVOKED`: a short list is conspicuous by arithmetic, and a seventh entry pasted into
+ * it is a visible diff. Folding these into `BACKLOG` would have hidden them among neighbours that
+ * are indistinguishable from them, and `BACKLOG` is closed in any case.
+ *
+ * The collective reason is honest and singular: nothing rendered these because the scope rule did not
+ * reach them, so no one declined to test them -- they were never counted. That is the whole finding.
+ */
+const CONTEXTS_ADMITTED = new Set([
+  'src/contexts/ConfigContext.tsx',
+  'src/contexts/ImportDialogContext.tsx',
+  'src/contexts/OllamaDownloadContext.tsx',
+  'src/contexts/RecordingPostProcessingProvider.tsx',
+  'src/contexts/RecordingStateContext.tsx',
+  'src/contexts/TranscriptContext.tsx',
+]);
+
 const EXCEPTIONS = {};
 
 const components = componentFiles();
@@ -130,7 +151,7 @@ for (const file of fs.readdirSync(here).filter((f) => f.endsWith('.test.mjs'))) 
 }
 
 const unrendered = new Set(components.filter((c) => !rendered.has(c)));
-const allowed = new Set([...BACKLOG, ...Object.keys(EXCEPTIONS)]);
+const allowed = new Set([...BACKLOG, ...CONTEXTS_ADMITTED, ...Object.keys(EXCEPTIONS)]);
 
 // --- every exception carries a reason -------------------------------------------------------------
 {
@@ -158,7 +179,11 @@ assertSetEquals(
 // --- and the count of rendered components never falls ---------------------------------------------
 //
 // Set equality alone would let a rendered component and its test disappear together in silence.
-const FLOOR = 11;
+// Measured, not guessed: 19 of 79 before #130, 20 of 86 after -- the denominator gained the seven
+// providers and the numerator gained `OnboardingContext.tsx`. The floor stood at 11 against an actual
+// of 19, which is eight components of slack it could lose in silence. Raised to the measured number,
+// which is what the instruction below has always asked for.
+const FLOOR = 20;
 assert.ok(
   rendered.size >= FLOOR,
   `${rendered.size} components are rendered by a test; the floor is ${FLOOR}. Something that had a ` +
@@ -168,5 +193,6 @@ assert.ok(
 const pct = ((rendered.size / components.length) * 100).toFixed(1);
 console.log(
   `ok - ${rendered.size} of ${components.length} components (${pct}%) are rendered by a test; ` +
-    `${BACKLOG.size} in the backlog, ${Object.keys(EXCEPTIONS).length} deliberate exceptions`
+    `${BACKLOG.size} in the backlog, ${CONTEXTS_ADMITTED.size} providers admitted by #130, ` +
+    `${Object.keys(EXCEPTIONS).length} deliberate exceptions`
 );
