@@ -47,35 +47,41 @@ const fresh = () =>
   existsSync(DONE) && existsSync(join(STATIC, 'iframe.html')) && statSync(DONE).mtimeMs >= newestSource();
 
 /**
- * Build only when there is nothing to serve or what there is predates the sources.
+ * Make sure there is a complete build to serve, and that nobody observes one mid-flight.
  *
- * **Serialised, because `node --test` runs test files concurrently.** Measured on 2026-09-08: three
- * story tests each saw a stale build and started `pnpm build-storybook` into the same output
- * directory at once, and `pnpm test` came back with two failures that a second run did not reproduce.
- * A flaky gate is worse than no gate, so the first process to create the lock builds and the others
- * wait for the manifest rather than racing it.
+ * **Every process goes through the lock, not only the one that builds.** The first version checked
+ * freshness first and took the lock only when stale, which left a window: A finds it stale, takes the
+ * lock and starts building -- `build-storybook` empties `storybook-static` -- while B, a millisecond
+ * earlier, found it fresh and began serving the directory A is deleting. Its pages 404 and the story
+ * never renders.
+ *
+ * Measured: `storybook-interaction` failed on 2 of 5 runs, and only on runs where a rebuild happened.
+ * Raising the render deadline from 25s to 90s did not fix it -- it made the same failure take 92
+ * seconds instead of 27, which is the shape of a wrong diagnosis. The deadline stays generous for
+ * loaded machines, but this is what the bug was.
  */
 export function ensureBuilt() {
-  if (fresh()) return false;
+  const deadline = Date.now() + 600000;
+  while (Date.now() < deadline) {
+    let held = false;
+    try { closeSync(openSync(LOCK, 'wx')); held = true; }
+    catch { /* someone else holds it */ }
 
-  let held = false;
-  try { closeSync(openSync(LOCK, 'wx')); held = true; }
-  catch { /* someone else is building */ }
-
-  if (!held) {
-    const deadline = Date.now() + 300000;
-    while (Date.now() < deadline) {
-      if (fresh() && !existsSync(LOCK)) return false;
-      execFileSync('sleep', ['0.5']);
+    if (held) {
+      try {
+        if (fresh()) return false;
+        execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' });
+        writeFileSync(DONE, new Date().toISOString());
+        return true;
+      } finally { try { unlinkSync(LOCK); } catch { /* already gone */ } }
     }
-    throw new Error('waited 5 minutes for another process to build Storybook and it never finished');
-  }
 
-  try {
-    execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' });
-    writeFileSync(DONE, new Date().toISOString());
-  } finally { try { unlinkSync(LOCK); } catch { /* already gone */ } }
-  return true;
+    // Someone is building. Waiting for the lock to go is what makes the check below safe: a build
+    // cannot start again without taking it, so freshness observed here cannot be undone underneath us
+    // within this process's next few milliseconds of work.
+    execFileSync('sleep', ['0.3']);
+  }
+  throw new Error('waited 10 minutes for a Storybook build lock; remove .storybook-build.lock if stale');
 }
 
 /** Serve the built catalogue. Returns { origin, stop }. */

@@ -26,7 +26,7 @@ const b = await browser();
 const ready = `document.querySelector('[data-bar-pane]')`;
 
 // --- closed, the items are not merely hidden — they are not rendered ------------------------------
-const closed = await b.evaluate(storyUrl(sb.origin, STORY), items, { readyFn: ready, timeoutMs: 25000 });
+const closed = await b.evaluate(storyUrl(sb.origin, STORY), items, { readyFn: ready });
 assert.deepEqual(
   closed.items, [],
   `the menu's items are in the DOM before it is opened: ${closed.items.join(', ')}.\n` +
@@ -35,7 +35,7 @@ assert.deepEqual(
 
 // --- opened with a real pointer -------------------------------------------------------------------
 const open = await b.evaluate(storyUrl(sb.origin, STORY), items, {
-  readyFn: ready, timeoutMs: 25000, clickFirst: TRIGGER,
+  readyFn: ready,  clickFirst: TRIGGER,
 });
 assert.deepEqual(
   open.items, EXPECTED,
