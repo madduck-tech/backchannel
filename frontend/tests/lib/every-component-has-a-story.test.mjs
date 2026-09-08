@@ -89,7 +89,6 @@ const WITHOUT_STORY = new Set([
   'src/components/onboarding/steps/AudioCheckStep.tsx',
   'src/components/onboarding/steps/DownloadProgressStep.tsx',
   'src/components/onboarding/steps/PermissionsStep.tsx',
-  'src/components/onboarding/steps/SummariserStep.tsx',
   'src/components/onboarding/steps/TranscriptionModelStep.tsx',
   'src/components/shared/DownloadProgressToast.tsx',
   'src/contexts/ConfigContext.tsx',
@@ -126,7 +125,7 @@ assertSetEquals(
 // --- and the number that has one never falls ------------------------------------------------------
 //
 // Set equality alone would let a component and its story disappear together in silence.
-const FLOOR = 2;
+const FLOOR = 3;  // 2 before #138; SummariserStep gained one.
 assert.ok(
   withStory.size >= FLOOR,
   `${withStory.size} components have a story; the floor is ${FLOOR}. Something lost one. ` +

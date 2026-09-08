@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -90,6 +91,41 @@ export function SummariserStep() {
     const needsKey = !chosen.local;
     const canContinue = !needsKey || apiKey.trim().length > 0;
 
+    /**
+     * The chosen option's own element, so the reveal can be brought into view.
+     *
+     * Measured on 2026-09-08 before this existed: at the application's minimum window -- 720x520 per
+     * `tauri.conf.json` -- choosing a remote provider put its key field at 730..766px, **210px below
+     * the fold**. The product owner picked OpenAI and reported that nothing happened; nothing visible
+     * had. The approved prototype (`design/prototypes/onboarding-summariser.html`) solves it by
+     * scrolling the chosen option to the top of the list rather than by moving the field.
+     */
+    const chosenRef = useRef<HTMLButtonElement | null>(null);
+    const keyRef = useRef<HTMLInputElement | null>(null);
+
+    // Scroll the chosen option to the top of whatever is scrolling, then put the caret in the field.
+    // Not `scrollIntoView` on the field: that scrolls the minimum distance, which on a short window
+    // leaves the option itself out of view and the person still cannot see what they chose.
+    useEffect(() => {
+        if (!needsKey) return;
+        const option = chosenRef.current;
+        if (!option) return;
+        let scroller: HTMLElement | null = option.parentElement;
+        while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+        if (scroller) {
+            scroller.scrollTop = Math.max(0, option.offsetTop - scroller.offsetTop - 12);
+            // The option at the top is the prototype's intent, but at the minimum window the option and
+            // its field together are taller than what is left: measured, the field still ended at 536px
+            // in a 520px viewport. So if it still overhangs, take up exactly the overhang -- the option
+            // slides up by that much and both are visible, which is the point of either rule.
+            const over = keyRef.current
+                ? keyRef.current.getBoundingClientRect().bottom - window.innerHeight
+                : 0;
+            if (over > 0) scroller.scrollTop += over + 12;
+        }
+        keyRef.current?.focus({ preventScroll: true });
+    }, [needsKey, summaryProvider]);
+
     const pick = (option: Option) => {
         setSummaryProvider(option.id);
         setSelectedSummaryModel(
@@ -129,6 +165,7 @@ export function SummariserStep() {
                         return (
                             <button
                                 key={option.id}
+                                ref={selected ? chosenRef : undefined}
                                 type="button"
                                 onClick={() => pick(option)}
                                 aria-pressed={selected}
@@ -161,6 +198,7 @@ export function SummariserStep() {
                             API key for {chosen.name}. It is stored on this machine.
                         </span>
                         <Input
+                            ref={keyRef}
                             type="password"
                             value={apiKey}
                             onChange={(e) => setApiKey(e.target.value)}
