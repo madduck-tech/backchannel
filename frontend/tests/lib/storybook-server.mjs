@@ -6,7 +6,7 @@
 // manifest, and a stale build is rebuilt rather than reported.
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, statSync, existsSync, readdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, existsSync, readdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,7 +34,17 @@ function newestSource() {
 }
 
 const LOCK = join(root, '.storybook-build.lock');
-const fresh = () => existsSync(MANIFEST) && statSync(MANIFEST).mtimeMs >= newestSource();
+/**
+ * Written by us **after** `build-storybook` returns, and the only thing a waiter trusts.
+ *
+ * The first version waited on Storybook's own `index.json`. Measured on CI: a waiting process saw it,
+ * started serving, and `iframe.html` 404'd -- the manifest is written before the bundle is complete.
+ * Assuming another tool's write order is exactly the class of mistake this repository keeps finding,
+ * so this file is ours and its existence means the whole build finished.
+ */
+const DONE = join(STATIC, '.build-complete');
+const fresh = () =>
+  existsSync(DONE) && existsSync(join(STATIC, 'iframe.html')) && statSync(DONE).mtimeMs >= newestSource();
 
 /**
  * Build only when there is nothing to serve or what there is predates the sources.
@@ -61,8 +71,10 @@ export function ensureBuilt() {
     throw new Error('waited 5 minutes for another process to build Storybook and it never finished');
   }
 
-  try { execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' }); }
-  finally { try { unlinkSync(LOCK); } catch { /* already gone */ } }
+  try {
+    execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' });
+    writeFileSync(DONE, new Date().toISOString());
+  } finally { try { unlinkSync(LOCK); } catch { /* already gone */ } }
   return true;
 }
 
