@@ -38,6 +38,10 @@ CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
 # Not the default. See the header.
 CHOSEN_ID="moonshine-tiny-q8"
 CHOSEN_FILE="moonshine-tiny-Q8_0.gguf"
+# `size_mb: 34` in src-tauri/src/config.rs. Needed because a file that merely EXISTS is not a file
+# that arrived: the first run of this script reported PASS on a 4.5 MB partial, which is the same
+# "a call that returned success is not evidence" shape this pass was written to catch, one level in.
+CHOSEN_MB=34
 PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
@@ -172,18 +176,31 @@ say "walked to the download screen"
 #
 # Polled from the filesystem, not read off the screen. A progress bar is a claim by the same code
 # under test; a file is not.
-FOUND=""
+# Complete, not merely present, and settled: the size must reach what the catalogue advertises and
+# then stop changing. `[ -s ]` alone passes on the first byte written.
+MIN_BYTES=$(( CHOSEN_MB * 1000 * 1000 * 90 / 100 ))
+FOUND=""; LAST=-1; STABLE=0
 for _ in $(seq 1 300); do
-  if [ -s "$APPDATA/models/$CHOSEN_FILE" ]; then FOUND=1; break; fi
+  if [ -f "$APPDATA/models/$CHOSEN_FILE" ]; then
+    NOW=$(stat -c %s "$APPDATA/models/$CHOSEN_FILE")
+    if [ "$NOW" -ge "$MIN_BYTES" ]; then
+      if [ "$NOW" = "$LAST" ]; then
+        STABLE=$((STABLE + 1)); [ "$STABLE" -ge 3 ] && { FOUND=1; break; }
+      else
+        STABLE=0
+      fi
+    fi
+    LAST="$NOW"
+  fi
   sleep 1
 done
 
 if [ -z "$FOUND" ]; then
-  say "what is on disk instead:"; ls -la "$APPDATA/models" | sed 's/^/    /'
+  say "what is on disk instead (${MIN_BYTES} bytes were required):"; ls -la "$APPDATA/models" | sed 's/^/    /'
   say "the screen said:"; js '"return document.body.innerText"' | head -20 | sed 's/^/    /'
   die "first run finished without fetching $CHOSEN_ID, the model that was chosen"
 fi
-say "the chosen model arrived: $CHOSEN_FILE ($(du -h "$APPDATA/models/$CHOSEN_FILE" | cut -f1))"
+say "the chosen model arrived whole: $CHOSEN_FILE ($(stat -c %s "$APPDATA/models/$CHOSEN_FILE") bytes, ${CHOSEN_MB} MB advertised)"
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
