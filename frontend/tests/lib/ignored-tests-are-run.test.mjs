@@ -237,6 +237,8 @@ const HELPERS = new Set([
   // hand-rolled, and the thing it hand-rolls — `sonner`'s surface — was wrong in all six copies it
   // replaces.
   'lib/boundary-stubs.mjs',
+  'lib/browser.mjs',
+  'lib/storybook-server.mjs',
 ]);
 
 function testDirFiles(dir) {

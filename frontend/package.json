@@ -12,6 +12,9 @@
         "test": "node --max-old-space-size=1024 --test 'tests/**/*.test.mjs'",
         "lint": "eslint src --max-warnings=0",
         "typecheck": "tsc --noEmit",
+        "_comment_storybook": "The catalogue (#124). --webpack is implicit here: @storybook/nextjs is the webpack framework, which is what this project needs for the same reason the dev/build scripts pass --webpack -- Turbopack's next/font/google resolves dead IBM Plex woff2 URLs.",
+        "storybook": "storybook dev -p 6006 --no-open",
+        "build-storybook": "storybook build -o storybook-static",
         "tauri": "tauri",
         "tauri:dev": "node scripts/tauri-auto.js dev",
         "tauri:build": "node scripts/tauri-auto.js build",
@@ -66,6 +69,9 @@
         "tailwindcss-animate": "^1.0.7"
     },
     "devDependencies": {
+        "@storybook/nextjs": "10.6.0",
+        "storybook": "10.6.0",
+        "webpack": "^5.110.3",
         "@tailwindcss/postcss": "^4.3.3",
         "@tailwindcss/typography": "^0.5.20",
         "@tauri-apps/cli": "^2.11.4",

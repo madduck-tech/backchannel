@@ -24,5 +24,14 @@ overrides:
 # reason to let it execute code at install time. If a future version genuinely needs the
 # native binding, this becomes `true` and that is a decision to state, not a default to
 # drift into.
+# `core-js-pure` and `esbuild` arrive with Storybook (#124). Both start **false**, and whether they
+# can stay that way is measured rather than assumed -- the same way `unrs-resolver` was.
+#
+# `core-js-pure`'s install script prints a funding notice; it produces nothing the build reads.
+# `esbuild`'s links a platform binary, and it reaches this tree only through
+# `minimizer-webpack-plugin` inside `@storybook/nextjs`. If a Storybook build turns out to need it,
+# this becomes `true` with the failure that forced it written here.
 allowBuilds:
+  core-js-pure: false
+  esbuild: false
   unrs-resolver: false
