@@ -211,7 +211,10 @@ export async function renderOne(file) {
       html = host.innerHTML;
       await act(async () => { rootNode.unmount(); });
     } catch (e) {
-      return { file, kind: KIND.failedOnMount, reason: String(e.message).split('\n')[0], html: '' };
+      // `name` travels with the failure because #102 pins it: without the chosen export, a card whose
+      // component was renamed and now resolves to a different symbol looks identical in a diff.
+      return { file, kind: KIND.failedOnMount, name: picked[0],
+               reason: String(e.message).split('\n')[0], html: '' };
     } finally {
       host.remove();
     }

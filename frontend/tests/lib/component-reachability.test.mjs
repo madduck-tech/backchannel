@@ -27,7 +27,6 @@ const UNREACHABLE = new Set([
   'src/components/molecules/form-components/form-input-switch.tsx',
   'src/components/molecules/form-components/form-select-item.tsx',
   // Written and never surfaced.
-  'src/components/AudioPlayer.tsx',
   'src/components/BluetoothPlaybackWarning.tsx',
   'src/components/ComplianceNotification.tsx',
   'src/components/MessageToast.tsx',
