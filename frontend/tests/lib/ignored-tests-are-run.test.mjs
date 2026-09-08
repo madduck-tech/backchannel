@@ -238,6 +238,7 @@ const HELPERS = new Set([
   // replaces.
   'lib/boundary-stubs.mjs',
   'lib/browser.mjs',
+  'lib/design-baseline.mjs',
   'lib/coupling-census.mjs',
   'lib/storybook-server.mjs',
 ]);

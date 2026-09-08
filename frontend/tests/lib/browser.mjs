@@ -106,7 +106,7 @@ export async function browser({ startupMs = 60000 } = {}) {
     // census running alongside, two story files timed out at 25s waiting for a render that takes
     // under a second idle. A deadline set for an idle machine is a deadline that fails on a loaded
     // one, and that reads as a flake rather than as the contention it is.
-    { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400 } = {}
+    { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400, viewport = null } = {}
   ) => {
     const target = await (await fetch(
       `http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();
@@ -127,10 +127,22 @@ export async function browser({ startupMs = 60000 } = {}) {
       const r = await send('Runtime.evaluate', {
         expression: expr, awaitPromise: true, returnByValue: true });
       if (r.result?.exceptionDetails) {
-        throw new Error(`page threw: ${r.result.exceptionDetails.text} — ${expr.slice(0, 120)}`);
+        // `text` is usually the bare word "Uncaught"; the useful part is the exception's own
+        // description, and losing it turns every page-side error into the same unhelpful line.
+        const d = r.result.exceptionDetails;
+        const why = d.exception?.description || d.exception?.value || d.text;
+        throw new Error(`page threw: ${String(why).split('\n')[0]}\n  in: ${expr.slice(0, 100)}`);
       }
       return r.result?.result?.value;
     };
+
+    // A width the design has to survive, set before the page is measured. Without it every capture is
+    // taken at the headless default, and a baseline at one width misses the case #118 was about: a
+    // side that disappears only when the window is small.
+    if (viewport) {
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: viewport.width, height: viewport.height || 900, deviceScaleFactor: 1, mobile: false });
+    }
 
     const deadline = Date.now() + timeoutMs;
     let ready = false;

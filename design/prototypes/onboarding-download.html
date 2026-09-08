@@ -256,7 +256,13 @@ footer .read b { font-weight: 500; color: var(--fg); }
     document.title = document.title.replace(/ · .*$/, '') + (finished() ? ' · ready' : ` · ${left} MB left`);
   }
   render();
-  const tick = setInterval(() => { T.done = Math.min(T.mb, T.done + 6); render(); if (finished()) clearInterval(tick); }, 100);
+  // `?frozen` holds the first frame. A prototype that animates cannot be baselined -- the capture
+  // would record whatever millisecond it arrived on, and `prototypes-match-their-baseline.test.mjs`
+  // caught exactly that: "318 of 740 MB" against "312 of 740 MB" between two runs. The design is
+  // unchanged; only the simulation stops.
+  const frozen = new URLSearchParams(location.search).has('frozen');
+  const tick = frozen ? null
+    : setInterval(() => { T.done = Math.min(T.mb, T.done + 6); render(); if (finished()) clearInterval(tick); }, 100);
 })();
 </script>
 </body>
