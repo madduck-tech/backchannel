@@ -164,35 +164,44 @@ pub async fn complete_onboarding<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     model: String,
+    provider: Option<String>,
+    transcribe_model: Option<String>,
 ) -> Result<(), String> {
-    info!("Completing onboarding with builtin-ai model: {}", model);
+    // Both choices come from the user now. They used to be constants here: `"builtin-ai"` and
+    // `DEFAULT_TRANSCRIBE_MODEL`, written whatever the first run had shown. The defaults survive as
+    // defaults -- a caller that passes nothing gets exactly the old behaviour -- but a caller that
+    // asked the user no longer has its answer thrown away. #111.
+    let provider = provider.unwrap_or_else(|| "builtin-ai".to_string());
+    let transcribe_model = transcribe_model
+        .unwrap_or_else(|| crate::config::DEFAULT_TRANSCRIBE_MODEL.to_string());
+    info!("Completing onboarding: summary={provider}/{model}, transcription={transcribe_model}");
 
     // Step 1: Save model configuration to SQLite database FIRST
     let pool = state.db_manager.pool();
 
-    // Onboarding always uses builtin-ai (local LLM)
     if let Err(e) = SettingsRepository::save_model_config(
         pool,
-        "builtin-ai",
+        &provider,
         &model,
         "large-v3",
         None,
     ).await {
-        error!("Failed to save builtin-ai model config: {}", e);
-        return Err(format!("Failed to save builtin-ai model config: {}", e));
+        error!("Failed to save {provider} model config: {e}");
+        return Err(format!("Failed to save {provider} model config: {e}"));
     }
-    info!("Saved builtin-ai model config: model={}", model);
+    info!("Saved summary model config: provider={provider}, model={model}");
 
-    // Save transcription model config - one local engine, so always transcribe.cpp
+    // One local engine, so the transcription provider is always transcribe.cpp -- but *which*
+    // model is the user's, and the catalogue has 86 rows.
     if let Err(e) = SettingsRepository::save_transcript_config(
         pool,
         crate::config::LOCAL_TRANSCRIPT_PROVIDER,
-        crate::config::DEFAULT_TRANSCRIBE_MODEL,
+        &transcribe_model,
     ).await {
         error!("Failed to save transcription model config: {}", e);
         return Err(format!("Failed to save transcription model config: {}", e));
     }
-    info!("Saved transcription model config: provider=local, model={}", crate::config::DEFAULT_TRANSCRIBE_MODEL);
+    info!("Saved transcription model config: provider=local, model={transcribe_model}");
 
     // Step 2: Only NOW mark onboarding as complete (after DB operations succeed)
     let mut status = load_onboarding_status(&app)

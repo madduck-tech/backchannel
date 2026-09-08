@@ -31,6 +31,7 @@ export function DownloadProgressStep() {
     setParakeetDownloaded,
     summaryModelDownloaded,
     setSummaryModelDownloaded,
+    summaryProvider,
     startBackgroundDownloads,
     completeOnboarding,
   } = useOnboarding();
@@ -360,12 +361,24 @@ export function DownloadProgressStep() {
     // Once. Re-running on every change of the flag it sets would loop.
   }, []);
 
+  // A cloud summariser downloads nothing, so there is nothing to wait for on its account. Only a
+  // local one adds 3651 MiB.
+  const summaryIsLocal = summaryProvider === 'builtin-ai';
+  const waitingForSummary = summaryIsLocal && !summaryModelDownloaded;
+
   // What the control is waiting for, in words. `null` when it is not waiting.
+  //
+  // It used to read `!parakeetDownloaded` alone, so Continue unblocked the moment the 706 MiB
+  // transcription model finished while 3651 MiB of summary model was still arriving -- and the user
+  // walked into an application whose summariser was not there yet. #111 cycle B: wait for
+  // everything the two choices selected, and nothing they did not.
   const waitingLabel = isCompleting
     ? 'Finishing setup…'
     : !parakeetDownloaded
       ? 'Waiting for the transcription model…'
-      : null;
+      : waitingForSummary
+        ? 'Waiting for the summary model…'
+        : null;
 
   const handleContinue = async () => {
     // Verify actual model availability (catches state drift)
@@ -567,12 +580,12 @@ export function DownloadProgressStep() {
         <div className="w-full max-w-xs">
           <Button
             onClick={handleContinue}
-            disabled={!parakeetDownloaded || isCompleting}
+            disabled={!parakeetDownloaded || waitingForSummary || isCompleting}
             aria-label={waitingLabel ?? 'Continue'}
             title={waitingLabel ?? undefined}
             className="w-full h-11 bg-ink hover:bg-ink/90 text-canvas disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {(isCompleting || !parakeetDownloaded) ? (
+            {waitingLabel ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
                 {waitingLabel}
