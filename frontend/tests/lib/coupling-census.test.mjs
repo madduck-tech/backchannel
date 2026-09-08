@@ -171,6 +171,18 @@ const pinned = new Map(BLOCKED.map((b) => [b.file, b]));
 // 312, and `node --test` gives each file its own process, so the two sets of assertions share a file
 // rather than a cache that cannot exist across processes.
 const cards = census(components);
+
+// --- #100 condition 1: every component in the denominator has a card ------------------------------
+//
+// `gallery-is-complete.test.mjs` holds that the denominator is shared and non-empty; the only check
+// that anything was actually drawn for each of them is `gallery.mjs`'s main block, which runs as a CI
+// step and asserts merely that the count is not zero. A builder that silently dropped a file would
+// pass both. The census renders all of them anyway, so the equality costs nothing here.
+assert.equal(
+  cards.length, components.length,
+  `${cards.length} cards for ${components.length} components — the builder dropped ` +
+    `${components.length - cards.length}. Every component gets a card, even if the card says why not.`
+);
 const actual = new Map(blocked(cards).map((b) => [b.file, b]));
 
 // --- nothing is blocked that is not written down --------------------------------------------------
