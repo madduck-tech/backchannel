@@ -4,9 +4,9 @@
 // stale AppImage `stage2-locate-app.sh` exists for: every assertion after it is made against code
 // that is not the code under test. So the newest source file is compared against the build's own
 // manifest, and a stale build is rebuilt rather than reported.
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, readdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,11 +33,36 @@ function newestSource() {
   return newest;
 }
 
-/** Build only when there is nothing to serve or what there is predates the sources. */
+const LOCK = join(root, '.storybook-build.lock');
+const fresh = () => existsSync(MANIFEST) && statSync(MANIFEST).mtimeMs >= newestSource();
+
+/**
+ * Build only when there is nothing to serve or what there is predates the sources.
+ *
+ * **Serialised, because `node --test` runs test files concurrently.** Measured on 2026-09-08: three
+ * story tests each saw a stale build and started `pnpm build-storybook` into the same output
+ * directory at once, and `pnpm test` came back with two failures that a second run did not reproduce.
+ * A flaky gate is worse than no gate, so the first process to create the lock builds and the others
+ * wait for the manifest rather than racing it.
+ */
 export function ensureBuilt() {
-  const stale = !existsSync(MANIFEST) || statSync(MANIFEST).mtimeMs < newestSource();
-  if (!stale) return false;
-  execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' });
+  if (fresh()) return false;
+
+  let held = false;
+  try { closeSync(openSync(LOCK, 'wx')); held = true; }
+  catch { /* someone else is building */ }
+
+  if (!held) {
+    const deadline = Date.now() + 300000;
+    while (Date.now() < deadline) {
+      if (fresh() && !existsSync(LOCK)) return false;
+      execFileSync('sleep', ['0.5']);
+    }
+    throw new Error('waited 5 minutes for another process to build Storybook and it never finished');
+  }
+
+  try { execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' }); }
+  finally { try { unlinkSync(LOCK); } catch { /* already gone */ } }
   return true;
 }
 

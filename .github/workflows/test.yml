@@ -81,6 +81,12 @@ jobs:
       - name: Environment record
         run: scripts/environment-record.sh
 
+      # The story tests drive a real browser: jsdom computes no layout, which is the whole reason
+      # #124 exists. Named as a step so a runner image without Chrome fails here, with that sentence,
+      # instead of inside a test as a ten-second timeout that reads like a flake.
+      - name: Browser for the story tests
+        run: google-chrome --version
+
       - name: Frontend unit tests
         working-directory: frontend
         run: pnpm test
