@@ -80,14 +80,44 @@ const click = async (el) => {
   await act(async () => { el.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
 };
 
-// --- 1: the transcription step asks first, and carries the choice --------------------------------
+// --- 1: four options and a button, not a catalogue ------------------------------------------------
 {
   const { container } = await render('TranscriptionModelStep', onboarding());
-  assert.ok(
-    container.querySelector('[data-picker="parakeet-tdt-0.6b-v3-q8"]'),
-    'the step must hand the current choice to the catalogue picker, or the user cannot see what is ' +
-      'selected among 86 rows'
+  const options = [...container.querySelectorAll('input[type="radio"]')];
+  assert.equal(
+    options.length,
+    4,
+    `the first screen offers four models, not 86. The first version of it mounted the Settings ` +
+      `panel whole -- search, sort, an "installed only" toggle and a paragraph about word error ` +
+      `rates -- on the first screen a new user meets. Got ${options.length}`
   );
+
+  // Multilingual first. The catalogue's own order puts three English-only Moonshine rows above the
+  // multilingual ones, and the picker's "Recommended" sort is `catalog`, which returns the list
+  // unchanged -- so a Russian or Japanese speaker's first three options could not transcribe them.
+  const text = container.textContent;
+  const first = text.indexOf('parakeet-tdt-0.6b-v3-q8');
+  const nemotron = text.indexOf('nemotron-3.5-asr-streaming-0.6b-q8');
+  const english = text.indexOf('moonshine-streaming-small-q8');
+  assert.ok(first >= 0 && nemotron >= 0 && english >= 0, 'all three must be offered');
+  assert.ok(
+    first < english && nemotron < english,
+    'the two multilingual models must come before the English-only ones'
+  );
+
+  // The trade is stated in words, not in the term "streaming".
+  assert.match(text, /two sides/, 'a batch model must say the transcript has two sides');
+  assert.match(text, /one column/, 'and a streaming one must say it does not');
+
+  // The catalogue is reachable, and not on screen until asked for.
+  assert.equal(
+    container.querySelector('[data-picker]'),
+    null,
+    'the 86-row picker must not be on the first screen'
+  );
+  const all = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('86'));
+  assert.ok(all, 'but it must be one button away, for the person who came looking for one model');
+
   const go = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('Continue'));
   assert.ok(go && !go.disabled, 'with a model chosen the way forward is open');
 
