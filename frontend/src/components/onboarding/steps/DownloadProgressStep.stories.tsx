@@ -39,3 +39,29 @@ export default meta
 
 /** Nothing on disk yet — the state a first run actually starts in. */
 export const Fresh: StoryObj<typeof DownloadProgressStep> = {}
+
+/**
+ * The state the product owner photographed: one of the two files is already on disk.
+ *
+ * `design/prototypes/onboarding-download.html` (`a-two-rows`, approved) states presence in words —
+ * *"Already here from an earlier install. Nothing to fetch."* — and gives that row no progress bar at
+ * all. The inherited screen instead starts the row at `status: 'completed'` with `downloadedMb: 0`,
+ * so it draws a full bar over a counter reading `0.0 MiB / 0.0 MiB`.
+ * `tests/lib/storybook-download-states.test.mjs` renders this story and reads that row.
+ */
+export const OneAlreadyOnDisk: StoryObj<typeof DownloadProgressStep> = {
+  decorators: [
+    withTauri({
+      get_onboarding_status: null,
+      check_first_launch: false,
+      builtin_ai_get_recommended_model: 'gemma4:e2b',
+      builtin_ai_is_model_ready: true,
+      save_onboarding_status: null,
+      transcribe_has_available_models: false,
+      transcribe_get_available_models: [],
+      transcribe_download_model: null,
+      builtin_ai_download_model: null,
+      builtin_ai_list_models: [],
+    }),
+  ],
+}

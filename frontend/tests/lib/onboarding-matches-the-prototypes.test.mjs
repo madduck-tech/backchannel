@@ -1,0 +1,92 @@
+// The three first-run screens encode what their approved prototypes decided. (#138 condition 5)
+//
+// **A declaration check, in the shape `transcript-matches-the-prototype.test.mjs` set**, and named as
+// one: it reads values out of the committed prototype and asserts the implementation carries the same
+// decision. It cannot lay anything out. The geometry half lives in the story tests beside it.
+//
+// It is deliberately *not* the baseline mechanism from #132. That compares a prototype to a capture of
+// itself, node by node by array index, and bails on a count mismatch — the React screens have neither
+// the node count nor the DOM order nor the text. The issue's first version proposed "adding the
+// implementations to the same comparison"; it is not a comparison they can enter, and the failure mode
+// would have been an implementer capturing a baseline *of the React screen* and committing it as the
+// target, which pins a guess and calls it the approved design.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const proto = (n) => fs.readFileSync(path.join(root, 'design', 'prototypes', `${n}.html`), 'utf8');
+const impl = (p) => fs.readFileSync(path.join(root, 'frontend', p), 'utf8');
+
+const checks = [];
+const holds = (what, cond, why) => {
+  checks.push(what);
+  assert.ok(cond, `${what}\n  ${why}\n  The prototype in design/prototypes/ is the source of truth —\n` +
+    '  change it first, with the product owner, then follow it here.');
+};
+
+// --- the catalogue: one field above the list, and nothing else --------------------------------------
+{
+  const p = proto('onboarding-catalogue');
+  const inputs = (p.match(/<input/g) || []).length;
+  assert.equal(inputs, 1, `the approved catalogue has ${inputs} inputs; this check assumes exactly one`);
+
+  const manager = impl('src/components/TranscriptionModelManager.tsx');
+  holds(
+    'the catalogue offers one text input, as the prototype does',
+    (manager.match(/<input/g) || []).length === 1,
+    'The approved design has a single search field. A second control above the list is one more thing\n' +
+      '  to read before the rows start, which is what the product owner rejected.'
+  );
+  holds(
+    'and no control that sorts or filters the rows',
+    !/Sort models by|Show only installed/.test(manager),
+    'Removed on instruction; the prototype has neither.'
+  );
+}
+
+// --- the download screen: Continue waits for the files ----------------------------------------------
+//
+// The screen's other decision -- a file already on disk is stated in words rather than drawn as a bar
+// over a zero counter -- is **not** asserted here. It cannot be: a source regex for that wording also
+// matches `parakeetDownloaded` (13 occurrences) and two `console.log` lines, which is how a control
+// for it came back green against a component that renders nothing of the sort. It is asserted on the
+// rendered page instead, in `storybook-download-states.test.mjs`.
+{
+  const p = proto('onboarding-download');
+  holds(
+    'the approved download screen keeps Continue off until every file has arrived',
+    /data-next\b[^>]*\bdisabled\b/.test(p) && /\[data-next\]'\)\.disabled = !finished\(\)/.test(p),
+    'It ships disabled and is enabled by `finished()`; both halves are read out of the prototype.'
+  );
+
+  const step = impl('src/components/onboarding/steps/DownloadProgressStep.tsx');
+  holds(
+    'the download screen keeps Continue off until every file has arrived',
+    /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step),
+    'A person who continues without the transcription model reaches a recorder that cannot\n' +
+      '  transcribe. The prototype disables the button; so does this screen, and this check is what\n' +
+      '  keeps the two from drifting apart.'
+  );
+}
+
+// --- the summariser: the chosen option is scrolled to the top, not the field into minimum view -------
+{
+  const p = proto('onboarding-summariser');
+  holds(
+    'the approved summariser scrolls the chosen option to the top',
+    /scrollTop\s*=\s*Math\.max\(0,\s*o\.offsetTop/.test(p),
+    'This is the decision it makes about the reveal, and it is what this check follows.'
+  );
+
+  const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
+  holds(
+    'the summariser scrolls the chosen option, not the field',
+    /scrollTop\s*=\s*Math\.max\(0,\s*option\.offsetTop/.test(step),
+    '`scrollIntoView` on the field scrolls the minimum distance, which on a 520px window leaves the\n' +
+      '  option itself out of view — the person cannot see what they chose.'
+  );
+}
+
+console.log(`ok - ${checks.length} decisions the three approved prototypes make are encoded in the screens`);
