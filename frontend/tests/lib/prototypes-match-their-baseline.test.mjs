@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import {
-  capture, diff, servePrototypes, prototypeNames, PROTOTYPES, WIDTHS,
+  capture, diff, servePrototypes, prototypeNames, PROTOTYPES, SHOTS,
 } from './design-baseline.mjs';
 
 const baselineOf = (name) => join(PROTOTYPES, `${name}.baseline.json`);
@@ -78,5 +78,5 @@ assert.deepEqual(
 
 console.log(
   `ok - ${prototypeNames().length} approved prototypes render as approved, ` +
-    `at ${WIDTHS.join('/')}px`
+    SHOTS.map((x) => `${x.scheme} ${x.widths.join('/')}px`).join(', ')
 );

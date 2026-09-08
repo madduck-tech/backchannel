@@ -106,10 +106,15 @@ export async function browser({ startupMs = 60000 } = {}) {
     // census running alongside, two story files timed out at 25s waiting for a render that takes
     // under a second idle. A deadline set for an idle machine is a deadline that fails on a loaded
     // one, and that reads as a flake rather than as the contention it is.
-    { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400, viewport = null } = {}
+    { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400,
+      viewport = null, scheme = null } = {}
   ) => {
+    // Opened blank on purpose. Emulation has to be in place **before** the page evaluates
+    // `prefers-color-scheme`, and a tab created at the URL has already navigated by the time this
+    // socket is open: measured, one capture in three came back in the wrong scheme -- 629 colour
+    // differences against a baseline taken seconds earlier on the same machine.
     const target = await (await fetch(
-      `http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();
+      `http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 
@@ -139,10 +144,20 @@ export async function browser({ startupMs = 60000 } = {}) {
     // A width the design has to survive, set before the page is measured. Without it every capture is
     // taken at the headless default, and a baseline at one width misses the case #118 was about: a
     // side that disappears only when the window is small.
+    // Never inherit the operator's desktop. CI measured 1894 differences against a baseline taken
+    // here, every one a colour: this machine's Chrome answers dark to prefers-color-scheme and the
+    // runner's answers light, and the capture never said which it wanted.
+    if (scheme) {
+      await send('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    }
     if (viewport) {
       await send('Emulation.setDeviceMetricsOverride', {
         width: viewport.width, height: viewport.height || 900, deviceScaleFactor: 1, mobile: false });
     }
+
+    await send('Page.enable', {});
+    await send('Page.navigate', { url });
 
     const deadline = Date.now() + timeoutMs;
     let ready = false;

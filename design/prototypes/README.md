@@ -13,8 +13,15 @@ tokens in `frontend/src/app/globals.css`.
 
 ## The baseline beside each file
 
-Every `*.html` here has a `*.baseline.json`: the rendered state of that page at 1096, 720 and 432px —
-every element's box, its own text, and a fixed set of computed properties.
+Every `*.html` here has a `*.baseline.json`: the rendered state of that page at 1096, 720 and 432px in
+the **dark** scheme and at 720px in the **light** one — every element's box, its own text, and a fixed
+set of computed properties.
+
+**The scheme is emulated, never inherited.** CI measured 1894 differences against a baseline taken on
+a developer's machine, every one a colour: these prototypes honour `prefers-color-scheme`, one Chrome
+answered dark and the other light, and the capture had not said which it wanted. Light is captured at
+one width rather than three — enough to catch a token defined in only one block, without doubling a
+file already approaching a megabyte.
 `prototypes-match-their-baseline.test.mjs` re-renders each prototype on every `pnpm test` and fails on
 any difference. A baseline with no prototype beside it is refused, because a baseline over a screen
 nobody approved pins a guess rather than a decision.
@@ -32,6 +39,7 @@ would have made the baseline worthless:
 | `setInterval` progress in the download screen | `318 of 740 MB` against `312` between runs | the prototype honours `?frozen` and holds its first frame |
 | CSS keyframes on decorations | four `<i>` boxes drifting a pixel, `2x5` against `2x4` | the capture injects `animation:none` before measuring |
 | autofocus scrolling a field into view | the catalogue shifted 39px at 432px — all 539 elements | the capture blurs and resets every scroll position |
+| the operator's colour scheme | 1894 colour differences between this machine and CI | the capture emulates the scheme, and does it **before** navigating |
 
 Six consecutive runs are green after all three. **If you add a prototype that animates, give it
 `?frozen`.**

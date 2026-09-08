@@ -60,7 +60,7 @@ const CAPTURE = `() => {
   const PROPS = ${JSON.stringify(PROPS)};
 
   // Stop every animation and transition before measuring, and read the state they start from.
-  // \`?frozen\` handles a prototype that simulates progress in JS; this handles the CSS half, which it
+  // The query flag handles a prototype that simulates progress in JS; this handles the CSS half,
   // cannot. Measured without it: 114-meeting-controls drifted by a pixel on four decorative <i>
   // elements between runs — 2x5 against 2x4, 1x1 against 1x2 — because their boxes were mid-keyframe.
   // A baseline that fails on which millisecond it arrived is a baseline nobody keeps.
@@ -124,20 +124,40 @@ const CAPTURE = `() => {
  */
 export const WIDTHS = [1096, 720, 432];
 
-export async function capture(url, { widths = WIDTHS } = {}) {
+/**
+ * The colour scheme is emulated, never inherited.
+ *
+ * Measured on CI: the same prototype came back with **1894** differences against a baseline taken
+ * here, every one of them a colour -- `oklch(0.185 0.005 190)` against `oklch(0.976 0.004 190)`. The
+ * prototypes honour `prefers-color-scheme`; this machine's Chrome answers dark and the runner's
+ * answers light, and the capture never said which it wanted. A baseline that depends on the
+ * operator's desktop settings is not a baseline, and the verdict that claimed this survived a
+ * different machine was wrong.
+ *
+ * Dark is primary because it is what the product owner reviews in. Light is captured at one width
+ * rather than three: enough to catch a token defined in only one block -- an axis #124's residual
+ * named as unguarded -- without doubling a file already approaching a megabyte.
+ */
+export const SHOTS = [
+  { scheme: 'dark', widths: WIDTHS },
+  { scheme: 'light', widths: [720] },
+];
+
+export async function capture(url, { shots = SHOTS } = {}) {
   const b = await browser();
   try {
-    const shots = {};
-    for (const w of widths) {
+    const out = {};
+    for (const { scheme, widths } of shots) for (const w of widths) {
       // `frozen` asks a prototype that animates to hold its first frame. Without it the capture
       // records whichever millisecond it arrived on -- measured: "318 of 740 MB" against "312 of
       // 740 MB" between two runs of the same file.
-      shots[w] = await b.evaluate(`${url}?frozen=1#w${w}`, CAPTURE, {
+      out[`${scheme}-${w}`] = await b.evaluate(`${url}?frozen=1#w${w}`, CAPTURE, {
+        scheme,
         readyFn: 'document.body && document.body.children.length > 0',
         viewport: { width: w, height: 900 },
       });
     }
-    return shots;
+    return out;
   } finally {
     await b.close();
   }
@@ -148,14 +168,14 @@ export function diff(expected, actual) {
   const problems = [];
   for (const w of Object.keys(expected)) {
     const e = expected[w], a = actual[w];
-    if (!a) { problems.push(`${w}px: missing from the capture`); continue; }
+    if (!a) { problems.push(`${w}: missing from the capture`); continue; }
     if (e.nodes.length !== a.nodes.length) {
-      problems.push(`${w}px: ${a.nodes.length} elements, baseline has ${e.nodes.length}`);
+      problems.push(`${w}: ${a.nodes.length} elements, baseline has ${e.nodes.length}`);
       continue;
     }
     for (let i = 0; i < e.nodes.length; i++) {
       const x = e.nodes[i], y = a.nodes[i];
-      const where = `${w}px  ${y.tag}${y.cls ? '.' + y.cls.split(' ')[0] : ''}`;
+      const where = `${w}  ${y.tag}${y.cls ? '.' + y.cls.split(' ')[0] : ''}`;
       if (x.box.join() !== y.box.join()) {
         problems.push(`${where}  box [x y w h]: ${x.box.join(' ')} -> ${y.box.join(' ')}`);
       }
