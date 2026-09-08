@@ -62,6 +62,35 @@ const holds = (what, cond, why) => {
   );
 
   const step = impl('src/components/onboarding/steps/DownloadProgressStep.tsx');
+
+  // A completion that arrives from the wire marks the row fetched; a completion that is a *discovery*
+  // of a file already on disk must not. Both end at `status: 'completed'`, and the screen renders
+  // them differently, so this is the seam that decides which sentence a person reads.
+  //
+  // `model-download-complete` reached `status: 'completed'` without the flag when this was written:
+  // a download whose progress events were missed would have ended on "Already here from an earlier
+  // install". The rendered check cannot see this path -- stories stub `invoke`, not `listen`.
+  // Comments are stripped first. A control for the earlier version of this check put its string in a
+  // `//` comment, the check stayed green, and the page rendered nothing of the sort.
+  const code = step.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  const handler = (name) => {
+    const at = code.indexOf(`'${name}'`);
+    assert.notEqual(at, -1, `DownloadProgressStep.tsx no longer handles ${name}; this check is stale`);
+    return code.slice(at, at + 400);
+  };
+  holds(
+    'a completion that came from the wire marks the row as fetched',
+    /status: 'completed'[^}]*fetched: true/.test(handler('model-download-complete')),
+    'A row that finished because bytes arrived must not then tell the person the file was already\n' +
+      '  here from an earlier install, about a download they watched run.'
+  );
+  holds(
+    'and discovering a file already on disk does not',
+    !/fetched: true/.test(handler('[DownloadProgressStep] Model available but state not updated')),
+    'The two paths that only *notice* a present model would otherwise claim its whole size was\n' +
+      '  fetched this run — the reverse of the same lie.'
+  );
+
   holds(
     'the download screen keeps Continue off until every file has arrived',
     /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step),

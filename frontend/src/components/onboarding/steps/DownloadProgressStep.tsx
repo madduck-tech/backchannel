@@ -236,7 +236,11 @@ export function DownloadProgressStep() {
       'model-download-complete',
       (event) => {
         if (event.payload.modelName === DEFAULT_TRANSCRIBE_MODEL) {
-          setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
+          // `fetched` because this event follows a real download: `download_inner` fetches
+          // unconditionally, so reaching here means bytes crossed the wire. Without it a
+          // download whose progress events were missed ends on "already here from an earlier
+          // install" -- a lie about something the person just watched happen.
+          setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100, fetched: true }));
           setParakeetDownloaded(true);
         }
       }
