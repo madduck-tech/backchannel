@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Backchannel · find a transcription model · one field, ring clearance</title>
+<script>if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.classList.remove('dark');</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* design/backchannel/tokens.css — pasted verbatim. */
+:root {
+  /* ─── Surface ─────────────────────────────────────────────────── */
+  --bg: oklch(1 0 0);                       /* canvas: transcript and review are documents */
+  --surface: oklch(1 0 0);                  /* cards, popovers, dialogs (app: --elevated) */
+  --surface-warm: oklch(0.976 0.004 190);   /* rails, toolbars (app: --panel) */
+  --surface-sunken: oklch(0.968 0.005 190); /* extension: input wells, code, inset readouts */
+
+  /* ─── Foreground ramp ─────────────────────────────────────────── */
+  --fg: oklch(0.215 0.013 190);
+  --fg-2: var(--fg);
+  --muted: oklch(0.46 0.014 190);
+  --meta: oklch(0.54 0.012 190);
+
+  /* ─── Border ──────────────────────────────────────────────────── */
+  --border: oklch(0.912 0.006 190);
+  --border-soft: var(--border);
+  --border-strong: oklch(0.855 0.008 190); /* extension: input outlines */
+
+  /* ─── Accent = brand ──────────────────────────────────────────── */
+  --accent: oklch(0.365 0.082 190);
+  --accent-on: oklch(1 0 0);
+  --accent-hover: oklch(0.315 0.078 190);
+  --accent-active: var(--accent-hover);
+  --accent-soft: oklch(0.955 0.022 190);   /* extension: selection / active-row tint */
+  --accent-soft-on: oklch(0.33 0.075 190);
+
+  /* ─── Signals ─────────────────────────────────────────────────── */
+  --success: var(--accent);                 /* the brand is the success color */
+  --warn: oklch(0.72 0.15 72);
+  --warn-on: oklch(0.47 0.11 72);
+  --warn-soft: oklch(0.966 0.03 72);
+  --danger: oklch(0.545 0.205 25);
+  --danger-on: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.962 0.022 25);
+  --info: oklch(0.52 0.115 262);            /* extension: local-model and device readouts */
+  --info-soft: oklch(0.962 0.018 262);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-display: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 0.6875rem;  /* 11 · mono readouts */
+  --text-xs: 0.75rem;     /* 12 · captions */
+  --text-sm: 0.8125rem;   /* 13 · dense labels, buttons */
+  --text-base: 0.875rem;  /* 14 · UI body, overlay hint */
+  --text-md: 0.9375rem;   /* 15 · transcript */
+  --text-lg: 1.0625rem;   /* 17 · summary body */
+  --text-xl: 1.25rem;     /* 20 · panel title */
+  --text-2xl: 1.5625rem;  /* 25 · page title */
+  --text-3xl: 1.9375rem;  /* 31 · meeting title */
+  --text-4xl: var(--text-3xl);
+  --leading-body: 1.5;
+  --leading-tight: 1.2;
+  --tracking-display: -0.01em;
+  --measure: 68ch;
+
+  /* ─── Shape ───────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* ─── Elevation (border-first) ────────────────────────────────── */
+  --elev-flat: none;
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 1px 2px oklch(0.2 0.01 190 / 0.06), 0 4px 12px oklch(0.2 0.01 190 / 0.08);
+  --elev-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06), 0 12px 32px oklch(0.2 0.01 190 / 0.12);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.5 0.1 190);
+
+  /* ─── Motion ──────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Spacing ─────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-20: 80px;
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  --container-max: 1100px;                  /* desktop app: the two-pane breakpoint */
+  --container-gutter-desktop: 24px;
+  --container-gutter-tablet: 16px;
+  --container-gutter-phone: 12px;
+  --section-y-desktop: 32px;
+  --section-y-tablet: 24px;
+  --section-y-phone: 16px;
+  --rail-w: 19rem;
+  --rail-w-collapsed: 3.5rem;
+  --overlay-w: 420px;                       /* extension: overlay default width (360–480) */
+}
+
+/* Dark theme: independent values, not a filter. The overlay uses this block by default. */
+.dark,
+[data-theme="dark"] {
+  --bg: oklch(0.155 0.004 190);
+  --surface: oklch(0.225 0.006 190);
+  --surface-warm: oklch(0.185 0.005 190);
+  --surface-sunken: oklch(0.125 0.004 190);
+  --fg: oklch(0.945 0.006 190);
+  --muted: oklch(0.72 0.011 190);
+  --meta: oklch(0.625 0.01 190);
+  --border: oklch(0.285 0.007 190);
+  --border-strong: oklch(0.37 0.009 190);
+  --accent: oklch(0.8 0.115 190);
+  --accent-on: oklch(0.16 0.03 190);        /* bright aqua takes dark ink */
+  --accent-hover: oklch(0.855 0.12 190);
+  --accent-soft: oklch(0.255 0.032 190);
+  --accent-soft-on: oklch(0.845 0.1 190);
+  --warn: oklch(0.78 0.145 72);
+  --warn-on: oklch(0.82 0.13 72);
+  --warn-soft: oklch(0.245 0.045 72);
+  --danger: oklch(0.55 0.21 25);
+  --danger-on: oklch(0.72 0.16 25);
+  --danger-soft: oklch(0.245 0.055 25);
+  --info: oklch(0.66 0.13 262);
+  --info-soft: oklch(0.245 0.045 262);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
+  --elev-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.8 0.115 190);
+}
+
+/* ─── Shell: the first-run window. Text is --fg or --meta; brand is --accent-soft / --accent-soft-on. ─── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { min-width: 720px; height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: var(--text-base); line-height: 21px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+p { margin: 0; text-wrap: pretty; }
+::selection { background: var(--accent-soft); color: var(--accent-soft-on); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.strip { display: flex; gap: 28px; height: 44px; padding: 0 var(--container-gutter-desktop); background: var(--surface-warm); border-bottom: 1px solid var(--border); }
+.strip span { display: flex; align-items: center; gap: 8px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
+.strip span b { font-family: var(--font-mono); font-weight: 400; }
+.strip .done { color: var(--fg); }
+.strip .cur { color: var(--fg); border-bottom-color: var(--accent-soft-on); }
+main { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+/* The field's focus ring draws 4px outside its border box on all four sides. Below it, the head keeps
+   16px (--space-4) before the scroll container, so the ring clears the sticky list header with 12px to
+   spare. Above it, the sentence is 16px away. Beside it, the 24px gutter is 20px more than the ring
+   needs; the head's right padding also carries the list's 8px scrollbar gutter so field and rows align. */
+.head { padding: 28px calc(var(--container-gutter-desktop) + var(--space-2)) var(--space-4) var(--container-gutter-desktop); }
+.col { width: 100%; max-width: 1000px; margin: 0 auto; }
+h1 { margin: 0 0 4px; font-size: var(--text-2xl); line-height: 31px; font-weight: 600; letter-spacing: var(--tracking-display); text-wrap: balance; }
+.sub { color: var(--meta); font-size: var(--text-base); line-height: 21px; }
+.scroll { overflow-y: auto; min-height: 0; padding: 0 var(--container-gutter-desktop) 24px; scrollbar-gutter: stable; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+footer { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px var(--container-gutter-desktop); background: var(--surface-warm); border-top: 1px solid var(--border); }
+footer .read { flex: 1 1 auto; min-width: 0; font-size: var(--text-xs); line-height: 17px; color: var(--meta); }
+footer .read b { font-weight: 500; color: var(--fg); }
+.btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; font-size: var(--text-sm); font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.btn-primary { background: var(--accent-soft); color: var(--accent-soft-on); }
+.btn-primary:hover:not(:disabled) { border-color: var(--accent-soft-on); }
+.btn-secondary { background: var(--surface-sunken); border-color: var(--border-strong); color: var(--fg); }
+.btn-secondary:hover:not(:disabled) { border-color: var(--fg); }
+.btn-ghost { color: var(--fg); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-sunken); }
+.well { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: var(--surface-sunken); border: 1px solid var(--border-strong); border-radius: var(--radius-md); transition: border-color var(--motion-fast) var(--ease-standard); }
+.well:hover { border-color: var(--fg); }
+.well:focus-within { border-color: var(--accent-soft-on); box-shadow: var(--focus-ring); }
+.well input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-base); }
+.well input::placeholder { color: var(--meta); opacity: 1; }
+.well.sm { height: 36px; padding: 0 10px; }
+.well.sm input { font-size: var(--text-sm); }
+.dot { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--bg); }
+.on > .dot, .on .dot.me { border-color: var(--accent-soft-on); background: radial-gradient(circle, var(--accent-soft-on) 0 4px, transparent 4.5px); }
+.quiet { color: var(--meta); }
+.status { color: var(--accent-soft-on); font-weight: 500; }
+
+.search { margin-top: var(--space-4); }
+.rows { display: grid; }
+.rhead, .row { display: grid; grid-template-columns: 16px minmax(0, 1.4fr) 84px 112px minmax(0, 1.6fr); column-gap: 14px; align-items: center; padding: 0 8px 0 12px; }
+.rhead { position: sticky; top: 0; z-index: 1; height: 28px; background: var(--bg); border-bottom: 1px solid var(--border-strong); font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--meta); }
+.row { min-height: 40px; padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.row:hover { background: var(--surface-sunken); }
+.row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.row.on { box-shadow: inset 2px 0 0 var(--accent-soft-on); }
+.row .id { font-family: var(--font-mono); font-size: var(--text-sm); line-height: 19px; color: var(--fg); overflow-wrap: anywhere; }
+.row .size, .row .how { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
+.row .langs { font-size: var(--text-sm); line-height: 19px; color: var(--fg); }
+.empty { padding: 24px 0; font-size: var(--text-sm); color: var(--meta); }
+@media (max-width: 899px) {
+  .rhead { display: none; }
+  .row { grid-template-columns: 16px minmax(0, 1fr) 84px; grid-template-rows: auto auto; row-gap: 2px; }
+  .row .how { grid-column: 3; grid-row: 2; }
+  .row .langs { grid-column: 2; grid-row: 2; }
+}
+</style>
+</head>
+<body>
+<nav class="strip" aria-label="Setup steps"><span class="cur" aria-current="step"><b>1</b>Transcription</span><span class=""><b>2</b>Summariser</span><span class=""><b>3</b>Download</span><span class=""><b>4</b>Audio check</span></nav>
+<main>
+  <div class="head"><div class="col">
+    <h1>Find a transcription model</h1>
+    <p class="sub">Type a language or a model name.</p>
+    <div class="well search"><input type="search" data-q placeholder="Language or model name" aria-label="Search models" autofocus></div>
+  </div></div>
+  <div class="scroll"><div class="col"><div class="rows" role="radiogroup" aria-label="Models" data-rows></div></div></div>
+</main>
+<footer><span class="read" data-read></span><button type="button" class="btn btn-ghost" data-back>Back</button><button type="button" class="btn btn-primary" data-next disabled>Continue</button></footer>
+<script>
+(() => {
+  const LANG = { en: 'English', ru: 'Russian', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', pt: 'Portuguese', nl: 'Dutch', pl: 'Polish', uk: 'Ukrainian', zh: 'Chinese', ja: 'Japanese', ko: 'Korean', ar: 'Arabic', hi: 'Hindi', tr: 'Turkish', cs: 'Czech', sv: 'Swedish', yue: 'Cantonese', fi: 'Finnish', hu: 'Hungarian', ro: 'Romanian', bg: 'Bulgarian', el: 'Greek', da: 'Danish', no: 'Norwegian', hr: 'Croatian', sk: 'Slovak', sl: 'Slovenian', lt: 'Lithuanian', lv: 'Latvian', et: 'Estonian', mt: 'Maltese', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian', ms: 'Malay', ta: 'Tamil', ur: 'Urdu', fa: 'Persian' };
+  const EU25 = 'en ru de fr es it pt nl pl uk cs sv fi hu ro bg el da no hr sk sl lt lv et'.split(' ');
+  const W99 = { list: 'en ru de fr es it pt nl pl uk zh ja ko ar hi tr cs sv fi hu ro bg el da no hr sk sl vi th id ms ta ur fa'.split(' '), n: 99 };
+  const NEM = { list: 'en-US ru-RU de-DE fr-FR es-ES it-IT pt-BR nl-NL pl-PL uk-UA zh-CN ja-JP ko-KR ar-SA hi-IN tr-TR cs-CZ sv-SE fi-FI hu-HU ro-RO bg-BG el-GR da-DK no-NO hr-HR sk-SK vi-VN th-TH id-ID ms-MY ta-IN'.split(' '), n: 32 };
+  const LS = 'set-a', FL = 'set-b';  // measurement sets, not shown on this screen
+  const Q = { q4: [0.29, 0.9], q5: [0.36, 0.5], q8: [0.53, 0.15], f16: [1, 0] };
+  // [family, base name, streaming, f16 size MB, f16 error rate, set, languages, quants, description, diarizes]
+  const FAM = [
+    ['Whisper', 'whisper-tiny', 0, 78, 7.6, LS, W99, 'q4 q8 f16', 'OpenAI general-purpose model, 99 languages. Slowest per size, widest coverage.'],
+    ['Whisper', 'whisper-base', 0, 148, 5.0, LS, W99, 'q4 q8 f16', 'OpenAI general-purpose model, 99 languages.'],
+    ['Whisper', 'whisper-small', 0, 488, 3.4, LS, W99, 'q4 q8 f16', 'OpenAI general-purpose model, 99 languages.'],
+    ['Whisper', 'whisper-medium', 0, 1530, 2.9, LS, W99, 'q4 q8 f16', 'OpenAI general-purpose model, 99 languages.'],
+    ['Whisper', 'whisper-large-v3', 0, 3090, 2.5, LS, W99, 'q4 q8 f16', 'OpenAI general-purpose model, 99 languages. Largest in the catalogue.'],
+    ['Whisper', 'whisper-large-v3-turbo', 0, 1620, 2.6, LS, W99, 'q4 q8 f16', 'Large-v3 with a reduced decoder, 99 languages.'],
+    ['Parakeet', 'parakeet-tdt-0.6b-v3', 0, 1400, 1.9, LS, EU25, 'q4 f16', 'NVIDIA transducer, 25 European languages. The default.'],
+    ['Parakeet', 'parakeet-tdt-0.6b-v2', 0, 1400, 1.7, LS, ['en'], 'q4 q8 f16', 'NVIDIA transducer, English only.'],
+    ['Parakeet', 'parakeet-ctc-0.6b', 0, 1300, 2.3, LS, ['en'], 'q4 q8 f16', 'NVIDIA CTC model, English only.'],
+    ['Parakeet', 'parakeet-ctc-1.1b', 0, 2250, 2.0, LS, ['en'], 'q4 q8 f16', 'NVIDIA CTC model, English only.'],
+    ['Parakeet', 'parakeet-tdt-1.1b', 0, 2300, 1.7, LS, ['en'], 'q4 q8 f16', 'NVIDIA transducer, English only.'],
+    ['Granite Speech', 'granite-speech-3.3-2b', 0, 4100, 2.8, LS, 'en fr de es pt'.split(' '), 'q4 q5 q8 f16', 'IBM speech model on a Granite language model. Five languages.'],
+    ['Granite Speech', 'granite-speech-3.3-8b', 0, 16400, 2.4, LS, 'en fr de es pt'.split(' '), 'q4 q5 q8 f16', 'IBM speech model on a Granite language model. Five languages.'],
+    ['Canary', 'canary-1b-flash', 0, 1780, 1.8, LS, 'en de fr es'.split(' '), 'q4 q8 f16', 'NVIDIA multitask model with speaker turns. Four languages.', 1],
+    ['Canary', 'canary-180m-flash', 0, 360, 2.9, LS, 'en de fr es'.split(' '), 'q8 f16', 'NVIDIA multitask model, small. Four languages.'],
+    ['Qwen3-ASR', 'qwen3-asr-0.6b', 0, 1200, 2.7, LS, 'zh en ja ko yue vi th id ms ar hi'.split(' '), 'q4 q8', 'Alibaba speech model, 11 languages, strongest in Chinese.'],
+    ['Qwen3-ASR', 'qwen3-asr-1.7b', 0, 3400, 2.2, LS, 'zh en ja ko yue vi th id ms ar hi'.split(' '), 'q4 q8', 'Alibaba speech model, 11 languages, strongest in Chinese.'],
+    ['Moonshine Streaming', 'moonshine-streaming-tiny', 1, 66, 4.9, LS, ['en'], 'q8', 'Useful Sensors streaming model, English only. Word-by-word text.'],
+    ['Moonshine Streaming', 'moonshine-streaming-medium', 1, 820, 2.2, LS, ['en'], 'q8', 'Useful Sensors streaming model, English only. Word-by-word text.'],
+    ['Nemotron', 'nemotron-3.5-asr-streaming-0.6b', 1, 1350, 3.0, LS, NEM, 'f16', 'NVIDIA streaming model, 32 languages. The only streaming rows with Russian.'],
+    ['Moonshine', 'moonshine-base', 0, 130, 3.4, LS, ['en'], 'q8', 'Useful Sensors batch model, English only.'],
+    ['Seamless', 'seamless-m4t-v2-medium', 0, 2400, 3.1, LS, 'en ru de fr es it pt pl uk zh ja ar hi tr'.split(' '), 'q8', 'Meta multilingual speech model, 14 languages, with speaker turns.', 1],
+    ['Seamless', 'seamless-m4t-v2-large', 0, 4600, 2.6, LS, 'en ru de fr es it pt pl uk zh ja ar hi tr'.split(' '), 'q8', 'Meta multilingual speech model, 14 languages, with speaker turns.', 1],
+    ['Voxtral', 'voxtral-mini-3b', 0, 6200, 2.4, LS, 'en es fr pt hi de nl it'.split(' '), 'q4 q8', 'Mistral speech model, eight languages.'],
+    ['Distil-Whisper', 'distil-large-v3', 0, 1510, 2.9, LS, ['en'], 'q8', 'Distilled Whisper large-v3, English only.'],
+    ['Distil-Whisper', 'distil-medium-en', 0, 790, 3.3, LS, ['en'], 'q8', 'Distilled Whisper medium, English only.'],
+    ['SenseVoice', 'sensevoice-small', 0, 470, 3.1, LS, 'zh en ja ko yue'.split(' '), 'q8 f16', 'Alibaba FunAudio model, five languages, strongest in Chinese.'],
+    ['Paraformer', 'paraformer-large', 0, 880, 3.3, LS, 'zh en'.split(' '), 'q8 f16', 'Alibaba FunASR model, Chinese and English.'],
+    ['Zipformer Streaming', 'zipformer-streaming-zh-en', 1, 300, 4.1, LS, 'zh en'.split(' '), 'q8', 'k2 streaming model, Chinese and English. Word-by-word text.'],
+    ['Zipformer Streaming', 'zipformer-streaming-en', 1, 290, 3.8, LS, ['en'], 'q8', 'k2 streaming model, English only. Word-by-word text.'],
+    ['Wav2Vec2', 'wav2vec2-large-960h', 0, 1260, 5.8, LS, ['en'], 'q8', 'Meta self-supervised model fine-tuned for English.'],
+    ['Wav2Vec2', 'wav2vec2-xlsr-53-en', 0, 1260, 5.2, LS, ['en'], 'q8', 'Meta cross-lingual model fine-tuned for English.'],
+    ['Conformer CTC', 'conformer-ctc-large-en', 0, 480, 3.9, LS, ['en'], 'q8', 'NeMo conformer, English only.'],
+    ['Conformer CTC', 'conformer-ctc-medium-en', 0, 120, 4.8, LS, ['en'], 'q8', 'NeMo conformer, small, English only.'],
+    ['Kyutai STT', 'kyutai-stt-1b-en-fr', 1, 2000, 3.2, LS, 'en fr'.split(' '), 'q8', 'Kyutai streaming model, English and French. Word-by-word text.'],
+    ['Kyutai STT', 'kyutai-stt-2.6b-en', 1, 5200, 2.6, LS, ['en'], 'q8', 'Kyutai streaming model, English only. Word-by-word text.'],
+    ['Reverb', 'reverb-asr', 0, 2200, 2.8, LS, ['en'], 'q8 f16', 'Rev model with speaker turns, English only.', 1],
+    ['Wav2Vec2-BERT', 'w2v-bert-2.0-en', 0, 1200, 4.4, LS, ['en'], 'q8 f16', 'Meta self-supervised model, English fine-tune.'],
+    ['FastConformer', 'fastconformer-hybrid-large-en', 0, 460, 3.0, LS, ['en'], 'q8', 'NeMo FastConformer, English only.'],
+    ['FastConformer', 'fastconformer-ctc-medium-en', 0, 130, 4.2, LS, ['en'], 'q8', 'NeMo FastConformer, small, English only.'],
+    ['Vosk', 'vosk-small-en', 0, 40, 9.1, LS, ['en'], 'q8', 'Kaldi-based small model, English only.']
+  ];
+  const EXPLICIT = [
+    { id: 'parakeet-tdt-0.6b-v3-q8', family: 'Parakeet', streaming: false, mb: 740, wer: 1.94, set: LS, langs: EU25, desc: 'NVIDIA transducer, 25 European languages. The default.', rec: true, def: true },
+    { id: 'nemotron-3.5-asr-streaming-0.6b-q8', family: 'Nemotron', streaming: true, mb: 716, wer: 3.06, set: LS, langs: NEM.list, n: 32, desc: 'NVIDIA streaming model, 32 languages.', rec: true },
+    { id: 'moonshine-streaming-small-q8', family: 'Moonshine Streaming', streaming: true, mb: 189, wer: 2.54, set: LS, langs: ['en'], desc: 'Useful Sensors streaming model, English only. Word-by-word text.', rec: true },
+    { id: 'moonshine-tiny-q8', family: 'Moonshine', streaming: false, mb: 34, wer: 4.60, set: LS, langs: ['en'], desc: 'Useful Sensors batch model, English only. The smallest recommended.', rec: true },
+    { id: 'gigaam-v3-ctc-q8', family: 'GigaAM', streaming: false, mb: 259, wer: 5.36, set: FL, langs: ['ru'], desc: 'Sber model trained on Russian speech. Russian only.' },
+    { id: 'gigaam-v3-rnnt-q8', family: 'GigaAM', streaming: false, mb: 261, wer: 5.50, set: FL, langs: ['ru'], desc: 'Sber model trained on Russian speech. Russian only.' },
+    { id: 'gigaam-v2-ctc-q8', family: 'GigaAM', streaming: false, mb: 260, wer: 5.83, set: FL, langs: ['ru'], desc: 'Sber model trained on Russian speech, earlier release. Russian only.' },
+    { id: 'gigaam-v2-rnnt-q8', family: 'GigaAM', streaming: false, mb: 261, wer: 6.12, set: FL, langs: ['ru'], desc: 'Sber model trained on Russian speech, earlier release. Russian only.' }
+  ];
+  const CATALOGUE = EXPLICIT.concat(FAM.flatMap(([family, base, s, f16, wer, set, langs, quants, desc, diar]) => quants.split(' ').map(q => ({
+    id: `${base}-${q}`, family, streaming: !!s, mb: Math.round(f16 * Q[q][0]), wer: +(wer + Q[q][1]).toFixed(2), set,
+    langs: langs.list || langs, n: langs.n, desc, diar: !!diar
+  }))));
+
+  const sub = c => c.split('-')[0].toLowerCase();
+  const has = (m, code) => m.langs.some(c => sub(c) === code);
+  const count = m => m.n || m.langs.length;
+  const names = m => m.langs.map(c => LANG[sub(c)] || sub(c));
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const ROWS = CATALOGUE.slice().sort((a, b) => a.family.localeCompare(b.family) || a.mb - b.mb || a.id.localeCompare(b.id));
+  // One input. The query matches a model id, a family, a language name or a language code.
+  const st = { q: '', model: null };
+  const queryLang = () => { const q = st.q.trim().toLowerCase(); return q ? (Object.keys(LANG).find(c => c === q || LANG[c].toLowerCase() === q) || '') : ''; };
+  const langWords = m => {
+    const k = count(m), f = queryLang();
+    if (k <= 4) return esc(names(m).join(', '));
+    return `${k} languages${f && has(m, f) ? `, incl. ${LANG[f]}` : ''}`;
+  };
+  const matches = m => {
+    const q = st.q.trim().toLowerCase();
+    return !q || m.id.toLowerCase().includes(q) || m.family.toLowerCase().includes(q) || m.langs.some(c => sub(c) === q || (LANG[sub(c)] || '').toLowerCase().includes(q));
+  };
+  const rowHTML = m => { const on = st.model === m.id; return `<div class="row${on ? ' on' : ''}" role="radio" aria-checked="${on}" tabindex="0" data-id="${m.id}"><span class="dot" aria-hidden="true"></span><span class="id">${m.id}</span><span class="size">${m.mb} MB</span><span class="how">${m.streaming ? 'word by word' : 'in chunks'}</span><span class="langs">${langWords(m)}</span></div>`; };
+  const $ = s => document.querySelector(s);
+  function renderList() {
+    const shown = ROWS.filter(matches);
+    $('[data-rows]').innerHTML = shown.length
+      ? `<div class="rhead" aria-hidden="true"><span></span><span>Model</span><span>Download</span><span>Text arrives</span><span>Languages</span></div>${shown.map(rowHTML).join('')}`
+      : `<div class="empty">Nothing matches. Try a language, such as Russian or ru, or part of a model name.</div>`;
+    const m = CATALOGUE.find(x => x.id === st.model);
+    $('[data-read]').innerHTML = m ? `<b>${m.id}</b> · ${m.mb} MB · text arrives ${m.streaming ? 'word by word' : 'in chunks'}` : 'Pick a model to continue.';
+    $('[data-next]').disabled = !m;
+  }
+  document.addEventListener('click', e => { const r = e.target.closest('.row'); if (r) { st.model = r.dataset.id; renderList(); } });
+  document.addEventListener('keydown', e => { const r = e.target.closest('.row'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); st.model = r.dataset.id; renderList(); } });
+  $('[data-q]').addEventListener('input', e => { st.q = e.target.value; renderList(); });
+  renderList();
+})();
+</script>
+</body>
+</html>

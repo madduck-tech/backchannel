@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Backchannel · download · two honest rows</title>
+<script>if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.classList.remove('dark');</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* design/backchannel/tokens.css — pasted verbatim. */
+:root {
+  /* ─── Surface ─────────────────────────────────────────────────── */
+  --bg: oklch(1 0 0);                       /* canvas: transcript and review are documents */
+  --surface: oklch(1 0 0);                  /* cards, popovers, dialogs (app: --elevated) */
+  --surface-warm: oklch(0.976 0.004 190);   /* rails, toolbars (app: --panel) */
+  --surface-sunken: oklch(0.968 0.005 190); /* extension: input wells, code, inset readouts */
+
+  /* ─── Foreground ramp ─────────────────────────────────────────── */
+  --fg: oklch(0.215 0.013 190);
+  --fg-2: var(--fg);
+  --muted: oklch(0.46 0.014 190);
+  --meta: oklch(0.54 0.012 190);
+
+  /* ─── Border ──────────────────────────────────────────────────── */
+  --border: oklch(0.912 0.006 190);
+  --border-soft: var(--border);
+  --border-strong: oklch(0.855 0.008 190); /* extension: input outlines */
+
+  /* ─── Accent = brand ──────────────────────────────────────────── */
+  --accent: oklch(0.365 0.082 190);
+  --accent-on: oklch(1 0 0);
+  --accent-hover: oklch(0.315 0.078 190);
+  --accent-active: var(--accent-hover);
+  --accent-soft: oklch(0.955 0.022 190);   /* extension: selection / active-row tint */
+  --accent-soft-on: oklch(0.33 0.075 190);
+
+  /* ─── Signals ─────────────────────────────────────────────────── */
+  --success: var(--accent);                 /* the brand is the success color */
+  --warn: oklch(0.72 0.15 72);
+  --warn-on: oklch(0.47 0.11 72);
+  --warn-soft: oklch(0.966 0.03 72);
+  --danger: oklch(0.545 0.205 25);
+  --danger-on: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.962 0.022 25);
+  --info: oklch(0.52 0.115 262);            /* extension: local-model and device readouts */
+  --info-soft: oklch(0.962 0.018 262);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-display: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 0.6875rem;  /* 11 · mono readouts */
+  --text-xs: 0.75rem;     /* 12 · captions */
+  --text-sm: 0.8125rem;   /* 13 · dense labels, buttons */
+  --text-base: 0.875rem;  /* 14 · UI body, overlay hint */
+  --text-md: 0.9375rem;   /* 15 · transcript */
+  --text-lg: 1.0625rem;   /* 17 · summary body */
+  --text-xl: 1.25rem;     /* 20 · panel title */
+  --text-2xl: 1.5625rem;  /* 25 · page title */
+  --text-3xl: 1.9375rem;  /* 31 · meeting title */
+  --text-4xl: var(--text-3xl);
+  --leading-body: 1.5;
+  --leading-tight: 1.2;
+  --tracking-display: -0.01em;
+  --measure: 68ch;
+
+  /* ─── Shape ───────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* ─── Elevation (border-first) ────────────────────────────────── */
+  --elev-flat: none;
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 1px 2px oklch(0.2 0.01 190 / 0.06), 0 4px 12px oklch(0.2 0.01 190 / 0.08);
+  --elev-float: 0 2px 4px oklch(0.2 0.01 190 / 0.06), 0 12px 32px oklch(0.2 0.01 190 / 0.12);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.5 0.1 190);
+
+  /* ─── Motion ──────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Spacing ─────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-20: 80px;
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  --container-max: 1100px;                  /* desktop app: the two-pane breakpoint */
+  --container-gutter-desktop: 24px;
+  --container-gutter-tablet: 16px;
+  --container-gutter-phone: 12px;
+  --section-y-desktop: 32px;
+  --section-y-tablet: 24px;
+  --section-y-phone: 16px;
+  --rail-w: 19rem;
+  --rail-w-collapsed: 3.5rem;
+  --overlay-w: 420px;                       /* extension: overlay default width (360–480) */
+}
+
+/* Dark theme: independent values, not a filter. The overlay uses this block by default. */
+.dark,
+[data-theme="dark"] {
+  --bg: oklch(0.155 0.004 190);
+  --surface: oklch(0.225 0.006 190);
+  --surface-warm: oklch(0.185 0.005 190);
+  --surface-sunken: oklch(0.125 0.004 190);
+  --fg: oklch(0.945 0.006 190);
+  --muted: oklch(0.72 0.011 190);
+  --meta: oklch(0.625 0.01 190);
+  --border: oklch(0.285 0.007 190);
+  --border-strong: oklch(0.37 0.009 190);
+  --accent: oklch(0.8 0.115 190);
+  --accent-on: oklch(0.16 0.03 190);        /* bright aqua takes dark ink */
+  --accent-hover: oklch(0.855 0.12 190);
+  --accent-soft: oklch(0.255 0.032 190);
+  --accent-soft-on: oklch(0.845 0.1 190);
+  --warn: oklch(0.78 0.145 72);
+  --warn-on: oklch(0.82 0.13 72);
+  --warn-soft: oklch(0.245 0.045 72);
+  --danger: oklch(0.55 0.21 25);
+  --danger-on: oklch(0.72 0.16 25);
+  --danger-soft: oklch(0.245 0.055 25);
+  --info: oklch(0.66 0.13 262);
+  --info-soft: oklch(0.245 0.045 262);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4), 0 4px 12px oklch(0 0 0 / 0.36);
+  --elev-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 12px 32px oklch(0 0 0 / 0.48);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px oklch(0.8 0.115 190);
+}
+
+/* ─── Shell: the first-run window. Text is --fg or --meta; brand is --accent-soft / --accent-soft-on. ─── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { min-width: 720px; height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: var(--text-base); line-height: 21px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+p { margin: 0; text-wrap: pretty; }
+::selection { background: var(--accent-soft); color: var(--accent-soft-on); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.strip { display: flex; gap: 28px; height: 44px; padding: 0 var(--container-gutter-desktop); background: var(--surface-warm); border-bottom: 1px solid var(--border); }
+.strip span { display: flex; align-items: center; gap: 8px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
+.strip span b { font-family: var(--font-mono); font-weight: 400; }
+.strip .done { color: var(--fg); }
+.strip .cur { color: var(--fg); border-bottom-color: var(--accent-soft-on); }
+main { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.head { padding: 28px var(--container-gutter-desktop) 0; }
+.col { width: 100%; max-width: 1000px; margin: 0 auto; }
+h1 { margin: 0 0 4px; font-size: var(--text-2xl); line-height: 31px; font-weight: 600; letter-spacing: var(--tracking-display); text-wrap: balance; }
+.sub { color: var(--meta); font-size: var(--text-base); line-height: 21px; }
+.scroll { overflow-y: auto; min-height: 0; padding: 0 var(--container-gutter-desktop) 24px; scrollbar-gutter: stable; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+footer { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px var(--container-gutter-desktop); background: var(--surface-warm); border-top: 1px solid var(--border); }
+footer .read { flex: 1 1 auto; min-width: 0; font-size: var(--text-xs); line-height: 17px; color: var(--meta); }
+footer .read b { font-weight: 500; color: var(--fg); }
+.btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; font-size: var(--text-sm); font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.btn-primary { background: var(--accent-soft); color: var(--accent-soft-on); }
+.btn-primary:hover:not(:disabled) { border-color: var(--accent-soft-on); }
+.btn-secondary { background: var(--surface-sunken); border-color: var(--border-strong); color: var(--fg); }
+.btn-secondary:hover:not(:disabled) { border-color: var(--fg); }
+.btn-ghost { color: var(--fg); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-sunken); }
+.well { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: var(--surface-sunken); border: 1px solid var(--border-strong); border-radius: var(--radius-md); transition: border-color var(--motion-fast) var(--ease-standard); }
+.well:hover { border-color: var(--fg); }
+.well:focus-within { border-color: var(--accent-soft-on); box-shadow: var(--focus-ring); }
+.well input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-base); }
+.well input::placeholder { color: var(--meta); opacity: 1; }
+.well.sm { height: 36px; padding: 0 10px; }
+.well.sm input { font-size: var(--text-sm); }
+.dot { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--bg); }
+.on > .dot, .on .dot.me { border-color: var(--accent-soft-on); background: radial-gradient(circle, var(--accent-soft-on) 0 4px, transparent 4.5px); }
+.quiet { color: var(--meta); }
+.status { color: var(--accent-soft-on); font-weight: 500; }
+
+.files { display: grid; gap: 16px; margin-top: 24px; }
+.file { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; row-gap: 8px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.file .name { font-family: var(--font-mono); font-size: var(--text-sm); line-height: 19px; color: var(--fg); overflow-wrap: anywhere; }
+.file .why { grid-column: 1 / -1; font-size: var(--text-sm); line-height: 19px; color: var(--meta); }
+.file .state { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); white-space: nowrap; text-align: right; }
+.file .state b { font-weight: 500; color: var(--accent-soft-on); }
+.bar { grid-column: 1 / -1; height: 6px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent-soft-on); transition: width var(--motion-base) var(--ease-standard); }
+.present { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; font-size: var(--text-sm); color: var(--fg); }
+.tick { flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent-soft); position: relative; }
+.tick::after { content: ""; position: absolute; left: 5px; top: 3px; width: 4px; height: 8px; border: solid var(--accent-soft-on); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.one { margin-top: 24px; display: grid; gap: 14px; }
+.one .line { font-size: var(--text-lg); line-height: 27px; }
+.one .line .mono { font-size: var(--text-base); }
+.one .under { font-size: var(--text-sm); line-height: 19px; color: var(--meta); }
+.one .bar { grid-column: auto; height: 8px; }
+.one .figures { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); }
+.one .figures b { font-weight: 500; color: var(--fg); }
+
+</style>
+</head>
+<body>
+<nav class="strip" aria-label="Setup steps"><span class="done"><b>1</b>Transcription</span><span class="done"><b>2</b>Summariser</span><span class="cur" aria-current="step"><b>3</b>Download</span><span class=""><b>4</b>Audio check</span></nav>
+<main>
+  <div class="head"><div class="col">
+    <h1>Getting the two files you chose</h1>
+    <p class="sub">One is already here. Continue when both are on this device.</p>
+  </div></div>
+  <div class="scroll"><div class="col files">
+    <section class="file" data-od-id="file-transcription" aria-label="Transcription model">
+      <span class="name">parakeet-tdt-0.6b-v3-q8</span>
+      <span class="state" data-t-state></span>
+      <p class="why">Turns speech into text on this device. Chosen on the previous step.</p>
+      <div class="bar" role="progressbar" aria-label="Transcription model" aria-valuemin="0" aria-valuemax="740"><i data-t-bar></i></div>
+    </section>
+    <section class="file" data-od-id="file-summary" aria-label="Summary model">
+      <span class="name">Gemma 4 E2B + projector</span>
+      <span class="state"><b>on this device</b> · 3651 MiB</span>
+      <p class="why">Writes the summary when a meeting ends, on this device.</p>
+      <div class="present"><span class="tick" aria-hidden="true"></span>Already here from an earlier install. Nothing to fetch.</div>
+    </section>
+  </div></div>
+</main>
+<footer><span class="read" data-read></span><button type="button" class="btn btn-primary" data-next disabled>Continue</button></footer>
+<script>
+(() => {
+  const V = 'A';
+  const T = { id: 'parakeet-tdt-0.6b-v3-q8', mb: 740, done: 312, why: 'Turns speech into text on this device. Chosen on the previous step.' };
+  const S = { id: 'Gemma 4 E2B + projector', mib: 3651, present: true, why: 'Writes the summary when a meeting ends, on this device.' };
+  const $ = s => document.querySelector(s);
+  const finished = () => T.done >= T.mb;
+  function render() {
+    const left = T.mb - T.done;
+    if (V === 'A') {
+      $('[data-t-state]').innerHTML = finished() ? `<b>on this device</b> · ${T.mb} MB` : `${T.done} of ${T.mb} MB`;
+      $('[data-t-bar]').style.width = (T.done / T.mb * 100).toFixed(1) + '%';
+      $('[data-t-bar]').parentElement.setAttribute('aria-valuenow', T.done);
+    } else {
+      $('[data-line]').innerHTML = finished()
+        ? `Both files are on this device. Nothing more to fetch.`
+        : `Fetching one file, <span class="mono">${T.mb} MB</span>: <span class="mono">${T.id}</span>, so speech becomes text on this device.`;
+      $('[data-bar]').style.width = (T.done / T.mb * 100).toFixed(1) + '%';
+      $('[data-bar]').parentElement.setAttribute('aria-valuenow', T.done);
+      $('[data-figs]').innerHTML = finished() ? `<span><b>${T.mb} MB</b> fetched</span><span>done</span>` : `<span><b>${T.done} MB</b> of ${T.mb} MB</span><span>${left} MB left</span>`;
+    }
+    $('[data-read]').innerHTML = finished() ? 'Everything you chose is on this device.' : `<b>${left} MB</b> left to fetch. Continue is available when it has arrived.`;
+    $('[data-next]').disabled = !finished();
+    document.title = document.title.replace(/ · .*$/, '') + (finished() ? ' · ready' : ` · ${left} MB left`);
+  }
+  render();
+  // `?frozen` holds the first frame. A prototype that animates cannot be baselined -- the capture
+  // would record whatever millisecond it arrived on, and `prototypes-match-their-baseline.test.mjs`
+  // caught exactly that: "318 of 740 MB" against "312 of 740 MB" between two runs. The design is
+  // unchanged; only the simulation stops.
+  const frozen = new URLSearchParams(location.search).has('frozen');
+  const tick = frozen ? null
+    : setInterval(() => { T.done = Math.min(T.mb, T.done + 6); render(); if (finished()) clearInterval(tick); }, 100);
+})();
+</script>
+</body>
+</html>
