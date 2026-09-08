@@ -44,6 +44,35 @@ critic and the gate are run, not because anything fails when they are broken.*
   table is what separates it from a test of its own stubs. *Honesty-based — the two bullets above it
   are machine-enforced and this one is not, which is why it says so.*
 
+## What a check must reach (ADR 0022)
+
+*Measured on 2026-09-08: every mechanism in this repository was working, and each was pointed
+somewhere other than the change. Stage 1 was 57 of 57, Stage 2 runtime 7 of 7, and the product owner
+found six defects by hand in the flow that had just merged.*
+
+- **A denominator must reach the code a change touches.** `src/contexts/` sat outside
+  `COMPONENT_ROOTS` -- seven providers, rendered by zero tests, unable to enter a backlog or go red --
+  and the defect lived in one of them. Extending the rule is part of the fix, not a follow-up.
+  *Machine-enforced by `no-invisible-component.test.mjs` under set equality.*
+- **A check may not be pointed at the change by the change.** `gopnik.json:30` asserted a heading and
+  a button that `009b37d` had deleted, and `bfa8d3a` rewrote the assertion to what it had just
+  written. If a commit edits a gate assertion guarding behaviour it also edits, the verdict says so
+  and states what the assertion said before. *Honesty-based.*
+- **A pass that seeds away the screens under test proves nothing about them.** Both UI-driving passes
+  seed `onboarding-status.json`, for cost, which is legitimate -- and so neither could see first run.
+  Every pass that seeds states which surfaces it therefore cannot observe.
+  `scripts/stage2-onboarding-check.sh` is the one that cannot skip first run.
+- **A check must not accept the default when the defect is a hardcoded default.** The download named
+  `DEFAULT_TRANSCRIBE_MODEL` directly, so any check taking the default asserted the single value the
+  broken path got right by accident.
+- **A requirement given in conversation is not a requirement until it is in the repository.** "Remove
+  the sort control" stayed in chat; the controls moved behind a button and
+  `onboarding-choices.test.mjs:118-119` now asserts that button must exist. An unrecorded requirement
+  cannot be checked and can be inverted into an assertion enforcing what was rejected. *Honesty-based.*
+- **A screen without a committed, approved prototype is not implemented.** Prototypes live in
+  `design/prototypes/`, not a session directory. #111 shipped four onboarding screens and the
+  repository can produce an approval for none. *Honesty-based; stop and ask.*
+
 ## What a claim must carry
 
 *Honesty-based, all of it. Nothing enforces any of the three.*
