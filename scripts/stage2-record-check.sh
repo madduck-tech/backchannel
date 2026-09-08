@@ -65,12 +65,23 @@ for line in sys.stdin:
     waited=$((waited + 2)); [ "$waited" -ge "$timeout" ] && return 1
     sleep 2
   done
-  orca-ide computer click --app "pid:$(cat "$PIDFILE")" --element-index "$idx" >/dev/null 2>&1
+  # The click's own exit status is the return value. It used to be discarded before `say` ran, so a
+  # click that failed printed "clicked 'X'" and the run carried on -- the same shape as the "a call
+  # that returns success is not evidence it did anything" rule in .claude/rules/testing.md, one level
+  # down: here the call reported nothing at all and success was assumed. (#130)
+  if ! orca-ide computer click --app "pid:$(cat "$PIDFILE")" --element-index "$idx" >/dev/null 2>&1; then
+    say "the driver refused to click '$want'"
+    return 2
+  fi
   say "clicked '$want'"
   sleep 3
 }
 
 CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
+# Whether this run seeded the "onboarding is done" marker. It decides which of the two states below is
+# required, so that "the screen is absent because we skipped it" stops being indistinguishable from
+# "the screen is absent because its buttons were renamed" (#130).
+SEEDED_ONBOARDING=0
 APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
 
 say "launching $APP on $PROFILE"
@@ -82,7 +93,10 @@ mkdir -p "$PROFILE/home"
 if [ -d "$CACHE/models" ]; then
   mkdir -p "$APPDATA"
   cp -a --reflink=auto "$CACHE/models" "$APPDATA/models" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/models"
-  [ -f "$CACHE/onboarding-status.json" ] && cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
+  if [ -f "$CACHE/onboarding-status.json" ]; then
+    cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
+    SEEDED_ONBOARDING=1
+  fi
   say "seeded models from $CACHE — no downloads this run"
 else
   say "no model cache at $CACHE — this run downloads them (about 4.3 GB) and fills it"
@@ -108,22 +122,28 @@ fi
 sleep 20
 kill -0 "$(cat "$PIDFILE")" 2>/dev/null || die "the application exited during startup; see $LOG"
 
-# A clean profile starts at onboarding. On a profile that already has the models these
-# steps are absent, so a missing button is not a failure here.
-if click_labelled "Get Started" 20; then
-  click_labelled "Let's Go" 20 || true
-  # Recording is hard-gated on the transcription model, so this wait is not optional.
-  # An unseeded profile pulls about 4.3 GB here: the transcription model, plus a summary
-  # model that starts on the same screen and is not gated by Continue.
-  say "waiting for the transcription model (it gates recording)"
-  if ! click_labelled "Continue" 900; then
-    die "the transcription model did not finish downloading in 15 minutes"
+# Which of the two states is required is decided by what this run seeded, not discovered by trying a
+# button and shrugging when it is missing.
+#
+# Until #130 this was one unconditional `if`, with `|| true` on the arm inside it, over the labels
+# "Get Started" and "Let's Go". Both were deleted by 009b37d and neither has existed since, so the
+# branch could only ever take the else -- and it did so silently, on every run, in exactly the shape
+# of a profile that was set up correctly.
+if [ "$SEEDED_ONBOARDING" = 1 ]; then
+  # The marker says first run is done, so first run must not be on screen. If it is, the marker did
+  # not take, and every later step would be measuring a different application state than the one this
+  # pass claims to be in.
+  if [ -n "$(tree | grep -m1 'Choose a transcription model' || true)" ]; then
+    die "the onboarding marker was seeded but first run is on screen; the profile is not what this pass assumes"
   fi
+  say "no onboarding (marker seeded) - going straight to recording"
 else
-  # A seeded profile already has the models and the onboarding marker, so none of those
-  # controls exist. Waiting for Continue here would burn the full fifteen-minute timeout
-  # and then fail on a profile that is in better shape than the one that passes.
-  say "no onboarding (profile already set up) - going straight to recording"
+  # An unseeded profile really does start at first run, and walking it is NOT this script's job: the
+  # accessibility tree reaches push buttons and page tabs only, and the model options are radio cards.
+  # scripts/stage2-onboarding-check.sh drives that through tauri-driver. Failing here with the reason
+  # beats the previous behaviour, which was to fall through and die 60 seconds later at
+  # "no 'Start recording' control appeared".
+  die "no model cache at $CACHE, so this profile starts at first run. Seed the cache, or run scripts/stage2-onboarding-check.sh, which drives first run properly."
 fi
 
 if ! click_labelled "Start recording" 60; then

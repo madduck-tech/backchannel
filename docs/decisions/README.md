@@ -23,6 +23,7 @@
 | [0019](0019-record-the-verification-environment.md) | A verification result carries the environment that produced it | accepted |
 | [0020](0020-no-updater-artifacts-without-an-identity.md) | No updater artifacts until this fork owns an updater identity | accepted |
 | [0021](0021-carry-the-capture-channel-by-time-overlap.md) | Carry the capture channel across a re-segmentation by time overlap | accepted |
+| [0022](0022-a-check-that-skips-the-change-is-not-evidence.md) | A check that skips the change is not evidence | accepted |
 
 ## Deferred questions
 

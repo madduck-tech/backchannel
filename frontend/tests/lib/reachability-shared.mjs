@@ -150,9 +150,16 @@ export function reachableFromEntries(files = sourceFiles()) {
  *
  * `src/app/_components/` is in scope because three shipped components live there; before #98 a
  * component added there was invisible with zero edits.
+ *
+ * `src/contexts/` joined in #130, and the omission was not theoretical. Seven files, 665 lines and
+ * 9 `invoke()` calls in `OnboardingContext.tsx` alone, rendered by zero tests and outside this
+ * denominator -- so they could not enter a backlog, could not be named unreachable, and could not go
+ * red. The defect that shipped in #111 lived in one of them: first run stored the person's chosen
+ * transcription model and downloaded a constant instead. A provider is a component by the only test
+ * that matters here -- it mounts, it holds state, and the application cannot run without it.
  */
 export const VENDORED_COMPONENTS = /^src\/components\/ui\//;
-export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/'];
+export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/', 'src/contexts/'];
 export const isComponentFile = (f) =>
   COMPONENT_ROOTS.some((r) => f.startsWith(r)) && f.endsWith('.tsx') && !VENDORED_COMPONENTS.test(f);
 

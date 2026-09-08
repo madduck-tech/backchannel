@@ -26,5 +26,8 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
 - Testing is not optional and not vibes: `.claude/rules/testing.md` and ADR 0016. A change that
   executes ships with a test shown red without it; a bug is red-first with the failure output in the
   pull request.
+- A verdict citing a green pass states whether that pass reached the surfaces the change touched, and
+  a gap it names blocks until the product owner or an issue accepts it (ADR 0022). The #111 verdict
+  named its gap correctly and merged anyway; the product owner found the consequence by hand.
 - Report outcomes faithfully: failed checks, skipped steps and unverified platforms are stated,
   never implied. A readiness claim without a gopnik verdict is not made.

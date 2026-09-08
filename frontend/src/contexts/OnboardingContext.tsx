@@ -104,6 +104,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [summaryProvider, setSummaryProvider] = useState<string>('builtin-ai');
   const [selectedTranscribeModel, setSelectedTranscribeModel] =
     useState<string>('parakeet-tdt-0.6b-v3-q8');
+  /**
+   * The same value, reachable from the download listeners. Those are registered once with `[]` deps
+   * (`:295`), so reading the state directly there would capture whatever it held at mount --
+   * `'parakeet-tdt-0.6b-v3-q8'` -- for the life of the provider. That reads as fixed and behaves
+   * exactly like the defect it replaces, which is why this is a ref and not a closure (#130).
+   */
+  const selectedTranscribeModelRef = useRef(selectedTranscribeModel);
+  useEffect(() => {
+    selectedTranscribeModelRef.current = selectedTranscribeModel;
+  }, [selectedTranscribeModel]);
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
   const [databaseExists, setDatabaseExists] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
@@ -256,7 +266,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       'model-download-progress',
       (event) => {
         const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
-        if (modelName === DEFAULT_TRANSCRIBE_MODEL) {
+        if (modelName === selectedTranscribeModelRef.current) {
           setParakeetProgress(progress);
           setParakeetProgressInfo({
             percent: progress,
@@ -275,7 +285,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       'model-download-complete',
       (event) => {
         const { modelName } = event.payload;
-        if (modelName === DEFAULT_TRANSCRIBE_MODEL) {
+        if (modelName === selectedTranscribeModelRef.current) {
           setParakeetDownloaded(true);
           setParakeetProgress(100);
         }
@@ -286,7 +296,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       'model-download-error',
       (event) => {
         const { modelName } = event.payload;
-        if (modelName === DEFAULT_TRANSCRIBE_MODEL) {
+        if (modelName === selectedTranscribeModelRef.current) {
           console.error('Parakeet download error:', event.payload.error);
         }
       }
@@ -519,6 +529,29 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
   };
 
+  /**
+   * Is *this* model on disk? `transcribe_has_available_models` answers a different question -- "is
+   * SOME model Available" (`transcribe_engine/commands.rs:85`) -- and `parakeetDownloaded`, which is
+   * fed by it, was what the download decision used. So a person who already had any model, chose a
+   * different one, and pressed on got no download at all, while their choice was still written to
+   * the config and recording then refused it (#130).
+   *
+   * A failed check returns false rather than true: not knowing must start the download, never skip
+   * it. The cost of being wrong that way is a redundant fetch; the other way it is a first run that
+   * completes and cannot record.
+   */
+  const transcribeModelIsOnDisk = async (modelName: string): Promise<boolean> => {
+    try {
+      const models = await invoke<Array<{ name: string; status: unknown }>>(
+        'transcribe_get_available_models'
+      );
+      return models.some((m) => m.name === modelName && m.status === 'Available');
+    } catch (error) {
+      console.warn('[OnboardingContext] Could not verify the transcription model on disk:', error);
+      return false;
+    }
+  };
+
   // Start background downloads for models.
   const startBackgroundDownloads = async ({
     includeParakeet,
@@ -532,7 +565,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     });
 
     try {
-      const shouldStartParakeet = includeParakeet && !parakeetDownloaded;
+      const shouldStartParakeet = includeParakeet && !(await transcribeModelIsOnDisk(selectedTranscribeModel));
       const shouldStartSummary = includeSummary && !summaryModelDownloaded && !!summaryModel;
 
       if (!shouldStartParakeet && !shouldStartSummary) {
@@ -547,8 +580,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       // Start Parakeet download first (speech recognition - always required)
       if (shouldStartParakeet) {
         console.log('[OnboardingContext] Starting Parakeet download');
-        invoke('transcribe_download_model', { modelName: DEFAULT_TRANSCRIBE_MODEL })
-          .catch(err => console.error('[OnboardingContext] Parakeet download failed:', err));
+        invoke('transcribe_download_model', { modelName: selectedTranscribeModel })
+          .catch(err => console.error('[OnboardingContext] Transcription model download failed:', err));
       }
 
       // Start selected Summary Model download immediately so completion cannot race the request.
@@ -583,7 +616,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const retryParakeetDownload = async () => {
     console.log('[OnboardingContext] Retrying Parakeet download');
     try {
-      await invoke('transcribe_download_model', { modelName: DEFAULT_TRANSCRIBE_MODEL });
+      await invoke('transcribe_download_model', { modelName: selectedTranscribeModel });
     } catch (error) {
       console.error('[OnboardingContext] Retry failed:', error);
       throw error;
