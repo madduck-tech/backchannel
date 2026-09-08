@@ -10,9 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import {
-  MODEL_SORT_LABELS,
   ModelInfo,
-  ModelSort,
   TranscribeAPI,
   corruptedSizeMb,
   downloadProgress,
@@ -24,32 +22,36 @@ import {
   sortModels,
 } from '@/lib/transcribe';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Search } from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
 import { languageHaystack, languageNames, languagesSummary } from '@/lib/languages';
 import { cn } from '@/lib/utils';
 
 interface Props {
   selectedModel?: string;
   onModelSelect?: (modelName: string) => void;
+  /**
+   * Whether a row may start a download. False during first run, where the product owner reported that
+   * pointing at a model fetched it while the four recommended options merely selected (#138).
+   *
+   * A mode rather than a deletion, and the reason is measurable: `TranscriptSettings.tsx` mounts this
+   * same component and has no Continue (`grep -ci "continue|goNext"` there returns 0), so removing the
+   * button outright would leave a Settings user unable to download a model at all. Hiding rather than
+   * removing is the move ADR 0023's worked example is about, which is why the test asserts both sides.
+   */
+  canDownload?: boolean;
 }
 
-export default function TranscriptionModelManager({ selectedModel, onModelSelect }: Props) {
+export default function TranscriptionModelManager({
+  selectedModel,
+  onModelSelect,
+  canDownload = true,
+}: Props) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [sort, setSort] = useState<ModelSort>('catalog');
   const [query, setQuery] = useState('');
-  const [installedOnly, setInstalledOnly] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -226,14 +228,16 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
               <span className="text-sm font-medium text-brand">Selected</span>
             )}
             {!available && !downloading && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy !== null}
-                onClick={() => download(model.name)}
-              >
-                {truncatedMb === null ? 'Download' : 'Download again'}
-              </Button>
+              canDownload && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy !== null}
+                  onClick={() => download(model.name)}
+                >
+                  {truncatedMb === null ? 'Download' : 'Download again'}
+                </Button>
+              )
             )}
             {(available || truncatedMb !== null) && (
               <Button size="sm" variant="ghost" onClick={() => remove(model.name)}>
@@ -279,9 +283,10 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
   // On disk, not merely usable: a corrupted or half-downloaded model is still
   // installed, and hiding the row someone needs to delete or retry is the one
   // outcome this filter must not produce.
-  const installedCount = models.filter((m) => m.status !== 'Missing').length;
-  const listed = sortModels(models, sort)
-    .filter((m) => !installedOnly || m.status !== 'Missing')
+  // Catalogue order, and the search field is the only narrowing there is. The sort control and the
+  // installed-only filter were removed on the product owner's instruction (#138); `sortModels` is kept
+  // for the order it imposes, not for a choice the person makes.
+  const listed = sortModels(models, 'catalog')
     .filter(
     (m) =>
       !q ||
@@ -305,11 +310,6 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
       )}
 
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-[52ch] text-xs text-ink-muted">
-          Quality is a tier from each model&apos;s measured error rate — the WER beside
-          it is that measurement. Speed is estimated from file size. A WER only ranks
-          against models measured on the same set; hover it to see which.
-        </p>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <div className="relative">
             <Search
@@ -330,36 +330,12 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
               )}
             />
           </div>
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-muted">
-            <Switch
-              checked={installedOnly}
-              onCheckedChange={setInstalledOnly}
-              aria-label="Show only installed models"
-            />
-            Installed only
-            <span className="readout text-2xs text-ink-faint">({installedCount})</span>
-          </label>
-          <span className="text-sm text-ink-muted">Sort by</span>
-          <Select value={sort} onValueChange={(v) => setSort(v as ModelSort)}>
-            <SelectTrigger className="h-8 w-40" aria-label="Sort models by">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(MODEL_SORT_LABELS).map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
-      {listed.length === 0 && (q || installedOnly) ? (
+      {listed.length === 0 && q ? (
         <p className="py-6 text-center text-sm text-ink-muted">
-          {installedOnly && installedCount === 0
-            ? 'No models are installed yet. Turn off “Installed only” to download one.'
-            : `No models match “${query.trim()}”.`}
+          {`No models match “${query.trim()}”.`}
         </p>
       ) : (
         listed.map(card)
