@@ -136,7 +136,7 @@ export function TranscriptionModelStep() {
                         onClick={() => setShowCatalogue((v) => !v)}
                         aria-expanded={showCatalogue}
                     >
-                        {showCatalogue ? 'Hide the catalogue' : 'All 86 models'}
+                        {showCatalogue ? 'Hide the catalogue' : 'Browse every model'}
                     </Button>
                 </div>
 
@@ -144,6 +144,7 @@ export function TranscriptionModelStep() {
                     name, and everyone else is served by the four above. */}
                 {showCatalogue && (
                     <TranscriptionModelManager
+                        canDownload={false}
                         selectedModel={selectedTranscribeModel}
                         onModelSelect={setSelectedTranscribeModel}
                     />

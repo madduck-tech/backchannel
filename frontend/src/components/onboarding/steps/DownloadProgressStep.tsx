@@ -19,6 +19,13 @@ interface DownloadState {
   downloadedMb: number;
   totalMb: number;
   speedMbps: number;
+  /**
+   * Did this run fetch anything for this row? A file already on disk and a file just downloaded
+   * both end at `status: 'completed'`, and the screen used to render them identically — a full bar
+   * over `0.0 MB / 705.3 MB`, which is what the product owner photographed. Set the moment a
+   * progress event arrives, so it reports the wire rather than an intention.
+   */
+  fetched: boolean;
   error?: string;
 }
 
@@ -44,6 +51,7 @@ export function DownloadProgressStep() {
     downloadedMb: 0,
     totalMb: 716,
     speedMbps: 0,
+    fetched: false,
   });
 
   const [summaryState, setSummaryState] = useState<DownloadState>({
@@ -52,6 +60,7 @@ export function DownloadProgressStep() {
     downloadedMb: 0,
     totalMb: 0,
     speedMbps: 0,
+    fetched: false,
   });
 
   const [isCompleting, setIsCompleting] = useState(false);
@@ -123,6 +132,7 @@ export function DownloadProgressStep() {
       downloadedMb: 0,
       totalMb: getSummaryModelSizeMb(selectedSummaryModel || recommendedSummaryModel),
       speedMbps: 0,
+      fetched: false,
     }));
 
     try {
@@ -210,6 +220,7 @@ export function DownloadProgressStep() {
           ...prev,
           status: status === 'completed' ? 'completed' : 'downloading',
           progress,
+          fetched: true,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
           totalMb: total_mb ?? prev.totalMb,
           speedMbps: speed_mbps ?? prev.speedMbps,
@@ -225,7 +236,11 @@ export function DownloadProgressStep() {
       'model-download-complete',
       (event) => {
         if (event.payload.modelName === DEFAULT_TRANSCRIBE_MODEL) {
-          setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
+          // `fetched` because this event follows a real download: `download_inner` fetches
+          // unconditionally, so reaching here means bytes crossed the wire. Without it a
+          // download whose progress events were missed ends on "already here from an earlier
+          // install" -- a lie about something the person just watched happen.
+          setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100, fetched: true }));
           setParakeetDownloaded(true);
         }
       }
@@ -272,6 +287,7 @@ export function DownloadProgressStep() {
             ? 'error'
             : 'downloading',
           progress,
+          fetched: true,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
           totalMb: (total_mb ?? prev.totalMb) || getSummaryModelSizeMb(model),
           speedMbps: speed_mbps ?? prev.speedMbps,
@@ -445,7 +461,10 @@ export function DownloadProgressStep() {
     state: DownloadState,
     modelSize: string,
     sizeUnit = 'MB'
-  ) => (
+  ) => {
+    // Present before this run started: complete, and nothing crossed the wire to make it so.
+    const alreadyHere = state.status === 'completed' && !state.fetched;
+    return (
     <div className="bg-elevated rounded-xl border border-line p-5">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -465,8 +484,11 @@ export function DownloadProgressStep() {
             <Loader2 className="w-5 h-5 text-ink animate-spin" />
           )}
           {state.status === 'completed' && (
-            <div className="w-6 h-6 rounded-full bg-brand-soft flex items-center justify-center">
-              <Check className="w-4 h-4 text-brand" />
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-ink-muted">On this device</span>
+              <div className="w-6 h-6 rounded-full bg-brand-soft flex items-center justify-center">
+                <Check className="w-4 h-4 text-brand" />
+              </div>
             </div>
           )}
           {state.status === 'error' && (
@@ -475,8 +497,18 @@ export function DownloadProgressStep() {
         </div>
       </div>
 
+      {/* A file that was already here is stated, not drawn.
+          The product owner photographed this screen reading `0.0 MB / 705.3 MB` over a bar for a
+          model that was already on disk: nothing was being fetched, so there were no bytes to count
+          and both numbers were meaningless. The approved prototype's present row is a sentence. */}
+      {alreadyHere && (
+        <p className="text-sm text-ink-muted">
+          Already here from an earlier install. Nothing to fetch.
+        </p>
+      )}
+
       {/* Progress Bar */}
-      {(state.status === 'downloading' || state.status === 'completed') && (
+      {!alreadyHere && (state.status === 'downloading' || state.status === 'completed') && (
         <div className="space-y-2">
           <div className="w-full h-2 bg-ink/10 rounded-full overflow-hidden">
             <div
@@ -486,7 +518,9 @@ export function DownloadProgressStep() {
           </div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-ink-muted">
-              {state.downloadedMb.toFixed(1)} {sizeUnit} / {state.totalMb.toFixed(1)} {sizeUnit}
+              {state.status === 'completed'
+                ? `${state.totalMb.toFixed(1)} ${sizeUnit} fetched`
+                : `${state.downloadedMb.toFixed(1)} of ${state.totalMb.toFixed(1)} ${sizeUnit}`}
             </span>
             <div className="flex items-center gap-2">
               {state.speedMbps > 0 && (
@@ -521,7 +555,8 @@ export function DownloadProgressStep() {
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   return (
     <OnboardingContainer
