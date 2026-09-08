@@ -27,7 +27,6 @@ const WITHOUT_STORY = new Set([
   'src/components/AppToaster.tsx',
   'src/components/AudioBackendSelector.tsx',
   'src/components/AudioLevelMeter.tsx',
-  'src/components/AudioPlayer.tsx',
   'src/components/BlockNoteEditor/BasicBlockNoteTest.tsx',
   'src/components/BlockNoteEditor/Editor.tsx',
   'src/components/BluetoothPlaybackWarning.tsx',
