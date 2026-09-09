@@ -138,21 +138,40 @@ export const WIDTHS = [1096, 720, 432];
  * rather than three: enough to catch a token defined in only one block -- an axis #124's residual
  * named as unguarded -- without doubling a file already approaching a megabyte.
  */
+/**
+ * And one shot with `prefers-contrast: more`, because until now the capture had no such axis at all.
+ *
+ * A person whose system asks for more contrast sees a state no prototype has ever been rendered in
+ * and no baseline has ever recorded. The application answers that request -- `globals.css:182-196`
+ * raises `--ink-muted`, `--ink-faint`, `--border-c` and `--border-strong` in both themes -- and the
+ * design system has no counterpart, which is #140.
+ *
+ * Today this shot is byte-identical to `dark-720`, and that identity is the point: it is the
+ * measurement saying nothing in `design/` responds to the request. The day #140's tier lands, this
+ * key is where it becomes visible, and a tier that changed nothing would show as a baseline that did
+ * not move. Adding the axis after the tier would have meant capturing the new state as the target
+ * without ever having seen the old one.
+ *
+ * One shot rather than four, on the same reasoning light is captured at one width: enough to catch a
+ * token defined in only one block, without doubling a file already approaching a megabyte.
+ */
 export const SHOTS = [
   { scheme: 'dark', widths: WIDTHS },
   { scheme: 'light', widths: [720] },
+  { scheme: 'dark', widths: [720], contrast: 'more' },
 ];
 
 export async function capture(url, { shots = SHOTS } = {}) {
   const b = await browser();
   try {
     const out = {};
-    for (const { scheme, widths } of shots) for (const w of widths) {
+    for (const { scheme, widths, contrast } of shots) for (const w of widths) {
       // `frozen` asks a prototype that animates to hold its first frame. Without it the capture
       // records whichever millisecond it arrived on -- measured: "318 of 740 MB" against "312 of
       // 740 MB" between two runs of the same file.
-      out[`${scheme}-${w}`] = await b.evaluate(`${url}?frozen=1#w${w}`, CAPTURE, {
-        scheme,
+      out[`${scheme}-${w}${contrast ? `-contrast-${contrast}` : ''}`] = await b.evaluate(
+        `${url}?frozen=1#w${w}`, CAPTURE, {
+        scheme, contrast,
         readyFn: 'document.body && document.body.children.length > 0',
         viewport: { width: w, height: 900 },
       });

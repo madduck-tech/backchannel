@@ -107,7 +107,7 @@ export async function browser({ startupMs = 60000 } = {}) {
     // under a second idle. A deadline set for an idle machine is a deadline that fails on a loaded
     // one, and that reads as a flake rather than as the contention it is.
     { readyFn = 'true', timeoutMs = 90000, clickFirst = null, settleMs = 400,
-      viewport = null, scheme = null } = {}
+      viewport = null, scheme = null, contrast = null } = {}
   ) => {
     // Opened blank on purpose. Emulation has to be in place **before** the page evaluates
     // `prefers-color-scheme`, and a tab created at the URL has already navigated by the time this
@@ -147,9 +147,15 @@ export async function browser({ startupMs = 60000 } = {}) {
     // Never inherit the operator's desktop. CI measured 1894 differences against a baseline taken
     // here, every one a colour: this machine's Chrome answers dark to prefers-color-scheme and the
     // runner's answers light, and the capture never said which it wanted.
-    if (scheme) {
-      await send('Emulation.setEmulatedMedia', {
-        features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    //
+    // `prefers-contrast` rides the same call, and must: `setEmulatedMedia` replaces the feature list
+    // rather than adding to it, so two calls would leave only the second feature emulated and the
+    // scheme back on the operator's desktop -- the defect the paragraph above was written about.
+    if (scheme || contrast) {
+      const features = [];
+      if (scheme) features.push({ name: 'prefers-color-scheme', value: scheme });
+      if (contrast) features.push({ name: 'prefers-contrast', value: contrast });
+      await send('Emulation.setEmulatedMedia', { features });
     }
     if (viewport) {
       await send('Emulation.setDeviceMetricsOverride', {
