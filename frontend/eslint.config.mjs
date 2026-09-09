@@ -43,7 +43,7 @@ export default defineConfig([
       // deleting changes a signature.
       '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
 
-      // 43 + 36 + 8 + 6 + 2 + 1 + 1 = 97 across the react-hooks rules still off, and these are
+      // 43 + 36 + 7 + 6 + 2 = 94 across the react-hooks rules still off, and these are
       // the ones that are NOT style. `set-state-in-effect` is extra renders and possible
       // loops; `exhaustive-deps` is stale closures reading old state. Every one is a
       // behaviour change to verify by hand, in a UI this repository can only test through
@@ -54,7 +54,6 @@ export default defineConfig([
       'react-hooks/immutability': 'off',
       'react-hooks/refs': 'off',
       'react-hooks/purity': 'off',
-      'react-hooks/preserve-manual-memoization': 'off',
     },
   },
   globalIgnores([
