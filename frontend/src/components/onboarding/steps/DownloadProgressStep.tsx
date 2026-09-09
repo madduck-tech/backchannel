@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSummaryModelSizeLabel, getSummaryModelSizeMb } from '@/lib/onboarding-summary-model';
 
-import { DEFAULT_TRANSCRIBE_MODEL } from '@/constants/modelDefaults';
+import { transcribeModelSizeMb } from '@/lib/onboarding-transcribe-models';
 
 type DownloadStatus = 'waiting' | 'downloading' | 'completed' | 'error';
 
@@ -39,9 +39,16 @@ export function DownloadProgressStep() {
     summaryModelDownloaded,
     setSummaryModelDownloaded,
     summaryProvider,
+    selectedTranscribeModel,
     startBackgroundDownloads,
     completeOnboarding,
   } = useOnboarding();
+
+  // The listeners below are subscribed once and must not close over the first render's choice.
+  // `OnboardingContext` keeps the same ref for the same reason (`:112`); the screen has its own
+  // because it has its own listeners -- a duplication #146 condition 3 asks to remove.
+  const chosenRef = useRef(selectedTranscribeModel);
+  useEffect(() => { chosenRef.current = selectedTranscribeModel; }, [selectedTranscribeModel]);
 
   const [isMac, setIsMac] = useState(false);
 
@@ -49,7 +56,7 @@ export function DownloadProgressStep() {
     status: parakeetDownloaded ? 'completed' : 'waiting',
     progress: parakeetDownloaded ? 100 : 0,
     downloadedMb: 0,
-    totalMb: 716,
+    totalMb: transcribeModelSizeMb(selectedTranscribeModel) ?? 0,
     speedMbps: 0,
     fetched: false,
   });
@@ -62,6 +69,11 @@ export function DownloadProgressStep() {
     speedMbps: 0,
     fetched: false,
   });
+
+  // The size shown beside the name. `null` for a model outside the recommended four -- there is no
+  // frontend copy of all 85 rows, and the download's first progress event supplies the real total.
+  const chosenSizeMb = transcribeModelSizeMb(selectedTranscribeModel);
+  const transcribeSizeLabel = chosenSizeMb === null ? 'size from the download' : `~${chosenSizeMb} MB`;
 
   const [isCompleting, setIsCompleting] = useState(false);
   const parakeetDownloadStartedRef = useRef(false);
@@ -91,7 +103,7 @@ export function DownloadProgressStep() {
     }));
 
     try {
-      await invoke('transcribe_download_model', { modelName: DEFAULT_TRANSCRIBE_MODEL });
+      await invoke('transcribe_download_model', { modelName: chosenRef.current });
       // Progress events will update state
     } catch (error) {
       console.error('[DownloadProgressStep] Retry failed:', error);
@@ -215,7 +227,7 @@ export function DownloadProgressStep() {
       status?: string;
     }>('model-download-progress', (event) => {
       const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
-      if (modelName === DEFAULT_TRANSCRIBE_MODEL) {
+      if (modelName === chosenRef.current) {
         setParakeetState((prev) => ({
           ...prev,
           status: status === 'completed' ? 'completed' : 'downloading',
@@ -235,7 +247,7 @@ export function DownloadProgressStep() {
     const unlistenComplete = listen<{ modelName: string }>(
       'model-download-complete',
       (event) => {
-        if (event.payload.modelName === DEFAULT_TRANSCRIBE_MODEL) {
+        if (event.payload.modelName === chosenRef.current) {
           // `fetched` because this event follows a real download: `download_inner` fetches
           // unconditionally, so reaching here means bytes crossed the wire. Without it a
           // download whose progress events were missed ends on "already here from an earlier
@@ -249,7 +261,7 @@ export function DownloadProgressStep() {
     const unlistenError = listen<{ modelName: string; error: string }>(
       'model-download-error',
       (event) => {
-        if (event.payload.modelName === DEFAULT_TRANSCRIBE_MODEL) {
+        if (event.payload.modelName === chosenRef.current) {
           setParakeetState((prev) => ({
             ...prev,
             status: 'error',
@@ -572,7 +584,7 @@ export function DownloadProgressStep() {
             'Transcription Engine',
             <Mic className="w-5 h-5 text-ink-muted" />,
             parakeetState,
-            '~716 MB'
+            transcribeSizeLabel
           )}
 
           {renderDownloadCard(
