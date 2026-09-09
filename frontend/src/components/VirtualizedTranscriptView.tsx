@@ -390,7 +390,18 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Force re-render without flushSync (avoids React warning)
     const [, rerender] = useReducer((x: number) => x + 1, 0);
 
-    // Setup virtualizer for efficient rendering of large lists
+    // Setup virtualizer for efficient rendering of large lists.
+    //
+    // React Compiler declines to optimize this component and says why:
+    //
+    //   Compilation Skipped: Use of incompatible library
+    //   This API returns functions which cannot be memoized without leading to stale UI.
+    //
+    // That is a statement about `@tanstack/react-virtual`, not about this file: there is no edit
+    // here that makes `useVirtualizer` memoizable. So the rule is **on** for the rest of the tree —
+    // a second incompatible library reaching the codebase fails a pull request — and this one site
+    // carries the compiler's own sentence instead of the whole rule staying off. #38.
+    // eslint-disable-next-line react-hooks/incompatible-library
     const virtualizer = useVirtualizer({
         // `virtualizer.measureElement` is attached as a ref (below), so react-virtual's
         // internal re-render notify fires during React's commit phase. Its default
