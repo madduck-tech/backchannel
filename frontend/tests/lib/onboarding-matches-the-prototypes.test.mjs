@@ -113,6 +113,50 @@ const holds = (what, cond, why) => {
   );
 }
 
+// --- the summariser offers the seven the prototype offers, in its order ------------------------------
+//
+// The heading counts them out loud -- "Seven choices" -- so a sixth or an eighth makes the screen
+// contradict itself. Read from the prototype's own `P = [...]` rather than retyped here, so a change
+// there is a stale check rather than a silent disagreement.
+{
+  const p = proto('onboarding-summariser');
+  const wanted = [...p.matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(
+    wanted.length, 7,
+    `the approved summariser lists ${wanted.length} providers; this check assumes the seven its ` +
+      'heading counts'
+  );
+
+  const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
+  const got = [...step.matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
+  holds(
+    'the summariser offers the approved seven, in the approved order',
+    JSON.stringify(got) === JSON.stringify(wanted),
+    `The prototype's order is what a person reads down: what runs here first, what leaves second.\n` +
+      `  prototype: ${wanted.join(', ')}\n  screen:    ${got.join(', ')}`
+  );
+}
+
+// --- what a remote summariser costs: nothing ---------------------------------------------------------
+//
+// The provider must gate the local download. Held here as well as in Stage 2's `remote` mode,
+// because that mode needs a built AppImage and twenty minutes, and this regression is one line:
+// before #155 `summaryProvider` appeared four times in `OnboardingContext.tsx` -- the type, the
+// state, the write into the saved status, the export -- and in no condition at all, so choosing
+// Claude fetched 2709.8 MB of Gemma.
+{
+  const ctx = impl('src/contexts/OnboardingContext.tsx');
+  const code = ctx.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  holds(
+    'only a local summariser has weights to fetch, and the download is gated on that',
+    /shouldStartSummary\s*=[\s\S]{0,200}?summaryNeedsDownload/.test(code) &&
+      /summaryNeedsDownload\s*=\s*summaryProvider === 'builtin-ai'/.test(code),
+    'A cloud provider needs a key, not 3651 MiB of weights. Ollama uses a model already on the\n' +
+      '  machine. Without the provider in this condition all six behave identically, and the person\n' +
+      '  who chose Claude waits for a download they will never use.'
+  );
+}
+
 // --- the summariser: the chosen option is scrolled to the top, not the field into minimum view -------
 {
   const p = proto('onboarding-summariser');

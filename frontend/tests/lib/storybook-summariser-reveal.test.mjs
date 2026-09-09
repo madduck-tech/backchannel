@@ -14,7 +14,13 @@ const STORY = 'onboarding-summariser--fresh';
 /** `tauri.conf.json:18-19`. Read as numbers here so a change there makes this stale, not silently wrong. */
 const WINDOW = { width: 720, height: 520 };
 
-/** Choose the remote provider, let the reveal settle, then measure where its field landed. */
+/**
+ * The order a person reads down, and where the field lands.
+ *
+ * The group order is a rendering decision, so a source check cannot see it: reversing the two groups
+ * in `SummariserStep.tsx` leaves every declaration check green, because they read the `OPTIONS`
+ * array and the array is not what is on screen. Measured here instead.
+ */
 const pickAndMeasure = `async () => {
   const remote = [...document.querySelectorAll('button, [role=radio], [role=button], div[class*="cursor-pointer"]')]
     .find((e) => /OpenAI/.test(e.textContent || ''));
@@ -26,12 +32,17 @@ const pickAndMeasure = `async () => {
     'input[type=password], input[placeholder*="key" i], input[aria-label*="key" i]'
   );
   if (!field) return { picked: true, field: false };
+  const groups = [...document.querySelectorAll('div')]
+    .map((d) => (d.children.length === 0 ? (d.textContent || '').trim() : ''))
+    .filter((t) => t === 'ON THIS MACHINE' || t === 'SENT TO A PROVIDER');
   const r = field.getBoundingClientRect();
   return {
     picked: true, field: true,
     rect: [Math.round(r.top), Math.round(r.bottom)],
     viewport: window.innerHeight,
     inView: r.top >= 0 && r.bottom <= window.innerHeight,
+    groups,
+    insideOption: !!field.closest('[role=radio]'),
   };
 }`;
 
@@ -55,4 +66,17 @@ assert.ok(
     '  chosen option to the top and opens the field inside it.'
 );
 
-console.log(`ok - the key field is in view at ${WINDOW.width}x${WINDOW.height}`);
+assert.deepEqual(
+  m.groups, ['ON THIS MACHINE', 'SENT TO A PROVIDER'],
+  `the approved order is what runs here first, what leaves second; got ${JSON.stringify(m.groups)}`
+);
+assert.ok(
+  m.insideOption,
+  'the key field must open inside the chosen option — that is what `c-inline-scroll` is, and a\n' +
+    '  sibling of the list is where it was when the product owner could not see it'
+);
+
+console.log(
+  `ok - the key field is inside its option and in view at ${WINDOW.width}x${WINDOW.height}, ` +
+    'and the groups read local first'
+);
