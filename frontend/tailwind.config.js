@@ -100,13 +100,13 @@ module.exports = {
           foreground: c('--popover-foreground'),
         },
         muted: {
-          DEFAULT: c('--muted'),
-          foreground: c('--muted-foreground'),
+          DEFAULT: c('--shadcn-muted'),
+          foreground: c('--shadcn-muted-foreground'),
         },
-        accent: {
-          DEFAULT: c('--accent'),
-          foreground: c('--accent-foreground'),
-        },
+        // `accent` is absent on purpose: nothing in this application used a single one of its
+        // utilities, and its property collided with the design system's brand token. Leaving the key
+        // while deleting the property would emit `oklch(var(--accent)/1)` over nothing -- a
+        // transparent background and black text, with no build or lint error. #121
         destructive: {
           DEFAULT: c('--destructive'),
           foreground: c('--destructive-foreground'),

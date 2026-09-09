@@ -19,6 +19,29 @@ Package guide for OpenDesign agents and reviewers.
 - IBM Plex Sans for UI and speech, Plex Serif for the review document, Plex Mono for machine facts.
 - Elevation is border-first; shadows only on things that float.
 
+## Porting
+
+A prototype's CSS cannot be pasted into the application. The two files declare different vocabularies
+on purpose, and two names used to mean **opposite** things in them — `--muted` was mid-ink text here
+and a background there, `--accent` the brand here and a pale tint there. A literal port painted text in
+a background colour, and it was found by eye rather than by any check (#121).
+
+The application no longer declares either name, so nothing collides today. What remains is that these
+names do not exist on the other side at all:
+
+| here, and in every prototype | in the application | value |
+|---|---|---|
+| `--muted` | `--ink-muted` | `oklch(0.46 0.014 190)` light, `oklch(0.72 0.011 190)` dark |
+| `--accent` | `--brand` | `oklch(0.365 0.082 190)` light, `oklch(0.8 0.115 190)` dark |
+
+The values are identical, so the mapping is a rename and nothing more.
+`frontend/tests/lib/token-names-mean-one-thing.test.mjs` re-measures both rows, so this table goes red
+rather than stale if either side moves.
+
+The application's `--accent` was a shadcn compatibility alias with no consumer, and was deleted; its
+`--muted` was renamed to `--shadcn-muted`. Neither could move here instead: both are `A1-identity`
+entries in OpenDesign's `TOKEN_SCHEMA`, which every brand must declare.
+
 ## Do
 
 - Keep the token names exactly; overwrite values, never rename keys.
