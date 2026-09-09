@@ -6,7 +6,6 @@ import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
 import { resolveOnboardingSummaryModelStatus } from '@/lib/onboarding-summary-model';
 
-import { DEFAULT_TRANSCRIBE_MODEL } from '@/constants/modelDefaults';
 
 interface OnboardingStatus {
   version: string;

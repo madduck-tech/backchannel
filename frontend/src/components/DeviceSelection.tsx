@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { RefreshCw, Mic, Speaker } from 'lucide-react';
 import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -74,28 +73,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   };
 
   // Helper function to detect device category and Bluetooth status
-  const getDeviceMetadata = (deviceName: string) => {
-    const nameLower = deviceName.toLowerCase();
-
-    // Detect if it's Bluetooth
-    const isBluetooth = nameLower.includes('airpods')
-      || nameLower.includes('bluetooth')
-      || nameLower.includes('wireless')
-      || nameLower.includes('wh-')  // Sony WH-* series
-      || nameLower.includes('bt');
-
-    // Categorize device
-    let category = 'wired';
-    if (deviceName === 'default') {
-      category = 'default';
-    } else if (nameLower.includes('airpods')) {
-      category = 'airpods';
-    } else if (isBluetooth) {
-      category = 'bluetooth';
-    }
-
-    return { isBluetooth, category };
-  };
 
   // Handle microphone device selection
   const handleMicDeviceChange = (deviceName: string) => {
@@ -105,7 +82,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     };
     onDeviceChange(newDevices);
 
-    const metadata = getDeviceMetadata(deviceName);
   };
 
   // Handle system audio device selection
@@ -116,7 +92,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     };
     onDeviceChange(newDevices);
 
-    const metadata = getDeviceMetadata(deviceName);
   };
 
   // Start audio level monitoring

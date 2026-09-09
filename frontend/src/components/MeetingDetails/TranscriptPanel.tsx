@@ -34,8 +34,6 @@ export function TranscriptPanel({
   transcripts,
   customPrompt,
   onPromptChange,
-  onCopyTranscript,
-  onOpenMeetingFolder,
   isRecording,
   disableAutoScroll = false,
   usePagination = false,
@@ -46,8 +44,6 @@ export function TranscriptPanel({
   loadedCount,
   onLoadMore,
   meetingId,
-  meetingFolderPath,
-  onRefetchTranscripts,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {

@@ -19,7 +19,7 @@ import {
 import { Sparkles, Settings, Loader2, FileText, Check, Square } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import { useState, useEffect, useRef, ReactNode } from 'react';
+import { useState, useEffect, ReactNode } from 'react';
 import { isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
 

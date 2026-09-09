@@ -2,9 +2,9 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Play, Pause, Square, Mic, AlertCircle, X, Loader2 } from 'lucide-react';
-import { ProcessRequest, SummaryResponse } from '@/types/summary';
+import { SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
@@ -67,7 +67,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onRecordingStart,
   isStarting,
   startPhase,
-  onTranscriptReceived,
   onTranscriptionError,
   onStopInitiated,
   isRecordingDisabled,
@@ -83,9 +82,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [isStopping, setIsStopping] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
-  const MIN_RECORDING_DURATION = 2000; // 2 seconds minimum recording time
-  const [transcriptionErrors, setTranscriptionErrors] = useState(0);
-  const [speechDetected, setSpeechDetected] = useState(false);
+  const [, setTranscriptionErrors] = useState(0);
+  const [, setSpeechDetected] = useState(false);
   const [deviceError, setDeviceError] = useState<{ title: string, message: string } | null>(null);
 
   /**
@@ -332,12 +330,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           console.error('Transcription error received:', event.payload);
 
           let errorMessage: string;
-          let isActionable = false;
 
           if (typeof event.payload === 'object' && event.payload !== null) {
             const payload = event.payload as { error: string, userMessage: string, actionable: boolean };
             errorMessage = payload.userMessage || payload.error;
-            isActionable = payload.actionable || false;
           } else {
             errorMessage = String(event.payload);
           }

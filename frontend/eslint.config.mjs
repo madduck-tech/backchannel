@@ -41,7 +41,7 @@ export default defineConfig([
       // 78. Dead bindings. Individually trivial, collectively a large diff across files
       // this change does not otherwise touch — and some are function parameters where
       // deleting changes a signature.
-      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
 
       // 43 + 36 + 8 + 6 + 2 + 1 + 1 + 1 = 98 across the react-hooks rules, and these are
       // the ones that are NOT style. `set-state-in-effect` is extra renders and possible

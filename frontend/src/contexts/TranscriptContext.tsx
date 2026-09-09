@@ -110,7 +110,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
                   await indexedDBService.saveMeetingMetadata(metadata);
                 }
               }
-            } catch (error) {
+            } catch {
               // Non-fatal - will be set on stop if recording completes normally
             }
           } catch (error) {

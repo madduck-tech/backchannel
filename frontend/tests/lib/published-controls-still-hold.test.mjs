@@ -77,7 +77,7 @@ const PUBLISHED = [
   {
     id: '#85 model settings: a refused backend save no longer stops onSave',
     file: 'src/components/ModelSettingsModal.tsx',
-    line: 616,
+    line: 603,
     anchor: 'return;',
     replace: '        // return;',
     check: ['node', 'tests/lib/model-settings.test.mjs'],
