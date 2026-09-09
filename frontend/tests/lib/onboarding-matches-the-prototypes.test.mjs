@@ -91,12 +91,25 @@ const holds = (what, cond, why) => {
       '  fetched this run — the reverse of the same lie.'
   );
 
+  // **This assertion changed with #154, and what it said before is stated because it guarded
+  // behaviour the same change rewrote** (ADR 0022: a check may not be pointed at the change by the
+  // change). It used to read:
+  //
+  //     /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step)
+  //
+  // — the gate #111 cycle B built, which also waits for the summary model. The prototype's own gate
+  // is `finished = () => T.done >= T.mb` over the **transcription** file, and its footer reads
+  // "Continue is available when it has arrived". The old assertion encoded a decision the approved
+  // design does not make, and on screen it produced the contradiction the product owner
+  // photographed: "You can continue while this finishes" above a button disabled for the summary.
   holds(
-    'the download screen keeps Continue off until every file has arrived',
-    /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step),
+    'the download screen gates Continue on the transcription model, as the prototype does',
+    /disabled=\{!finished \|\| isCompleting\}/.test(step) &&
+      /const finished = parakeetDownloaded \|\|/.test(step) &&
+      !/waitingForSummary/.test(step),
     'A person who continues without the transcription model reaches a recorder that cannot\n' +
-      '  transcribe. The prototype disables the button; so does this screen, and this check is what\n' +
-      '  keeps the two from drifting apart.'
+      '  transcribe, so the gate stays — on that file. Waiting for the summariser as well is what\n' +
+      '  the approved design removed, and the third clause is what stops it coming back.'
   );
 }
 
@@ -112,7 +125,10 @@ const holds = (what, cond, why) => {
   const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
   holds(
     'the summariser scrolls the chosen option, not the field',
-    /scrollTop\s*=\s*Math\.max\(0,\s*option\.offsetTop/.test(step),
+    // The identifier changed with #154 (`option` -> `opt`, matching the prototype's own `o`); the
+    // decision did not, and it is the decision this pins: the chosen row goes to the top of the
+    // scrolling region, by `offsetTop`, not by a minimum-distance scroll.
+    /scrollTop\s*=\s*Math\.max\(0,\s*\w+\.offsetTop/.test(step),
     '`scrollIntoView` on the field scrolls the minimum distance, which on a 520px window leaves the\n' +
       '  option itself out of view — the person cannot see what they chose.'
   );

@@ -39,7 +39,7 @@ const sb = await serveStorybook();
 const b = await browser();
 
 const m = await b.evaluate(storyUrl(sb.origin, STORY), pickAndMeasure, {
-  readyFn: `/Choose a summariser/.test(document.body.innerText)`,
+  readyFn: `/Where should the summary be written/.test(document.body.innerText)`,
   viewport: WINDOW,
 });
 

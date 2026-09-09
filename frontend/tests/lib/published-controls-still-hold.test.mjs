@@ -101,11 +101,11 @@ const PUBLISHED = [
   {
     // #92 gave the same call a second site: `verifyModelPresence`, which runs on mount so the
     // state-drift repair is not behind a button the stuck user cannot press. The anchor text
-    // appears twice (`:376` in `verifyModelPresence`, `:415` in `handleContinue`); this control is
+    // appears twice (`:372` in `verifyModelPresence`, `:407` in `handleContinue`); this control is
     // about **Continue**, so it points at the latter. Mutating the mount one tests another claim.
     id: '#93 first run: Continue stops asking the backend',
     file: 'src/components/onboarding/steps/DownloadProgressStep.tsx',
-    line: 415,
+    line: 407,
     anchor: "invoke<boolean>('transcribe_has_available_models')",
     replace: '      const actuallyAvailable = true;',
     check: ['node', 'tests/lib/first-run-step.test.mjs'],

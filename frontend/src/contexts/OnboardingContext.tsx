@@ -565,7 +565,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
     try {
       const shouldStartParakeet = includeParakeet && !(await transcribeModelIsOnDisk(selectedTranscribeModel));
-      const shouldStartSummary = includeSummary && !summaryModelDownloaded && !!summaryModel;
+      // Only `builtin-ai` has weights to fetch. Ollama uses one already on the machine, and the five
+      // remote providers need a key, not a 3651 MiB download.
+      //
+      // Until this line had a provider in it, `summaryProvider` appeared four times in this file --
+      // the type, the state, the write into the saved status, and the export -- and in no condition
+      // at all. So a person who chose Claude watched 2.7 GB of Gemma arrive for nothing, and then
+      // could not get past the screen while it did. Found by the product owner on 2026-09-09. #155
+      const summaryNeedsDownload = summaryProvider === 'builtin-ai';
+      const shouldStartSummary =
+        includeSummary && summaryNeedsDownload && !summaryModelDownloaded && !!summaryModel;
 
       if (!shouldStartParakeet && !shouldStartSummary) {
         if (includeSummary && !summaryModelDownloaded && !summaryModel) {

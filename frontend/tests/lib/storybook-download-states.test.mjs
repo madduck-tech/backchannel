@@ -33,12 +33,17 @@ assert.ok(
   'the approved download prototype no longer carries the present-row sentence this check follows'
 );
 
-/** Read the two cards as a person sees them: their text, and whether each draws a bar. */
+/**
+ * Read the two rows as a person sees them: their text, and whether each draws a bar.
+ *
+ * Located by `<section aria-label>`, which is the approved arrangement's own handle. It used to look
+ * for `<h3>Summary Engine</h3>`: #154 built `a-two-rows`, where a row is named by the file it is
+ * fetching — `gemma4:e2b`, `parakeet-tdt-0.6b-v3-q8` — so a name from the layout before it can no
+ * longer be found. The assertions below are unchanged.
+ */
 const readRows = `async () => {
   await new Promise((r) => setTimeout(r, 400));
-  const cards = [...document.querySelectorAll('h3')]
-    .filter((h) => /Transcription Engine|Summary Engine/.test(h.textContent || ''))
-    .map((h) => h.closest('[class*="bg-elevated"]') || h.parentElement.parentElement.parentElement);
+  const cards = [...document.querySelectorAll('section[aria-label]')];
   return {
     body: (document.body.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 400),
     rows: cards.map((c) => ({
@@ -51,13 +56,13 @@ const readRows = `async () => {
 const sb = await serveStorybook();
 const b = await browser();
 const seen = await b.evaluate(storyUrl(sb.origin, STORY), readRows, {
-  readyFn: `/Summary Engine/.test(document.body.innerText)`,
+  readyFn: `/Getting the/.test(document.body.innerText)`,
 });
 await b.close();
 await sb.stop();
 
-const summary = seen.rows.find((r) => /Summary Engine/.test(r.text));
-assert.ok(summary, `no Summary Engine row rendered.\n  Page read: "${seen.body}"`);
+const summary = seen.rows.find((r) => /Writes the summary when a meeting ends/.test(r.text));
+assert.ok(summary, `no summary row rendered.\n  Page read: "${seen.body}"`);
 
 // 1. The zero counter itself. This is the pixel the product owner photographed.
 const counter = summary.text.match(/[\d.]+ Mi?B \/ [\d.]+ Mi?B/);
