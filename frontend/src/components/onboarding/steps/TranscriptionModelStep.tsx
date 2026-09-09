@@ -25,41 +25,8 @@ import { cn } from '@/lib/utils';
  * saw was three models that cannot transcribe them.
  */
 
-type Recommended = {
-    id: string;
-    mb: number;
-    decode: 'batch' | 'streaming';
-    wer: number;
-    languages: string;
-    isDefault?: boolean;
-};
-
-/** The four, in the order the approved design put them: widest language coverage first. */
-const RECOMMENDED: Recommended[] = [
-    {
-        id: 'parakeet-tdt-0.6b-v3-q8',
-        mb: 740,
-        decode: 'batch',
-        wer: 1.94,
-        languages: '25 European languages',
-        isDefault: true,
-    },
-    {
-        id: 'nemotron-3.5-asr-streaming-0.6b-q8',
-        mb: 716,
-        decode: 'streaming',
-        wer: 3.06,
-        languages: '32 languages, including Chinese, Japanese, Korean, Arabic and Hindi',
-    },
-    {
-        id: 'moonshine-streaming-small-q8',
-        mb: 189,
-        decode: 'streaming',
-        wer: 2.54,
-        languages: 'English only',
-    },
-    { id: 'moonshine-tiny-q8', mb: 34, decode: 'batch', wer: 4.6, languages: 'English only' },
-];
+import type { RecommendedTranscribeModel as Recommended } from '@/lib/onboarding-transcribe-models';
+import { RECOMMENDED_TRANSCRIBE_MODELS as RECOMMENDED } from '@/lib/onboarding-transcribe-models';
 
 /** What the decode mode does to the transcript, in words rather than in a term. */
 function shape(decode: Recommended['decode']) {
