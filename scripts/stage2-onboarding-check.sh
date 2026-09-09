@@ -70,7 +70,11 @@ mkdir -p "$APPDATA/models"
 
 # The summary model only. Deliberately no onboarding marker: seeding it is what blinds the other two
 # passes to these very screens.
-if [ -d "$CACHE/models/summary" ]; then
+# `remote` seeds no summary model at all: a cloud provider needs none, so an empty `models/summary`
+# is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
+# "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
+# which is the same class of mistake as an empty one that is not a pass.
+if [ "$MODE" != remote ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   say "seeded the summary model only; no onboarding marker, no transcription model"
@@ -236,7 +240,7 @@ say "the chosen model arrived whole: $CHOSEN_FILE ($(stat -c %s "$APPDATA/models
 if [ "$MODE" = remote ]; then
   SUMMARY_DIR="$APPDATA/models/summary"
   BYTES=$( [ -d "$SUMMARY_DIR" ] && du -sb "$SUMMARY_DIR" | cut -f1 || echo 0 )
-  say "models/summary holds ${BYTES} bytes after choosing a cloud summariser"
+  say "models/summary holds ${BYTES} bytes after choosing a cloud summariser (nothing was seeded)"
   if [ "${BYTES:-0}" -gt 1000000 ]; then
     ls -la "$SUMMARY_DIR" | sed 's/^/    /'
     die "a cloud summariser fetched ${BYTES} bytes of a local model; it needs a key, not weights"
