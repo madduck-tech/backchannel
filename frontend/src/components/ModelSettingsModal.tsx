@@ -1174,7 +1174,7 @@ export function ModelSettingsModal({
                 {ollamaEndpointChanged && !error && (
                   <Alert className="mt-3 border-warn/40 bg-warn-soft">
                     <AlertDescription className="text-warn-ink">
-                      Endpoint changed. Please click "Fetch Models" to load models from the new endpoint before saving.
+                      Endpoint changed. Please click &quot;Fetch Models&quot; to load models from the new endpoint before saving.
                     </AlertDescription>
                   </Alert>
                 )}
@@ -1231,7 +1231,7 @@ export function ModelSettingsModal({
                       Download Ollama
                     </Button>
                     <div className="text-sm text-muted-foreground text-center">
-                      After installing Ollama, restart this application and click "Fetch Models" to continue.
+                      After installing Ollama, restart this application and click &quot;Fetch Models&quot; to continue.
                     </div>
                   </div>
                 ) : (
@@ -1293,7 +1293,7 @@ export function ModelSettingsModal({
                 {filteredModels.length === 0 ? (
                   <Alert>
                     <AlertDescription>
-                      No models found matching "{searchQuery}". Try a different search term.
+                      No models found matching &quot;{searchQuery}&quot;. Try a different search term.
                     </AlertDescription>
                   </Alert>
                 ) : (
