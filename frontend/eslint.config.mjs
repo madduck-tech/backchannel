@@ -57,10 +57,6 @@ export default defineConfig([
       'react-hooks/incompatible-library': 'off',
       'react-hooks/preserve-manual-memoization': 'off',
       'react-hooks/use-memo': 'off',
-
-      // 16. Apostrophes and quotes in JSX text. Mechanical, but sixteen hand edits to
-      // rendered copy belong with the rest of the sweep rather than smuggled in here.
-      'react/no-unescaped-entities': 'off',
     },
   },
   globalIgnores([
