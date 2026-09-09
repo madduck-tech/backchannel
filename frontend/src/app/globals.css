@@ -126,10 +126,13 @@
     --primary-foreground: var(--brand-ink);
     --secondary: var(--sunken);
     --secondary-foreground: var(--ink);
-    --muted: var(--sunken);
-    --muted-foreground: var(--ink-muted);
-    --accent: var(--brand-soft);
-    --accent-foreground: var(--brand-soft-ink);
+    /* `--muted` and `--accent` are prefixed, and `--accent` is gone entirely, because both are
+       required A1-identity names in OpenDesign's TOKEN_SCHEMA -- the design system cannot rename
+       either, so the alias is the side that moves. The theme keys in tailwind.config.js are
+       unchanged, so `text-muted-foreground` and the other 46 utility uses are untouched: a Tailwind
+       class name comes from the key, and the property appears only inside the emitted value. #121 */
+    --shadcn-muted: var(--sunken);
+    --shadcn-muted-foreground: var(--ink-muted);
     --destructive: var(--danger);
     --destructive-foreground: 1 0 0;
     --border: var(--border-c);
