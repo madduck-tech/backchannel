@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';

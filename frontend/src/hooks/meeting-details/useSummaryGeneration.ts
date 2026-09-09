@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
-import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import {
     buildSummaryTranscriptPayload,
@@ -70,7 +70,6 @@ interface UseSummaryGenerationProps {
 
 export function useSummaryGeneration({
   meeting,
-  transcripts,
   modelConfig,
   isModelConfigLoading,
   selectedTemplate,

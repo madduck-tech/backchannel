@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu } from 'lucide-react';
+import { RefreshCw, Globe, Loader2, AlertCircle, X, Cpu } from 'lucide-react';
 import {
   Dialog,
   DialogContent,

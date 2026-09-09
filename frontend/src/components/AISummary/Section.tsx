@@ -3,7 +3,7 @@
 import { Section as SectionType, Block } from '@/types';
 import { BlockComponent } from './Block';
 import { EditableTitle } from '../EditableTitle';
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 
 interface SectionProps {
@@ -42,7 +42,6 @@ export const Section: React.FC<SectionProps> = ({
   onCreateNewBlock,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const handleTitleChange = (newTitle: string) => {
     if (onTitleChange) {
@@ -50,11 +49,6 @@ export const Section: React.FC<SectionProps> = ({
     }
   };
 
-  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      setIsEditingTitle(false);
-    }
-  };
 
   return (
     <motion.div

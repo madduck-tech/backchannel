@@ -217,7 +217,7 @@ function MeetingDetailsContent() {
         if (typeof summaryData === 'string') {
           try {
             parsedData = JSON.parse(summaryData);
-          } catch (e) {
+          } catch {
             parsedData = {};
           }
         }

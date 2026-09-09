@@ -34,6 +34,16 @@ const NEVER_INVOKED = new Set([
   // `docs/milestones/`, which measures the decode half, not capture start -- so this entry
   // records an open question, not a settled exception. It leaves the list when #87 closes.
   'dictation_probe',
+
+  // NOT permanent — #145. Its only caller was `deleteOllamaModel` in `ModelSettingsModal.tsx`: a
+  // complete function that invoked this command, showed a toast and refreshed the list, and that no
+  // UI element ever called. #38 turned `no-unused-vars` back on, the function was reported as never
+  // used and removed with the rest of the sweep, and this command lost its last consumer.
+  //
+  // Nothing a person could observe changed: the path was already unreachable from the interface.
+  // #145 decides whether the feature gets a button or the command is deleted; this entry leaves the
+  // list either way.
+  'delete_ollama_model',
 ]);
 
 const registered = registeredCommandNames();

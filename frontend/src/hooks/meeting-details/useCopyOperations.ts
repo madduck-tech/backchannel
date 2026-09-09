@@ -16,7 +16,6 @@ interface UseCopyOperationsProps {
 
 export function useCopyOperations({
   meeting,
-  transcripts,
   meetingTitle,
   aiSummary,
   blockNoteSummaryRef,
@@ -96,11 +95,6 @@ export function useCopyOperations({
 
     await navigator.clipboard.writeText(header + date + fullTranscript);
     toast.success("Transcript copied to clipboard");
-
-    const wordCount = allTranscripts
-      .map(t => t.text.split(/\s+/).length)
-      .reduce((a, b) => a + b, 0);
-
   }, [meeting, meetingTitle, fetchAllTranscripts]);
 
   // Copy summary to clipboard

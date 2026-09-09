@@ -63,7 +63,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 function AppRoot({ children }: { children: React.ReactNode }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
-  const [onboardingCompleted, setOnboardingCompleted] = useState(false)
+  const [, setOnboardingCompleted] = useState(false)
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)

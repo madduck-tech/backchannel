@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSidebar } from './Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { useOllamaDownload } from '@/contexts/OllamaDownloadContext';
@@ -129,9 +128,8 @@ export function ModelSettingsModal({
   const [showApiKey, setShowApiKey] = useState<boolean>(false);
   const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(!!modelConfig.apiKey?.trim());
   const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
-  const { serverAddress } = useSidebar();
   const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([]);
-  const [openRouterError, setOpenRouterError] = useState<string>('');
+  const [, setOpenRouterError] = useState<string>('');
   const [isLoadingOpenRouter, setIsLoadingOpenRouter] = useState<boolean>(false);
   const [ollamaEndpoint, setOllamaEndpoint] = useState<string>(modelConfig.ollamaEndpoint || '');
   const [isLoadingOllama, setIsLoadingOllama] = useState<boolean>(false);
@@ -202,17 +200,6 @@ export function ModelSettingsModal({
     return () => clearTimeout(timer);
   }, [ollamaEndpoint]);
 
-  const fetchApiKey = async (provider: string) => {
-    try {
-      const data = (await invoke('api_get_api_key', {
-        provider,
-      })) as string;
-      setApiKey(data || '');
-    } catch (err) {
-      console.error('Error fetching API key:', err);
-      setApiKey(null);
-    }
-  };
 
   // Auto-unlock when API key becomes empty, 
   useEffect(() => {
@@ -730,22 +717,6 @@ export function ModelSettingsModal({
   };
 
   // Function to delete Ollama model
-  const deleteOllamaModel = async (modelName: string) => {
-    try {
-      const endpoint = ollamaEndpoint.trim() || null;
-      await invoke('delete_ollama_model', {
-        modelName,
-        endpoint
-      });
-
-      toast.success(`Model ${modelName} deleted`);
-      await fetchOllamaModels(true); // Refresh list
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to delete model';
-      toast.error(errorMsg);
-      console.error('Error deleting model:', err);
-    }
-  };
 
   // Track previous downloading models to detect completions
   const previousDownloadingRef = useRef<Set<string>>(new Set());
