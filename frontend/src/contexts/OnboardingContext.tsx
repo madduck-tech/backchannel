@@ -78,6 +78,22 @@ interface StartBackgroundDownloadsOptions {
 
 const OnboardingContext = createContext<OnboardingContextType | undefined>(undefined);
 
+/**
+ * The highest step `OnboardingFlow` renders.
+ *
+ * **It was 4 while the flow rendered 5**, so `PermissionsStep` — macOS's microphone and
+ * screen-recording grant — was reachable by no arithmetic on any platform: `goNext()` from the audio
+ * check returned `Math.min(5, 4)`, which is where it already was. Pressing Continue left the person
+ * exactly where they stood.
+ *
+ * Found by writing the check that holds it (#157 measure A), not by anyone using the application —
+ * macOS is built in CI and never run here (ADR 0005), so nobody could have.
+ *
+ * A step past this number is unreachable however complete it is, which is why the two are asserted
+ * against each other rather than trusted to stay in step.
+ */
+const LAST_STEP = 5;
+
 export function OnboardingProvider({ children }: { children: React.ReactNode }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [completed, setCompleted] = useState(false);
@@ -638,15 +654,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }));
   }, []);
 
+
+
   const goToStep = useCallback((step: number) => {
-    setCurrentStep(Math.max(1, Math.min(step, 4)));
+    setCurrentStep(Math.max(1, Math.min(step, LAST_STEP)));
   }, []);
 
   const goNext = useCallback(() => {
     setCurrentStep((prev: number) => {
       const next = prev + 1;
-      // Don't go past step 4
-      return Math.min(next, 4);
+      return Math.min(next, LAST_STEP);
     });
   }, []);
 
