@@ -224,13 +224,23 @@ if [ "$MODE" = narrow ]; then
   # 2. A row in the catalogue must not start a download. Onboarding passes `canDownload={false}`;
   #    Settings mounts the same component and must keep its button, which is why removing it was the
   #    wrong fix and a mode is the right one.
+  # Asserted as an absence of the control, not as a race with a download. The first version clicked
+  # "some button in a row" and counted `models/` four seconds later; with the defect restored it still
+  # passed, because the click landed elsewhere and four seconds is not a download. A button that is
+  # not there cannot be pressed, which is the instruction — and ADR 0023's shape for it.
+  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove)$/.test(t)).length"')
+  say "buttons in the catalogue that would fetch or delete: $FETCHERS"
+  [ "$FETCHERS" = "0" ] \
+    || die "the catalogue offers $FETCHERS download/remove buttons during first run; a row selects, it does not fetch"
+
+  # And nothing reached the disk while we were in there, which is the same claim from the other side.
   BEFORE=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
-  ROW=$(find_el '{"using":"css selector","value":"[class*=bg-elevated] button, li button"}')
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,'moonshine')]]\"}")
   if [ -n "$ROW" ]; then click "$ROW"; sleep 4; fi
   AFTER=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
   [ "$BEFORE" = "$AFTER" ] \
-    || die "clicking in the catalogue put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
-  say "a click in the catalogue fetched nothing: models/ still holds $AFTER entries"
+    || die "clicking a catalogue row put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
+  say "and a click on a row fetched nothing: models/ still holds $AFTER entries"
 
   # Back to the recommended four, and on through the flow at this size. The row click above may have
   # selected a model and closed the catalogue on its own, so both shapes are accepted rather than one
