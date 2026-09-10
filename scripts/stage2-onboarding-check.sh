@@ -28,6 +28,8 @@
 #              and the one already there must not be fetched again
 #     remote   a cloud summariser is chosen; `models/summary` must stay EMPTY while the
 #              transcription model still arrives
+#     present  the chosen model is already on disk; the screen must say so in words and count no
+#              bytes, and Continue must be available at once
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -70,7 +72,7 @@ PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote) ;; *) die "mode must be chooses, keeps or remote, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present) ;; *) die "mode must be chooses, keeps, remote or present, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -91,7 +93,10 @@ mkdir -p "$APPDATA/models"
 if [ "$MODE" != remote ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
-  say "seeded the summary model only; no onboarding marker, no transcription model"
+  # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
+  # model -- so first run fetches the rest every time. Measured 2026-09-10, after this pass had
+  # claimed otherwise in its own output for as long as the cache had been incomplete.
+  say "seeded a partial summary model ($(du -sh "$APPDATA/models/summary" | cut -f1) of 3651 MiB); the rest is fetched"
 else
   say "no summary model in $CACHE — first run will fetch one, and this pass will take much longer"
 fi
@@ -103,7 +108,15 @@ if [ "$MODE" = keeps ]; then
   say "placed $PRESENT_FILE on disk first: $PRESENT_BEFORE"
 fi
 
-[ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
+if [ "$MODE" = present ]; then
+  # The state the product owner photographed: a file already there, drawn as a bar over
+  # `0.0 MB / 705.3 MB`. Seeding the chosen model is the only way to enter it deliberately.
+  [ -f "$CACHE/models/$CHOSEN_FILE" ] || die "mode 'present' needs $CHOSEN_FILE in $CACHE/models"
+  cp -a "$CACHE/models/$CHOSEN_FILE" "$APPDATA/models/$CHOSEN_FILE"
+  say "placed the model the person will choose on disk first: $CHOSEN_FILE"
+else
+  [ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
+fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
@@ -215,6 +228,22 @@ fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
 click "$CONT"
 say "walked to the download screen"
+
+# --- present: the chosen file was already here, and the screen says so ----------------------------
+if [ "$MODE" = present ]; then
+  await "document.body.innerText.includes('$CHOSEN_ID')" "the row for the chosen model" 30
+  ROW=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/'"$CHOSEN_ID"'/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW\"; })()"')
+  say "the row for the file already on disk reads: $ROW"
+  printf '%s' "$ROW" | grep -q 'Already here from an earlier install' \
+    || die "a file already on disk is not stated in words: $ROW"
+  printf '%s' "$ROW" | grep -qE '[0-9]+(\.[0-9]+)? *(of|/) *[0-9]+' \
+    && die "a file already on disk is counting bytes nothing fetched: $ROW"
+  DIS=$(js '"return String(!!document.querySelector(\"footer button\").disabled)"')
+  [ "$DIS" = "false" ] || die "the chosen model is already on disk and Continue is still disabled"
+  say "PASS (present): the file already here is stated in words, counts no bytes, and Continue is available at once"
+  PASSED=1
+  exit 0
+fi
 
 # --- the oracle: what reached the disk ------------------------------------------------------------
 #
