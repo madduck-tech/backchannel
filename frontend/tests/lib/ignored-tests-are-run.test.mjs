@@ -34,6 +34,13 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/audio/import.rs::test_import_pipeline_decode_vad',
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
+  ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_puts_in_token_p',
+   { coveredBy: 'a_family_that_scores_nothing_reports_no_confidence',
+     why: 'an instrument, not an assertion: it prints what a given .gguf puts in Token::p and needs ' +
+          'a 259 MB model and an env var to say which. It is what established the rule (#162) — ' +
+          'gigaam-v3-ctc returns 91 present tokens with p exactly 0.0, parakeet returns real ' +
+          'probabilities, moonshine returns no tokens at all — and that rule is asserted there, ' +
+          'against the real models by scripts/stage2-core-check.sh in both its modes' }],
 ]);
 
 function rustSources(dir) {

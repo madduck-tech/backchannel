@@ -11,7 +11,8 @@ export interface Transcript {
   sequence_id?: number;
   chunk_start_time?: number; // Legacy field
   is_partial?: boolean;
-  confidence?: number;
+  /** `null` when the decoder scored nothing — see the note on `Transcript.confidence`. */
+  confidence?: number | null;
   // NEW: Recording-relative timestamps for playback sync
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
@@ -36,10 +37,15 @@ export interface TranscriptUpdate {
   chunk_start_time: number; // Legacy field
   is_partial: boolean;
   /**
-   * Absent when the decoder reports no token probabilities (the Ollama
-   * provider). ConfidenceIndicator keys off undefined and does not render.
+   * Absent when the decoder reports no token probabilities, which is most of them: only the
+   * `parakeet` architecture assigns a real per-token value, and 61 of `TRANSCRIBE_MODEL_CATALOG`'s 86
+   * rows come from one that does not.
+   *
+   * `null` is in the type because the payload is JSON and `serde_json` cannot write a non-finite
+   * float. The renderer asks `isScored`, not `!== undefined` — that guard let `null` through, and
+   * `Math.round(null * 100)` is `0` (#162).
    */
-  confidence?: number;
+  confidence?: number | null;
   // NEW: Recording-relative timestamps for playback sync
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
@@ -130,7 +136,8 @@ export interface TranscriptSegmentData {
   timestamp: number; // audio_start_time in seconds
   endTime?: number; // audio_end_time in seconds
   text: string;
-  confidence?: number;
+  /** `null` when the decoder scored nothing — see the note on `Transcript.confidence`. */
+  confidence?: number | null;
   speaker?: string;
   /**
    * Which capture channel carried these words -- the fact the transcript is

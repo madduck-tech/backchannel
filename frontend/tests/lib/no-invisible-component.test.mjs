@@ -57,7 +57,6 @@ const BACKLOG = new Set([
   'src/components/BluetoothPlaybackWarning.tsx',
   'src/components/ChunkProgressDisplay.tsx',
   'src/components/ComplianceNotification.tsx',
-  'src/components/ConfidenceIndicator.tsx',
   'src/components/ConfirmationModel/confirmation-modal.tsx',
   'src/components/ConsoleToggle.tsx',
   'src/components/CustomDialog.tsx',

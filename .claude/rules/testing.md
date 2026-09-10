@@ -120,6 +120,25 @@ offers.*
   application logged **neither** of, which left its condition as "the PulseAudio reactor logged an
   error" — true of every healthy run, including the three that day that went on to pass.
 
+## What an absence looks like when it is a value (#162)
+
+*The rule is machine-enforced by `a_family_that_scores_nothing_reports_no_confidence` and
+`a-score-nobody-gave-is-not-rendered.test.mjs`; the two below it rest on honesty.*
+
+- **A sentinel inside the valid range cannot be found by a range check.** Measured 2026-09-10:
+  `gigaam-v3-ctc` returns 91 present token rows carrying text with `p` left at the ABI's
+  zero-initialised `0.0f`, and `Some(0.0)` is a perfectly finite number. Every line of every
+  recording made with it carried a red `0%` reading *Low confidence*. The first fix guarded against
+  NaN, compiled, passed its own test, shipped into an AppImage — and changed nothing on screen.
+- **Read the whole paragraph before quoting one sentence of it.** The header that says `p` is *"NaN
+  when the architecture does not produce one"* says two paragraphs later that CTC produces *"per-frame
+  argmax probability"*, and that out-of-range rows *"follow the zero-init rule (0.0f, not NaN)"*. The
+  published diagnosis was built on the first sentence and was wrong.
+- **Measure the value, do not infer it from the documentation of the value.**
+  `what_a_family_puts_in_token_p` is `#[ignore]`d and takes a `.gguf` path; it printed the three rows
+  that settled this in one run each. An instrument that answers "what does this actually return" is
+  cheaper than a second wrong fix, and this repository had none.
+
 ## What an instruction becomes (ADR 0023)
 
 *Honesty-based. Nothing parses an issue, and the rule exists because the machine-enforced ones did

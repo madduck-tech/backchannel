@@ -20,13 +20,44 @@ pub struct TranscriptSegment {
     pub audio_end_time: f64,   // Seconds from recording start
     pub duration: f64,          // Segment duration in seconds
     pub display_time: String,   // Formatted time for display like "[02:15]"
-    pub confidence: f32,
+    /// Omitted entirely when the decoder reports none -- the same contract as
+    /// `TranscriptUpdate::confidence`, which this is persisted from. It was an `f32` filled by
+    /// `update.confidence.unwrap_or(1.0)`, so a decoder that reported nothing had a perfect score
+    /// written to disk for every line (#162) — and that was already happening before that issue, for
+    /// every streaming-native model and every `builtin-ai` transcription, both of which have always
+    /// reported `None` (`streaming.rs:163`, `segmented.rs:139`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
     pub sequence_id: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     /// The capture channel, `"you"` or `"others"`. See `TranscriptUpdate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+}
+
+impl TranscriptSegment {
+    /// Persist one committed chunk exactly as it was reported.
+    ///
+    /// Both listeners in `recording_commands.rs` built this inline, identically, and both wrote
+    /// `update.confidence.unwrap_or(1.0)` -- against the contract stated on the field they were
+    /// reading, which says in as many words that *"a synthetic 1.0 would paint a green
+    /// high-confidence badge on text that nothing actually scored"*. One constructor, so the next
+    /// field cannot be handled two ways.
+    pub fn from_update(update: &crate::audio::transcription::TranscriptUpdate) -> Self {
+        TranscriptSegment {
+            id: format!("seg_{}", update.sequence_id),
+            text: update.text.clone(),
+            audio_start_time: update.audio_start_time,
+            audio_end_time: update.audio_end_time,
+            duration: update.duration,
+            display_time: update.timestamp.clone(),
+            confidence: update.confidence,
+            sequence_id: update.sequence_id,
+            speaker: update.speaker.clone(),
+            channel: update.channel.clone(),
+        }
+    }
 }
 
 /// Meeting metadata structure
@@ -181,7 +212,8 @@ impl RecordingSaver {
             audio_end_time: 0.0,
             duration: 0.0,
             display_time: "[00:00]".to_string(),
-            confidence: 1.0,
+            // Text a person typed was scored by no decoder, so there is nothing to report (#162).
+            confidence: None,
             sequence_id: 0,
             speaker: None,
             channel: None,
@@ -586,5 +618,64 @@ impl RecordingSaver {
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::transcription::TranscriptUpdate;
+
+    fn update(confidence: Option<f32>) -> TranscriptUpdate {
+        TranscriptUpdate {
+            text: "ask not what your country can do for you".to_string(),
+            timestamp: "14:30:05".to_string(),
+            source: "microphone".to_string(),
+            sequence_id: 7,
+            chunk_start_time: 0.0,
+            is_partial: false,
+            confidence,
+            audio_start_time: 0.36,
+            audio_end_time: 8.34,
+            duration: 7.98,
+            speaker: None,
+            channel: Some("you".to_string()),
+        }
+    }
+
+    /// What a decoder did not score must not be written down as a perfect score.
+    ///
+    /// `TranscriptUpdate::confidence` says it in as many words -- *"a synthetic 1.0 would paint a
+    /// green high-confidence badge on text that nothing actually scored"* -- and both persistence
+    /// listeners in `recording_commands.rs` wrote `update.confidence.unwrap_or(1.0)`. Measured
+    /// 2026-09-10 (#162): with the producer fixed to report `None` for a family that scores nothing,
+    /// that `unwrap_or` turns "nobody scored this" into "100% confident" on disk, which is the exact
+    /// failure the comment was guarding against. This holds the persistence side to the same rule.
+    #[test]
+    fn a_chunk_nobody_scored_is_stored_with_no_score() {
+        let stored = TranscriptSegment::from_update(&update(None));
+        assert_eq!(
+            stored.confidence, None,
+            "an unscored chunk was persisted as {:?}",
+            stored.confidence
+        );
+
+        // And the file must not carry the key at all, so a reader can tell "unknown" from a number.
+        let json = serde_json::to_string(&stored).expect("a segment serializes");
+        assert!(
+            !json.contains("confidence"),
+            "an unscored chunk still writes a confidence key: {json}"
+        );
+
+        // A real score survives, unchanged and present.
+        let scored = TranscriptSegment::from_update(&update(Some(0.42)));
+        assert_eq!(scored.confidence, Some(0.42));
+        assert!(serde_json::to_string(&scored).unwrap().contains("\"confidence\":0.42"));
+
+        // The rest of the mapping is the same fields the two listeners each wrote by hand.
+        assert_eq!(stored.id, "seg_7");
+        assert_eq!(stored.display_time, "14:30:05");
+        assert_eq!(stored.channel.as_deref(), Some("you"));
+        assert_eq!(stored.duration, 7.98);
     }
 }
