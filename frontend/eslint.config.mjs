@@ -54,7 +54,6 @@ export default defineConfig([
       'react-hooks/immutability': 'off',
       'react-hooks/refs': 'off',
       'react-hooks/purity': 'off',
-      'react-hooks/incompatible-library': 'off',
       'react-hooks/preserve-manual-memoization': 'off',
     },
   },
