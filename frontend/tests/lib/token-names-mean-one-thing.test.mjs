@@ -33,6 +33,14 @@ const APP = 'frontend/src/app/globals.css';
  *                      the list may not contain one.
  *   `tier-gap`       — the roles agree; one side has a cascade state the other lacks. Listed with a
  *                      reason and an issue, because closing it is a design decision, not a rename.
+ *
+ * **A `tier-gap` states its premise and the premise is checked.** "The application has a
+ * `prefers-contrast: more` tier and the design system has none" is a fact about two files, and until
+ * now it was prose: the day the design system gained one, the exemption would have gone on excusing a
+ * divergence that had become a real disagreement, silently. So the kind carries a predicate, and an
+ * exemption whose premise stops holding is as red as one whose divergence has gone. This file already
+ * says why -- an excuse that outlives its reason is how a list of two becomes a list of twenty -- and
+ * a premise nobody checks is the same thing one level up.
  */
 const EXEMPT = [
   {
@@ -168,6 +176,32 @@ assert.deepEqual(
     '  renames — and it cannot be the design system for a name OpenDesign\'s TOKEN_SCHEMA requires.\n' +
     '  If the divergence is a missing cascade tier rather than a collision, add it to EXEMPT with\n' +
     '  kind: \'tier-gap\' and the issue that closes it.'
+);
+
+// A tier-gap's premise, checked rather than trusted: the application declares the name inside a
+// `prefers-contrast: more` block (directly, or through the `var()` it resolves to) and the design
+// system has no such block at all. Either half changing makes this a different question, and it is
+// the design system gaining a tier that #140 exists to decide.
+const HC = /@media\s*\(\s*prefers-contrast:\s*more\s*\)([\s\S]*?)\n\s{2}\}/.exec(app);
+const inHighContrast = new Set(HC ? [...HC[1].matchAll(/(--[A-Za-z0-9-]+)\s*:/g)].map((m) => m[1]) : []);
+const target = (name) => {
+  const m = new RegExp(`${name}\\s*:\\s*var\\((--[A-Za-z0-9-]+)\\)`).exec(app);
+  return m ? m[1] : name;
+};
+
+for (const e of EXEMPT.filter((x) => x.kind === 'tier-gap')) {
+  assert.ok(
+    inHighContrast.has(e.name) || inHighContrast.has(target(e.name)),
+    `${e.name} is exempted as a tier-gap, but ${APP} does not raise it under\n` +
+      '  `prefers-contrast: more`. The exemption says the application has a tier the design system\n' +
+      '  lacks; it no longer does, so the divergence is something else and needs a new reason.'
+  );
+}
+assert.ok(
+  !/prefers-contrast/.test(tokens),
+  `${TOKENS} now has a prefers-contrast block, so every tier-gap exemption's premise — "the design\n` +
+    '  system has none" — is false. Either the two sides now agree in that state and the exemptions\n' +
+    '  go, or they disagree and it is no longer a missing tier. #140 is where that is decided.'
 );
 
 // And an exemption may not outlive the divergence it excuses.
