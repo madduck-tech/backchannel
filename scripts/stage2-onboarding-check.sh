@@ -181,7 +181,11 @@ find_el() { curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/
   | python3 -c 'import json,sys
 v=json.load(sys.stdin).get("value")
 print(list(v.values())[0] if isinstance(v,dict) and v and "error" not in v else "")' 2>/dev/null; }
-click() { curl -s -m 20 -X POST "$BASE/element/$1/click" -H 'Content-Type: application/json' -d '{}' >/dev/null; }
+# `click` comes from the shared helper: it dies naming a refusal the driver reported, after a bounded
+# wait for the transient one Radix produces on every Select close. Four passes each owned a
+# `curl ... >/dev/null` until #160, and so four passes could not tell a click that landed from one
+# that did not.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/webdriver.sh"
 by_text() { find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$1\\\"]\"}"; }
 
 # Wait for a condition in the page, or fail naming it.
@@ -211,7 +215,7 @@ if [ "$MODE" = narrow ]; then
   #    checking an element was gone, which says nothing about what moved into its place.
   CAT=$(by_text "Browse every model")
   [ -n "$CAT" ] || die "no 'Browse every model' button on the first-run screen"
-  click "$CAT"
+  click "$CAT" "the catalogue button"
   await "document.querySelector('input[type=search], input[placeholder*=Search i]') !== null" "the catalogue's search field" 20
   # The field is scrolled into view first: at 720x520 the catalogue's list is taller than the window,
   # and `elementFromPoint` outside the viewport returns null, which is not "covered" -- reporting it
@@ -261,11 +265,16 @@ fi
 # The radio itself is `sr-only`, so the label carrying the id is the clickable thing.
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,\\\"$CHOSEN_ID\\\")]]\"}")
 [ -n "$OPT" ] || die "no option labelled $CHOSEN_ID on the first-run screen"
-click "$OPT"
-await "document.querySelector('input[name=\\\"transcription-model\\\"]:checked') !== null" "a checked option" 10
+click "$OPT" "the transcription model the pass chose"
+# The checked option must be **the one the pass clicked**. `OnboardingContext.tsx:120` initialises
+# `selectedTranscribeModel` to `parakeet-tdt-0.6b-v3-q8`, so a radio is already checked on arrival and
+# "something is checked" was true in the state being left (#160). The radio carries no `value`, so the
+# label it sits in is what names it.
+await "(function(){var r=document.querySelector('input[name=transcription-model]:checked');var l=r&&r.closest('label');return !!l&&l.textContent.indexOf('$CHOSEN_ID')>=0;})()" \
+      "$CHOSEN_ID to become the checked option" 10
 
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the model screen"
-click "$CONT"
+click "$CONT" "Continue on the transcription screen"
 
 # --- the summariser screen ------------------------------------------------------------------------
 #
@@ -276,7 +285,7 @@ await "document.body.innerText.includes('Where should the summary be written')" 
 if [ "$MODE" = remote ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
-  click "$OPT"
+  click "$OPT" "the summariser the pass chose"
   await "document.querySelector('input[type=password]') !== null" "Claude's key field" 10
   KEY=$(find_el '{"using":"css selector","value":"input[type=password]"}')
   [ -n "$KEY" ] || die "no key field after choosing Claude"
@@ -292,7 +301,7 @@ fi
 if [ "$MODE" = narrow ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
-  click "$OPT"
+  click "$OPT" "the summariser the pass chose"
   await "document.querySelector('input[type=password]') !== null" "Claude's key field" 15
   FIELD=$(js '"return (() => { const f=document.querySelector(\"input[type=password]\"); const r=f.getBoundingClientRect(); return JSON.stringify({top:Math.round(r.top),bottom:Math.round(r.bottom),vh:window.innerHeight,inside:!!f.closest(\"[role=radio]\")}); })()"')
   say "the key field: $FIELD"
@@ -307,10 +316,11 @@ else: print("OK")' > /tmp/bc-key.$$ 2>&1
   say "and it is inside its option and in view at this size"
   # Back to a local summariser so the rest of the walk matches the other modes.
   LOCAL=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'builtin-ai')]]\"}")
-  [ -n "$LOCAL" ] && click "$LOCAL"
+  [ -n "$LOCAL" ] || die "no builtin-ai option on the summariser screen to switch back to"
+  click "$LOCAL" "the on-this-machine summariser"
 fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
-click "$CONT"
+click "$CONT" "Continue on the summariser screen"
 say "walked to the download screen"
 
 # --- present: the chosen file was already here, and the screen says so ----------------------------
@@ -436,9 +446,12 @@ esac
 # instead of `goNext()`, so first run ended here while the strip named four steps.
 # `onboarding-flow.test.mjs:78` asserts which component step 4 renders and never asked whether
 # anything sets step 4 — the map without the edges. This is the edge, driven.
-await "!document.querySelector('footer button[disabled]')" "Continue to become available" 120
+# Named, not absent: `footer` is optional in `OnboardingContainer`, so "no disabled footer button" is
+# also true of a screen with no footer button at all (#160, the same family as #157's sentinel rule).
+await "[...document.querySelectorAll('footer button')].some(b=>b.textContent.trim()==='Continue' && !b.disabled)" \
+      "Continue to become available" 120
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download screen"
-click "$CONT"
+click "$CONT" "Continue on the download screen"
 await "document.body.innerText.includes('Check your audio')" "the audio check, which is step 4" 30
 DEVICES=$(js '"return [...document.querySelectorAll(\"select, [role=combobox], button\")].length"')
 say "the audio check is on screen, and offers ${DEVICES} controls to pick a device with"

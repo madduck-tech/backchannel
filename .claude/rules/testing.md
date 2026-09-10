@@ -92,6 +92,34 @@ offers.*
   transcription model arriving in that same run is what makes the emptiness mean something. The first
   version of that oracle reported 469 372 646 bytes "fetched" that were the seed itself.
 
+## What a harness may never do to the product (#160)
+
+*The two censuses are machine-enforced by `gate-click-failure-is-a-failure.test.mjs` and
+`a-gate-oracle-reads-a-line-the-app-writes.test.mjs`. The two rules under them rest on honesty.*
+
+- **A driver's refusal is a result; discarding it is not the same as not receiving one.** Measured
+  2026-09-10: two Element Click requests answered
+  `{"value":{"error":"element not interactable"}}`, four passes wrote their click as
+  `curl … >/dev/null`, and `stage2-two-channel-check.sh` reported *"the application never created a
+  microphone stream"*. A day went into an application defect that did not exist. This had been fixed
+  once already, on 2026-09-08, in `stage2-record-check.sh` alone — and the test that fixed it kept its
+  denominator at one script while four others carried the identical shape. *Extending a denominator is
+  part of a fix, not a follow-up* — the same sentence as ADR 0022's first bullet, one layer out.
+- **A wait that is satisfied in the state it is meant to leave guards nothing.** The pass waited for a
+  button reading `Start recording`; that button is in the sidebar, which the settings screen does not
+  cover, so the condition was true before the navigation and after it. Twelve seconds later the
+  settings screen was still up, with zero Stop controls. A wait names something **false in the state
+  being left**. Two more of the same shape were found by reading every wait in all four passes rather
+  than only the one that failed: `input[name=transcription-model]:checked` (a model is preselected, so
+  it was true on arrival) and `!footer button[disabled]` (`footer` is optional, so it was true of a
+  screen with no footer at all).
+- **An oracle that reads the product's log must first assert the product was asked, and must read a
+  line the product writes.** Between the click and `grep "Creating microphone stream"` there was
+  `sleep 8` and nothing else, so every way of failing to press the button arrived at the same sentence
+  about the application. And the pass's "enumeration hang" branch grepped for two sentinels the
+  application logged **neither** of, which left its condition as "the PulseAudio reactor logged an
+  error" — true of every healthy run, including the three that day that went on to pass.
+
 ## What an instruction becomes (ADR 0023)
 
 *Honesty-based. Nothing parses an issue, and the rule exists because the machine-enforced ones did

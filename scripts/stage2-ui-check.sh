@@ -158,7 +158,11 @@ v=json.load(sys.stdin).get("value")
 # "no such element" -- non-empty, so every `[ -n "$X" ] || die` guard silently passes and the
 # next click goes to a nonsense id. Found when this harness died with no message at all.
 print(next((x for k,x in v.items() if k.startswith("element-")), "") if isinstance(v,dict) else "")'; }
-click() { curl -s -m 20 -X POST "$BASE/element/$1/click" -H 'Content-Type: application/json' -d '{}' >/dev/null; }
+# `click` comes from the shared helper: it dies naming a refusal the driver reported, after a bounded
+# wait for the transient one Radix produces on every Select close. Four passes each owned a
+# `curl ... >/dev/null` until #160, and so four passes could not tell a click that landed from one
+# that did not.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/webdriver.sh"
 by_text() { find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$1\\\"]\"}"; }
 
 # Poll for a condition instead of sleeping a fixed amount. stage2-record-check.sh already
@@ -193,10 +197,10 @@ done
 
 # --- the settings tabs open -------------------------------------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button in the DOM"
-click "$S"
+click "$S" "the Settings control"
 await "document.querySelectorAll('[role=tab]').length > 0" 'the settings screen to render its tabs'
 T=$(by_text "Recordings"); [ -n "$T" ] || die "no Recordings tab in the DOM"
-click "$T"
+click "$T" "the Recordings tab"
 # Name the tab. "some tab is active" is true before the click -- General already is -- so the
 # earlier form returned instantly and the race it was added to close stayed open, surfacing as
 # "the Recordings tab did not open", which reads exactly like the product regression this
@@ -216,7 +220,7 @@ printf '%s' "$TABS" | grep -q 'Recordings:active' \
 # #9 and #10 are about.
 TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}')
 [ -n "$TRIG" ] || die "no #system-selection trigger behind the Recordings tab"
-click "$TRIG"
+click "$TRIG" "the system-audio picker"
 await "document.querySelectorAll('[role=option]').length > 0" 'the dropdown to open'
 OPTIONS=$(js '"return [...document.querySelectorAll(\"[role=option]\")].map(o=>o.textContent.trim())"')
 say "system-audio options: $OPTIONS"
@@ -234,7 +238,7 @@ print(o[0] if o else "")')
 [ -n "$FIRST" ] || die "no non-default option to select"
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role=\\\"option\\\"][normalize-space()=\\\"$FIRST\\\"]\"}")
 [ -n "$OPT" ] || die "could not locate the option element for $FIRST"
-click "$OPT"
+click "$OPT" "the device the pass chose"
 # The preference is written by the Rust side, so the wait is on the file rather than the DOM.
 # Poll for the field, not for a non-empty file: the store writes the file and fills it in two
 # steps, so `-s` can be true while preferred_system_device is still absent.

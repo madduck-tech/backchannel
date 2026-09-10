@@ -52,6 +52,13 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         }
     }
 
+    // Say that enumeration returned, and with how many. Without this line a log that stops after
+    // "connecting to PulseAudio server" is indistinguishable from one where the list came back and
+    // the UI did something else with it -- and `stage2-two-channel-check.sh` was reading exactly that
+    // absence to accuse the application of an enumeration hang (#160). An absence needs a positive
+    // sentinel, and this is it.
+    log::info!("Audio devices listed: {} found", devices.len());
+
     Ok(devices)
 }
 
