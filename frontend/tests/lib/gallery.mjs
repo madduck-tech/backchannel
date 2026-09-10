@@ -79,7 +79,12 @@ export const DRAWN_PIN = [
   'src/components/AppToaster.tsx',
   'src/components/AudioLevelMeter.tsx',
   'src/components/BuiltInModelManager.tsx',
-  'src/components/ConfidenceIndicator.tsx',
+  // `ConfidenceIndicator.tsx` was here until #162, and what it drew with no props was `NaN%`:
+  // `Math.round(undefined * 100)` is NaN, and `describe(undefined)` falls through every comparison to
+  // *Low confidence*. So this pin was holding a rendering of the defect. It now returns null when
+  // there is nothing to score, which is the fix, and a propless gallery card correctly shows nothing.
+  // Its rendering is held instead by `a-score-nobody-gave-is-not-rendered.test.mjs`, which drives it
+  // with null, undefined, NaN, 0 and 0.45 — a stronger guard than "it drew something".
   'src/components/EditableTitle.tsx',
   'src/components/EmptyStateSummary.tsx',
   'src/components/Info.tsx',
@@ -280,7 +285,6 @@ export const DRAWN = [
   'src/components/AppToaster.tsx',
   'src/components/AudioLevelMeter.tsx',
   'src/components/BuiltInModelManager.tsx',
-  'src/components/ConfidenceIndicator.tsx',
   'src/components/EditableTitle.tsx',
   'src/components/EmptyStateSummary.tsx',
   'src/components/Info.tsx',
@@ -309,7 +313,10 @@ export const DRAWN = [
   'src/components/onboarding/steps/DownloadProgressStep.tsx',
   'src/components/onboarding/steps/PermissionsStep.tsx',
 ];
-export const DRAWN_FLOOR = 38;
+// 38 until #162 took `ConfidenceIndicator` off the list above: with no props it now draws nothing,
+// correctly, where it used to draw `NaN%`. Lowered because the set shrank for a reason that is
+// written down, never to make a run pass.
+export const DRAWN_FLOOR = 37;
 
 /** Every stylesheet a `pnpm build` produced. Empty means the page would lie about the product. */
 export function compiledStylesheets() {

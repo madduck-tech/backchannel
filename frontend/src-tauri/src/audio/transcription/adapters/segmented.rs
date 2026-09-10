@@ -29,7 +29,7 @@ use crate::audio::common::{
 };
 use crate::audio::transcription::ports::{Channel, Transcriber, TranscriptChunk, TranscriptSink};
 use crate::audio::vad::{ContinuousVadProcessor, SpeechSegment};
-use crate::transcribe_engine::{keep_partial_on_truncation, mean_token_confidence, speaker_turns};
+use crate::transcribe_engine::{keep_partial_on_truncation, scored_confidence, speaker_turns};
 use anyhow::Result;
 use log::warn;
 use std::collections::VecDeque;
@@ -86,7 +86,10 @@ impl Decoder {
         match self {
             Decoder::Local { session, run_options } => {
                 let transcript = keep_partial_on_truncation(session.run(samples, run_options))?;
-                let confidence = Some(mean_token_confidence(&transcript));
+                // `None` when the family scores nothing, which is what `ports.rs:54` says the
+                // value means. `Some(mean_token_confidence(..))` was unconditional here, and for a
+                // family whose `Token::p` is NaN it painted a red `0%` on every line (#162).
+                let confidence = scored_confidence(&transcript);
 
                 let turns = speaker_turns(&transcript);
                 if !turns.is_empty() {

@@ -68,9 +68,15 @@ pub struct ModelInfo {
     pub diarizes: bool,
 }
 
-/// A batch transcription result. `confidence` is the mean per-token probability
-/// transcribe.cpp reports; every supported family provides it, so unlike the old
-/// Parakeet path it is never absent.
+/// A batch transcription result.
+///
+/// `confidence` is the mean per-token probability transcribe.cpp reports. This comment used to say
+/// *"every supported family provides it, so unlike the old Parakeet path it is never absent"*, and
+/// that was false: `transcribe_cpp` documents `Token::p` as **NaN when the family produces none**,
+/// and `gigaam-v3-ctc` is such a family, so this field is `NaN` for it (#162). Both callers
+/// (`import.rs:590`, `retranscription.rs:492`) use it only in a `debug!` line, where it prints as
+/// `NaN` — which is the honest reading. Anything that starts *deciding* on this value must go through
+/// `scored_confidence` instead, which returns `None` rather than a number nobody computed.
 #[derive(Debug, Clone)]
 pub struct BatchResult {
     pub text: String,
@@ -647,6 +653,42 @@ pub fn speaker_turns(transcript: &Transcript) -> Vec<SpeakerTurn> {
     turns
 }
 
+/// The mean per-token probability, or `None` when this family filled none in.
+///
+/// **Measured 2026-09-10 (#162), on this machine, over `jfk.wav`:**
+///
+/// | family | tokens | `p` | mean |
+/// | --- | --- | --- | --- |
+/// | `parakeet-tdt-0.6b-v3-q8` (the default) | 38 | 0.92 … 1.0 | 0.9936 |
+/// | `moonshine-tiny-q8` | 0 | — | 1.0, from the empty-token guard |
+/// | `gigaam-v3-ctc-q8` | 91 | **every one exactly 0.0** | 0.0 |
+///
+/// The third row is the defect. `transcribe.h` says `p` is *"the per-token probability when the
+/// architecture produces one, or NaN when it does not"*, and separately that *"on out-of-range index
+/// `p` follows the zero-init rule (0.0f, not NaN)"* — and what `gigaam-v3-ctc` actually returns is
+/// 91 present rows carrying text with `p` left at its zero-initialised value. So the absence is
+/// encoded **inside the valid range**, where no NaN check can see it, and `Some(0.0)` reached the UI
+/// as a red `0%` reading *Low confidence* on every line of every recording.
+///
+/// A decode that produced ninety-one tokens of text did not assign exactly zero probability to all
+/// ninety-one of them. All-zero across present rows is therefore read as "nobody filled these in",
+/// which `ports.rs:54` already has a value for: *"`None` is not 'zero confidence' — it means this
+/// decoder has nothing to report"*.
+///
+/// One nonzero token is enough to make the mean a real answer, so a model that genuinely scores a
+/// line badly still warns. That distinction is the whole point: *nothing scored it* and *it scored
+/// zero* are different facts, and only one of them is silence.
+///
+/// NaN is still refused, because the ABI documents it for families that report nothing at all — and
+/// `serde_json` cannot write a non-finite float, so `Some(NaN)` would reach the frontend as `null`.
+pub fn scored_confidence(transcript: &Transcript) -> Option<f32> {
+    if !transcript.tokens.is_empty() && transcript.tokens.iter().all(|t| t.p == 0.0) {
+        return None;
+    }
+    let mean = mean_token_confidence(transcript);
+    mean.is_finite().then_some(mean)
+}
+
 pub fn mean_token_confidence(transcript: &Transcript) -> f32 {
     if transcript.tokens.is_empty() {
         // No tokens means no text; callers treat empty output as "nothing said"
@@ -691,6 +733,68 @@ mod tests {
     /// A segment whose decode hit the generation cap must still yield its text:
     /// dropping it aborted the entire retranscription of a meeting on one
     /// segment. Anything that is a real failure still has to fail.
+    /// A decoder that scores nothing must say so, not score everything zero.
+    ///
+    /// Measured 2026-09-10 (#162): with `gigaam-v3-ctc-q8` every line of every recording carried a
+    /// red `0%` "Low confidence" badge. `transcribe_cpp`'s own comment (`result.rs:77`) says
+    /// `Token::p` is **NaN when the family produces none**; the mean of a set holding NaN is NaN;
+    /// `segmented.rs:89` wrapped it in `Some`; `serde_json` cannot write a non-finite float so the
+    /// event carried `confidence: null`; and the UI scored `null` as zero.
+    ///
+    /// `ports.rs:54` already says what the right answer is -- *"`None` is not zero confidence -- it
+    /// means this decoder has nothing to report"*. This holds the producer to it.
+    #[test]
+    fn a_family_that_scores_nothing_reports_no_confidence() {
+        let tok = |p: f32| transcribe_cpp::Token { p, ..Default::default() };
+
+        // What `gigaam-v3-ctc` actually returns: present rows, every `p` left at the ABI's
+        // zero-initialised value. Measured on jfk.wav — 91 tokens, 0 NaN, 91 exactly 0.0.
+        let zeroed = Transcript {
+            tokens: vec![tok(0.0), tok(0.0), tok(0.0)],
+            text: "энд соу май фэл оу американс".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            scored_confidence(&zeroed),
+            None,
+            "ninety-one tokens of text at exactly zero probability is the zero-init rule showing \
+             through, not a decode the model was certain was wrong"
+        );
+
+        // One real value among them makes the mean an answer again: a model that scores a line badly
+        // must still warn. This is the assertion a careless "treat 0 as absent" fix breaks.
+        let barely = Transcript { tokens: vec![tok(0.0), tok(0.0), tok(0.3)], ..Default::default() };
+        let got = scored_confidence(&barely).expect("one real probability is a real mean");
+        assert!((got - 0.1).abs() < 1e-6, "expected the mean 0.1, got {got}");
+
+        // The ABI documents NaN as well, for a family that reports nothing at all.
+        let unscored = Transcript { tokens: vec![tok(f32::NAN), tok(f32::NAN)], ..Default::default() };
+        assert_eq!(
+            scored_confidence(&unscored),
+            None,
+            "a family that reports no token probabilities must report no confidence, not zero"
+        );
+
+        // One NaN poisons the mean. A mean nobody can compute is still not a low score -- and this
+        // is the smaller-blast-radius version of the same defect, so it is held separately.
+        let partly = Transcript { tokens: vec![tok(0.9), tok(f32::NAN), tok(0.95)], ..Default::default() };
+        assert_eq!(scored_confidence(&partly), None, "an uncomputable mean is not a score of zero");
+
+        // A family that does score is untouched.
+        let scored = Transcript { tokens: vec![tok(0.8), tok(0.6)], ..Default::default() };
+        let got = scored_confidence(&scored).expect("a scored family still reports a number");
+        assert!((got - 0.7).abs() < 1e-6, "expected the mean 0.7, got {got}");
+
+        // No tokens at all keeps its own answer. `mean_token_confidence`'s guard returns 1.0 for
+        // "nothing was said" rather than a misleading zero, and that is deliberate -- see its
+        // comment. This assertion exists so the fix above cannot quietly swallow it.
+        assert_eq!(
+            scored_confidence(&Transcript::default()),
+            Some(1.0),
+            "an empty decode is 'nothing said', not 'nothing scored'"
+        );
+    }
+
     #[test]
     fn truncated_decode_keeps_its_partial_transcript() {
         let kept = keep_partial_on_truncation(Err(transcribe_cpp::Error::OutputTruncated {
@@ -885,5 +989,80 @@ mod tests {
         for e in TRANSCRIBE_MODEL_CATALOG {
             assert!(seen.insert(e.name), "duplicate catalog entry {}", e.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod token_probability_measurement {
+    //! What a family actually puts in `Token::p`, measured rather than assumed. (#162)
+    //!
+    //! The ABI says `p` is *"the per-token probability when the architecture produces one, or NaN
+    //! when it does not"*, and names *"per-frame argmax probability for CTC"* — so a CTC family does
+    //! produce one. The application shows a red `0%` badge on nearly every line of a `gigaam-v3-ctc`
+    //! recording, and this is what settles whether that number is the model's answer or an artefact.
+    //!
+    //! Ignored: it needs a 259 MB model on disk. Run it by name, as the gate does for the other
+    //! hardware tests, with `BC_MEASURE_MODEL` pointing at a `.gguf`.
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a model on disk; run by name with BC_MEASURE_MODEL=<path to a .gguf>"]
+    fn what_a_family_puts_in_token_p() {
+        let path = std::env::var("BC_MEASURE_MODEL")
+            .expect("set BC_MEASURE_MODEL to a .gguf to measure");
+        let wav = std::env::var("BC_MEASURE_WAV").unwrap_or_else(|_| {
+            glob_first("~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav")
+        });
+        let samples = read_wav_mono_16k(&wav);
+        eprintln!("model: {path}\nwav:   {wav}  ({} samples)", samples.len());
+
+        let model = transcribe_cpp::Model::load(&path).expect("the model opens");
+        let mut session = model.session().expect("a session opens");
+        let transcript = session
+            .run(&samples, &RunOptions::default())
+            .expect("the decode runs");
+
+        eprintln!("text:   {}", transcript.text.trim());
+        eprintln!("tokens: {}", transcript.tokens.len());
+        let ps: Vec<f32> = transcript.tokens.iter().map(|t| t.p).collect();
+        let nan = ps.iter().filter(|p| p.is_nan()).count();
+        let zero = ps.iter().filter(|p| **p == 0.0).count();
+        let finite: Vec<f32> = ps.iter().copied().filter(|p| p.is_finite()).collect();
+        let mean = if finite.is_empty() { f32::NAN } else { finite.iter().sum::<f32>() / finite.len() as f32 };
+        eprintln!("p: {} NaN, {} exactly 0.0, {} finite; mean of finite = {mean}", nan, zero, finite.len());
+        eprintln!("first 20 p: {:?}", &ps[..ps.len().min(20)]);
+        eprintln!("mean_token_confidence = {}", mean_token_confidence(&transcript));
+        eprintln!("scored_confidence     = {:?}", scored_confidence(&transcript));
+    }
+
+    fn glob_first(pattern: &str) -> String {
+        let expanded = pattern.replace('~', &std::env::var("HOME").unwrap());
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("ls {expanded} 2>/dev/null | head -1"))
+            .output()
+            .expect("ls runs");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Minimal 16-bit PCM WAV reader: the fixture is 16 kHz mono, and pulling a crate in for a
+    /// measurement would be a dependency this repository does not otherwise need.
+    fn read_wav_mono_16k(path: &str) -> Vec<f32> {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let mut i = 12; // past "RIFF....WAVE"
+        while i + 8 <= bytes.len() {
+            let id = &bytes[i..i + 4];
+            let size = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+            if id == b"data" {
+                return bytes[i + 8..(i + 8 + size).min(bytes.len())]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| i16::from_le_bytes(*c) as f32 / 32768.0)
+                    .collect();
+            }
+            i += 8 + size + (size & 1);
+        }
+        panic!("no data chunk in {path}");
     }
 }

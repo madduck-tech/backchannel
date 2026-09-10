@@ -3,7 +3,7 @@
 import { useRef, useReducer, startTransition, useEffect, useMemo, useState, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
-import { ConfidenceIndicator } from "./ConfidenceIndicator";
+import { ConfidenceIndicator, isScored } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { TranscriptSegmentData } from "@/types";
@@ -153,7 +153,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </span>
                 </TooltipTrigger>
                 <TooltipContent side="left">
-                    {confidence !== undefined && showConfidence ? (
+                    {isScored(confidence) && showConfidence ? (
                         <span className="flex items-center gap-1.5">
                             Decode confidence
                             <ConfidenceIndicator confidence={confidence} always />
@@ -178,7 +178,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     />
                 )}
                 {displayText}
-                {confidence !== undefined && showConfidence && (
+                {isScored(confidence) && showConfidence && (
                     <>
                         {' '}
                         <ConfidenceIndicator confidence={confidence} showIndicator />
@@ -231,7 +231,7 @@ const TranscriptLine = memo(function TranscriptLine({
                 <SpeakerTag speaker={speaker} speakerNames={speakerNames} onRename={onRenameSpeaker} />
             )}
             {isSilence ? 'Silence' : text}
-            {confidence !== undefined && showConfidence && (
+            {isScored(confidence) && showConfidence && (
                 <>
                     {' '}
                     <ConfidenceIndicator confidence={confidence} showIndicator />

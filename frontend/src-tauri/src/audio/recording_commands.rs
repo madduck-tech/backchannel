@@ -437,19 +437,10 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
-                let segment = crate::audio::recording_saver::TranscriptSegment {
-                    id: format!("seg_{}", update.sequence_id),
-                    text: update.text.clone(),
-                    audio_start_time: update.audio_start_time,
-                    audio_end_time: update.audio_end_time,
-                    duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
-                    confidence: update.confidence.unwrap_or(1.0),
-                    sequence_id: update.sequence_id,
-                    speaker: update.speaker.clone(),
-                    channel: update.channel.clone(),
-                };
+                // One constructor for both listeners: this block was duplicated verbatim, and both
+                // copies wrote `update.confidence.unwrap_or(1.0)` (#162).
+                let segment =
+                    crate::audio::recording_saver::TranscriptSegment::from_update(&update);
 
                 // Save to recording manager
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
@@ -633,19 +624,10 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
-                let segment = crate::audio::recording_saver::TranscriptSegment {
-                    id: format!("seg_{}", update.sequence_id),
-                    text: update.text.clone(),
-                    audio_start_time: update.audio_start_time,
-                    audio_end_time: update.audio_end_time,
-                    duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
-                    confidence: update.confidence.unwrap_or(1.0),
-                    sequence_id: update.sequence_id,
-                    speaker: update.speaker.clone(),
-                    channel: update.channel.clone(),
-                };
+                // One constructor for both listeners: this block was duplicated verbatim, and both
+                // copies wrote `update.confidence.unwrap_or(1.0)` (#162).
+                let segment =
+                    crate::audio::recording_saver::TranscriptSegment::from_update(&update);
 
                 // Save to recording manager
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
