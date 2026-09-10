@@ -40,7 +40,6 @@ export function DownloadProgressStep() {
     summaryProvider,
     selectedTranscribeModel,
     startBackgroundDownloads,
-    completeOnboarding,
   } = useOnboarding();
 
   // The listeners below are subscribed once and must not close over the first render's choice.
@@ -71,7 +70,6 @@ export function DownloadProgressStep() {
 
   // The size shown beside the name. `null` for a model outside the recommended four -- there is no
 
-  const [isCompleting, setIsCompleting] = useState(false);
   const parakeetDownloadStartedRef = useRef(false);
   const summaryDownloadStartedRef = useRef(false);
   const retryingRef = useRef(false);
@@ -436,27 +434,11 @@ export function DownloadProgressStep() {
       });
     }
 
-    if (isMac) {
-      // macOS: Go to Permissions step (will complete after permissions granted)
-      goNext();
-    } else {
-      // Non-macOS: Complete onboarding immediately (downloads continue in background)
-      setIsCompleting(true);
-      try {
-        await completeOnboarding();
-
-        // Small delay to ensure state is saved before reload
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        window.location.reload();
-      } catch (error) {
-        console.error('Failed to complete onboarding:', error);
-        toast.error('Failed to complete setup', {
-          description: 'Please try again.',
-        });
-        setIsCompleting(false);
-      }
-    }
+    // Every platform goes to the audio check next: it is step 4 of the four the strip names, and
+    // until now only macOS reached it. Off macOS this screen called `completeOnboarding()` and
+    // reloaded, so the microphone-and-speaker check the strip promises was rendered by
+    // `OnboardingFlow.tsx:64` and reached by nobody. The product owner asked where it was.
+    goNext();
   };
 
   /**
@@ -606,17 +588,11 @@ export function DownloadProgressStep() {
               the state the button is in for most of the first run. #92. */}
           <Button
             onClick={handleContinue}
-            disabled={!finished || isCompleting}
-            aria-label={
-              isCompleting
-                ? 'Finishing setup…'
-                : finished
-                  ? 'Continue'
-                  : 'Waiting for the transcription model…'
-            }
+            disabled={!finished}
+            aria-label={finished ? 'Continue' : 'Waiting for the transcription model…'}
             className="h-8 shrink-0 px-4"
           >
-            {isCompleting ? 'Finishing…' : 'Continue'}
+            Continue
           </Button>
         </>
       }

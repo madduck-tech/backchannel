@@ -35,12 +35,47 @@ type CheckResult = { device: string; heard_audio: boolean; text: string };
 type State = { status: 'idle' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
 
 export function AudioCheckStep() {
-    const { goNext } = useOnboarding();
+    const { goNext, completeOnboarding } = useOnboarding();
+    const [isMac, setIsMac] = useState(false);
+    /** One press, one completion. Without it a second click starts a second `completeOnboarding`. */
+    const [finishing, setFinishing] = useState(false);
     const [devices, setDevices] = useState<Device[]>([]);
     const [mic, setMic] = useState('');
     const [speakers, setSpeakers] = useState('');
     const [micState, setMicState] = useState<State>({ status: 'idle' });
     const [sysState, setSysState] = useState<State>({ status: 'idle' });
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const { platform } = await import('@tauri-apps/plugin-os');
+                setIsMac(platform() === 'macos');
+            } catch {
+                setIsMac(navigator.userAgent.includes('Mac'));
+            }
+        })();
+    }, []);
+
+    /**
+     * On macOS the next step is Permissions, which finishes onboarding itself. Everywhere else this
+     * **is** the last step, so it finishes here — `goNext()` would land on step 5, which renders
+     * nothing off macOS, and the person would sit on a blank screen.
+     */
+    const done = async () => {
+        if (isMac) { goNext(); return; }
+        if (finishing) return;
+        setFinishing(true);
+        try {
+            await completeOnboarding();
+            await new Promise((r) => setTimeout(r, 100));
+            window.location.reload();
+        } catch (error) {
+            // The button comes back. A new user left on a dead control is the worst thing this
+            // screen can do, and it is the last one before the application itself.
+            console.error('[AudioCheckStep] Could not complete onboarding:', error);
+            setFinishing(false);
+        }
+    };
 
     useEffect(() => {
         invoke<Device[]>('get_audio_devices')
@@ -132,10 +167,10 @@ export function AudioCheckStep() {
                 />
 
                 <div className="flex items-center gap-3">
-                    <Button onClick={goNext} className="h-11 flex-1">
+                    <Button onClick={done} disabled={finishing} className="h-11 flex-1">
                         Continue
                     </Button>
-                    <Button variant="ghost" onClick={goNext} className="h-11">
+                    <Button variant="ghost" onClick={done} disabled={finishing} className="h-11">
                         Skip this
                     </Button>
                 </div>
