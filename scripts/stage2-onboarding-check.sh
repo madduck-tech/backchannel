@@ -250,6 +250,20 @@ if [ "$MODE" = remote ]; then
   exit 0
 fi
 
+# --- the step after this one is reachable ---------------------------------------------------------
+#
+# `AudioCheckStep` is 227 lines with a test file of its own, `OnboardingFlow.tsx:64` renders it at
+# step 4, and off macOS **nobody reached it**: this screen's Continue called `completeOnboarding()`
+# instead of `goNext()`, so first run ended here while the strip named four steps.
+# `onboarding-flow.test.mjs:78` asserts which component step 4 renders and never asked whether
+# anything sets step 4 — the map without the edges. This is the edge, driven.
+await "!document.querySelector('footer button[disabled]')" "Continue to become available" 120
+CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download screen"
+click "$CONT"
+await "document.body.innerText.includes('Check your audio')" "the audio check, which is step 4" 30
+DEVICES=$(js '"return [...document.querySelectorAll(\"select, [role=combobox], button\")].length"')
+say "the audio check is on screen, and offers ${DEVICES} controls to pick a device with"
+
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
   die "the default was fetched as well as the choice; the choice is not what drives the download"
