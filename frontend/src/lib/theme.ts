@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 export type Theme = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
@@ -85,6 +85,10 @@ export function useTheme() {
   return {
     theme,
     resolved,
-    setTheme: useCallback(setTheme, []),
+    // `setTheme` is declared at module scope (`:42`), so its identity is already stable for the
+    // life of the process. `useCallback(setTheme, [])` memoized a constant — it produced the same
+    // reference the bare function does, cost a hook, and tripped `react-hooks/use-memo`, which wants
+    // an inline expression it can reason about. Passing the function is what the memoization meant.
+    setTheme,
   };
 }
