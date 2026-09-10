@@ -67,9 +67,14 @@ const PUBLISHED = [
     // #112 changed the virtualiser's unit from a row to a turn, so the published anchor
     // `count: segments.length,` no longer exists. The control is unchanged in meaning — the
     // virtualiser is told one item fewer — and the anchor drift is what caught the rename.
+    //
+    // 413 until #162 widened two `confidence` props above it to `number | null` with a comment
+    // apiece. The anchor is unchanged and the drift is two lines of documentation; the number is
+    // corrected rather than the check loosened, because a line pin that follows its own file is not
+    // a pin.
     id: '#84 transcript: the virtualiser is told one row fewer',
     file: 'src/components/VirtualizedTranscriptView.tsx',
-    line: 413,
+    line: 415,
     anchor: 'count: turns.length,',
     replace: '        count: turns.length - 1,',
     check: ['node', 'tests/lib/transcript-view.test.mjs'],

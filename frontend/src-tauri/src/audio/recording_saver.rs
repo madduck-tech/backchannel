@@ -22,8 +22,10 @@ pub struct TranscriptSegment {
     pub display_time: String,   // Formatted time for display like "[02:15]"
     /// Omitted entirely when the decoder reports none -- the same contract as
     /// `TranscriptUpdate::confidence`, which this is persisted from. It was an `f32` filled by
-    /// `update.confidence.unwrap_or(1.0)`, so a family that scores nothing (`Token::p` is NaN for
-    /// `gigaam-v3-ctc`) had a perfect score written to disk for every line (#162).
+    /// `update.confidence.unwrap_or(1.0)`, so a decoder that reported nothing had a perfect score
+    /// written to disk for every line (#162) — and that was already happening before that issue, for
+    /// every streaming-native model and every `builtin-ai` transcription, both of which have always
+    /// reported `None` (`streaming.rs:163`, `segmented.rs:139`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub sequence_id: u64,

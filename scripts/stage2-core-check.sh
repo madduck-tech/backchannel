@@ -33,16 +33,23 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 # to leave `DEFAULT_TRANSCRIBE_MODEL`, which is `parakeet-tdt-0.6b-v3-q8` and is the one family in the
 # catalogue that reports real token probabilities.
 #
-#   scores    moonshine-tiny-q8 (34 MB). Reports real confidences -- measured on this sample, one
-#             badge at 50%. Drives the whole core: first run -> transcript on screen -> summary.
-#   unscored  gigaam-v3-ctc-q8 (259 MB). Reports **none**: `transcribe_cpp` documents `Token::p` as
-#             NaN for such a family. This is the family #162 was found on, and the mode where
-#             reverting that fix turns the screen red again. It is Russian-only, so the English
-#             sample comes back as phonetic Cyrillic -- which is correct behaviour of that model and
-#             is why this mode asserts that rows arrived, not what they say.
+#   scores    parakeet-tdt-0.6b-v3-q8. **The positive sentinel.** Of eighteen architectures only five
+#             build a token row and only `parakeet` ever assigns a real probability
+#             (`arch/parakeet/decoder.cpp:1640`, `std::exp(row[label])`), so it is the one family that
+#             can prove a confidence is producible at all. It is also `DEFAULT_TRANSCRIBE_MODEL`, and
+#             that is a consequence, not a shortcut: the non-default coverage is `unscored`'s job.
+#             An earlier draft used `moonshine-tiny-q8` here and claimed "one badge at 50%" — that
+#             family returns **no tokens at any length** and can carry no badge, and the 50% was the
+#             microphone meter. A mode that asserts an absence while proving no presence is the shape
+#             `.claude/rules/testing.md` forbids, and it was this file breaking its own rule.
+#   unscored  gigaam-v3-ctc-q8 (259 MB), reached through the catalogue and **not** the default. It
+#             leaves every `p` at the zero sentinel, which is the family #162 was found on and the
+#             mode that goes red when the fix is reverted. Russian-only, so the English sample comes
+#             back as phonetic Cyrillic -- correct behaviour of that model, and why this mode asserts
+#             that rows arrived rather than what they say.
 case "$MODE" in
-  scores)   MODEL_ID="${BC_CORE_MODEL:-moonshine-tiny-q8}"; WORDS=(country "ask what you can do") ;;
-  unscored) MODEL_ID="${BC_CORE_MODEL:-gigaam-v3-ctc-q8}";  WORDS=() ;;
+  scores)   MODEL_ID="${BC_CORE_MODEL:-parakeet-tdt-0.6b-v3-q8}"; WORDS=(country "ask what you can do") ;;
+  unscored) MODEL_ID="${BC_CORE_MODEL:-gigaam-v3-ctc-q8}";        WORDS=() ;;
   *) die "unknown mode '$MODE' (scores|unscored)" ;;
 esac
 SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
@@ -249,9 +256,9 @@ else
 fi
 
 # --- what the badges say ----------------------------------------------------------------------------
-# The defect this pass was built for. `gigaam-v3-ctc` and `moonshine` report no token probabilities;
-# `transcribe_cpp` documents `Token::p` as NaN for such a family, `serde_json` writes NaN as `null`,
-# and the UI's guard was `!== undefined` -- so every line carried a red `0%` reading *Low confidence*.
+# The defect this pass was built for. `gigaam-v3-ctc` leaves every `p` at the zero sentinel
+# (`transcribe-session.h:93` declares `float p = 0.0f;` and the arch never assigns it), so the mean is
+# a perfectly finite 0.0 and every line carried a red `0%` reading *Low confidence*.
 # A badge is legitimate when a model actually scored the line low. What is never legitimate is a badge
 # on a line nobody scored, and `NaN%` on any line at all.
 # Selected by the badge's own accessible name, not by `span.readout` + a percentage: the live
@@ -280,6 +287,48 @@ click "$STOP" "Stop recording"
 await "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the recording to finish' 90
 say "stopped"
+
+# --- the disk oracle, and the positive sentinel this mode owes -------------------------------------
+#
+# The screen assertion above is an absence, and an absence with nothing positive beside it is
+# satisfied by a run that produced no confidences at all -- which is exactly what every family except
+# `parakeet` now does, correctly. So each mode asserts what `transcripts.json` carries, and the two
+# assertions are opposites of each other from the same instrument:
+#
+#   scores    at least one row carries `confidence`, and it is a real number -- the proof that the
+#             field can be produced at all, without which `unscored` proves nothing.
+#   unscored  no row carries it. Reverting `scored_confidence` puts a 0.0 on every row here.
+STOPPED_JSON=""
+for _ in $(seq 1 60); do
+  STOPPED_JSON=$(find "$PROFILE/rec" -name transcripts.json 2>/dev/null | head -1)
+  [ -n "$STOPPED_JSON" ] && break
+  sleep 1
+done
+[ -n "$STOPPED_JSON" ] || die "no transcripts.json was written under $PROFILE/rec"
+CONF=$(python3 -c '
+import json, sys
+rows = json.load(open(sys.argv[1]))
+rows = rows if isinstance(rows, list) else rows.get("transcripts", rows.get("segments", []))
+have = [r["confidence"] for r in rows if isinstance(r, dict) and r.get("confidence") is not None]
+print(f"{len(rows)} {len(have)} {min(have) if have else -1} {max(have) if have else -1}")' "$STOPPED_JSON")
+set -- $CONF; ROWS_JSON=$1; WITH_CONF=$2; CONF_MIN=$3; CONF_MAX=$4
+say "transcripts.json: $ROWS_JSON rows, $WITH_CONF of them carrying a confidence (min $CONF_MIN, max $CONF_MAX)"
+[ "$ROWS_JSON" -ge 3 ] || die "only $ROWS_JSON rows in transcripts.json; too few for either assertion below to fail"
+case "$MODE" in
+  scores)
+    [ "$WITH_CONF" -ge 1 ] \
+      || die "not one row carries a confidence. $MODEL_ID is the only family that assigns a real per-token probability, so if it produces none the field is unproducible and this pass proves nothing about the absence the other mode asserts"
+    printf '%s' "$CONF_MIN" | grep -qE '^0\.[0-9]' \
+      || die "the confidences in transcripts.json are '$CONF_MIN'..'$CONF_MAX', which is not a probability"
+    say "the sentinel holds: a real confidence is producible, and $WITH_CONF of $ROWS_JSON rows carry one"
+    ;;
+  unscored)
+    [ "$WITH_CONF" -eq 0 ] \
+      || die "$WITH_CONF of $ROWS_JSON rows were persisted with a confidence, and $MODEL_ID scores nothing: a number nobody computed reached the disk (#162)"
+    say "no row was persisted with a score nobody gave"
+    ;;
+esac
+
 
 # --- the summary ------------------------------------------------------------------------------------
 G=$(by_text "Generate Summary"); [ -n "$G" ] || G=$(by_text "Generate summary")

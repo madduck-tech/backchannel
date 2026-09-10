@@ -134,7 +134,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     id: string;
     timestamp: number;
     text: string;
-    confidence?: number;
+    /** `null` when the decoder scored nothing: the payload is JSON. See `isScored`. */
+    confidence?: number | null;
     showConfidence: boolean;
     speaker?: string;
     speakerNames?: SpeakerNames;
@@ -206,7 +207,8 @@ const TranscriptLine = memo(function TranscriptLine({
 }: {
     id: string;
     text: string;
-    confidence?: number;
+    /** `null` when the decoder scored nothing: the payload is JSON. See `isScored`. */
+    confidence?: number | null;
     showConfidence: boolean;
     speaker?: string;
     speakerNames?: SpeakerNames;

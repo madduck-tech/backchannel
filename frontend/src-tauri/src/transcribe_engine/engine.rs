@@ -72,11 +72,13 @@ pub struct ModelInfo {
 ///
 /// `confidence` is the mean per-token probability transcribe.cpp reports. This comment used to say
 /// *"every supported family provides it, so unlike the old Parakeet path it is never absent"*, and
-/// that was false: `transcribe_cpp` documents `Token::p` as **NaN when the family produces none**,
-/// and `gigaam-v3-ctc` is such a family, so this field is `NaN` for it (#162). Both callers
-/// (`import.rs:590`, `retranscription.rs:492`) use it only in a `debug!` line, where it prints as
-/// `NaN` — which is the honest reading. Anything that starts *deciding* on this value must go through
-/// `scored_confidence` instead, which returns `None` rather than a number nobody computed.
+/// that was false (#162): most families report none, and they encode it as a value rather than as an
+/// absence. `gigaam-v3-ctc` leaves every `p` at the zero sentinel, so this field is **0.0** for it —
+/// `import.rs` duly logs `avg confidence: 0.00` — and the 53 catalogue rows whose architecture builds
+/// no token row at all get `mean_token_confidence`'s 1.0. Both callers (`import.rs:590`,
+/// `retranscription.rs:492`) use it only in an `info!` line, and their row tuples have no confidence
+/// field, so nothing decides on it. Anything that starts deciding must go through
+/// `scored_confidence`, which answers `None` rather than a number nobody computed.
 #[derive(Debug, Clone)]
 pub struct BatchResult {
     pub text: String,
@@ -663,12 +665,13 @@ pub fn speaker_turns(transcript: &Transcript) -> Vec<SpeakerTurn> {
 /// | `moonshine-tiny-q8` | 0 | — | 1.0, from the empty-token guard |
 /// | `gigaam-v3-ctc-q8` | 91 | **every one exactly 0.0** | 0.0 |
 ///
-/// The third row is the defect. `transcribe.h` says `p` is *"the per-token probability when the
-/// architecture produces one, or NaN when it does not"*, and separately that *"on out-of-range index
-/// `p` follows the zero-init rule (0.0f, not NaN)"* — and what `gigaam-v3-ctc` actually returns is
-/// 91 present rows carrying text with `p` left at its zero-initialised value. So the absence is
-/// encoded **inside the valid range**, where no NaN check can see it, and `Some(0.0)` reached the UI
-/// as a red `0%` reading *Low confidence* on every line of every recording.
+/// The third row is the defect, and the value is not NaN. `transcribe-session.h:93` declares the
+/// internal row as `float p = 0.0f;`, and `arch/gigaam/model.cpp:301-308` fills `id`, `text`, `t0_ms`
+/// and `t1_ms` and never assigns `.p`. Upstream names the convention itself, in
+/// `arch/moonshine_streaming/model.cpp:1032`: *"doesn't carry per-token timestamps or probabilities —
+/// leave them at the **zero sentinel**"*. So the absence is encoded **inside the valid range**, where
+/// no NaN check can see it, and `Some(0.0)` reached the UI as a red `0%` reading *Low confidence* on
+/// every line of every recording.
 ///
 /// A decode that produced ninety-one tokens of text did not assign exactly zero probability to all
 /// ninety-one of them. All-zero across present rows is therefore read as "nobody filled these in",
@@ -679,10 +682,24 @@ pub fn speaker_turns(transcript: &Transcript) -> Vec<SpeakerTurn> {
 /// line badly still warns. That distinction is the whole point: *nothing scored it* and *it scored
 /// zero* are different facts, and only one of them is silence.
 ///
+/// **An empty token list is the same answer, and it is the larger half.** Only five of eighteen
+/// architectures construct a token row at all — `gigaam`, `medasr`, `moonshine_streaming`, `parakeet`
+/// and `sensevoice` — and every other family returns none. Against `TRANSCRIBE_MODEL_CATALOG`'s 86
+/// rows that is **53** which produce no tokens: Whisper 18, Granite Speech 8, Canary 5 + v2 2 +
+/// Qwen 2, Qwen3-ASR 4, Voxtral 2 + Realtime 2, MOSS 2, Moonshine 2, FunASR 2 + 2, Cohere 2. For all
+/// of them `mean_token_confidence` returns its "nothing was said" 1.0, and passing that on as a score
+/// paints *"Decode confidence 100%"* in the timestamp tooltip and
+/// `aria-label="Transcription confidence 100 percent, High confidence"` in the accessibility tree —
+/// the exact thing `tauri_sink.rs:33` forbids, on the majority of the catalogue.
+///
+/// So `mean_token_confidence` keeps its 1.0, which is right for the question *it* answers (a decode
+/// that produced nothing is not a decode that went badly), and this function does not turn that into
+/// a claim about confidence.
+///
 /// NaN is still refused, because the ABI documents it for families that report nothing at all — and
 /// `serde_json` cannot write a non-finite float, so `Some(NaN)` would reach the frontend as `null`.
 pub fn scored_confidence(transcript: &Transcript) -> Option<f32> {
-    if !transcript.tokens.is_empty() && transcript.tokens.iter().all(|t| t.p == 0.0) {
+    if transcript.tokens.is_empty() || transcript.tokens.iter().all(|t| t.p == 0.0) {
         return None;
     }
     let mean = mean_token_confidence(transcript);
@@ -785,13 +802,19 @@ mod tests {
         let got = scored_confidence(&scored).expect("a scored family still reports a number");
         assert!((got - 0.7).abs() < 1e-6, "expected the mean 0.7, got {got}");
 
-        // No tokens at all keeps its own answer. `mean_token_confidence`'s guard returns 1.0 for
-        // "nothing was said" rather than a misleading zero, and that is deliberate -- see its
-        // comment. This assertion exists so the fix above cannot quietly swallow it.
+        // No tokens at all is also nothing scored, and this is the larger half: 53 of
+        // `TRANSCRIBE_MODEL_CATALOG`'s 86 rows come from an architecture that constructs no token row,
+        // so `Some(1.0)` here painted "Decode confidence 100%" in the tooltip and *High confidence*
+        // in the accessibility tree for most of the catalogue.
+        //
+        // This assertion used to require `Some(1.0)` and say *"an empty decode is 'nothing said', not
+        // 'nothing scored'"*. Both halves of that sentence are true of `mean_token_confidence`, which
+        // still answers 1.0 for its own question; neither makes 1.0 a confidence. The assertion was
+        // encoding the defect, so it is inverted rather than kept (ADR 0023).
         assert_eq!(
             scored_confidence(&Transcript::default()),
-            Some(1.0),
-            "an empty decode is 'nothing said', not 'nothing scored'"
+            None,
+            "a decode with no tokens scored nothing, whatever the mean of an empty set is called"
         );
     }
 
