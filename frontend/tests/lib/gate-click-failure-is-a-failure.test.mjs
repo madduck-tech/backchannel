@@ -153,6 +153,10 @@ function stubDriver(bodies) {
 function press(port, budget) {
   const harness =
     `set -uo pipefail\n` +
+    // `say` and `die` are the caller's, as they are in every pass -- bash resolves them at call time.
+    // Leaving `say` out here would make the helper's report of an absorbed refusal vanish into
+    // "command not found", which is exactly the silence the assertion below exists to forbid.
+    `say() { printf 'say: %s\\n' "$*"; }\n` +
     `die() { printf 'die: %s\\n' "$*" >&2; exit 1; }\n` +
     `BASE="http://127.0.0.1:${port}/session/stub"\n` +
     `WD_CLICK_BUDGET=${budget}\n` +
@@ -181,6 +185,7 @@ await against([OK], 1, (r, d) => {
   assert.equal(r.status, 0, `a clean click failed:\n${r.stderr}`);
   assert.match(r.stdout, /CLICK-RETURNED/);
   assert.equal(d.attempts(), 1, `a clean click was sent ${d.attempts()} times`);
+  assert.doesNotMatch(r.stdout, /attempts/, 'a click that landed first time reported a retry it did not make');
 });
 
 // --- a refusal that ends is waited out ---------------------------------------------------------
@@ -194,6 +199,15 @@ for (const transient of [NOT_INTERACTABLE, INTERCEPTED]) {
     assert.equal(r.status, 0, `the pass died on a refusal that ended:\n${r.stderr}`);
     assert.match(r.stdout, /CLICK-RETURNED/);
     assert.equal(d.attempts(), 3, `expected three attempts, the driver saw ${d.attempts()}`);
+    // A refusal the retry absorbed is still a fact about the application. Silence here is the same
+    // shape as the defect this helper was written for, one level in: a control unpressable for six
+    // seconds would be indistinguishable from one that never was.
+    assert.match(
+      r.stdout,
+      /took \d+s and 3 attempts/,
+      `the pass absorbed two refusals and said nothing:\n${r.stdout}`
+    );
+    assert.match(r.stdout, /the control is disabled/, 'it does not say what the page reported at the first refusal');
   });
 }
 

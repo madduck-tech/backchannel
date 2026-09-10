@@ -15,8 +15,8 @@
 # had asked it to: twelve seconds after the click the settings screen was still on screen, with zero
 # Stop controls. A harness fault wearing the shape of a product defect, for a day.
 #
-# The caller supplies `BASE` and `die`; bash resolves `die` at call time, so each pass keeps its own
-# prefix.
+# The caller supplies `BASE`, `die` and `say`; bash resolves them at call time, so each pass keeps its
+# own prefix.
 
 # How long a transient refusal is waited out before it becomes fatal, in seconds.
 WD_CLICK_BUDGET="${WD_CLICK_BUDGET:-10}"
@@ -34,7 +34,7 @@ WD_CLICK_BUDGET="${WD_CLICK_BUDGET:-10}"
 # Every other error is fatal at once. `no such element` is not a state that improves, and retrying it
 # would turn a real regression into a ten-second pause followed by the same wrong sentence.
 click() {
-  local el="$1" what="${2:-element $1}" n=0 resp err
+  local el="$1" what="${2:-element $1}" n=0 t0=$SECONDS resp err first_why=""
   while :; do
     resp=$(curl -s -m 20 -X POST "$BASE/element/$el/click" -H 'Content-Type: application/json' -d '{}')
     err=$(printf '%s' "$resp" | python3 -c 'import json, sys
@@ -43,12 +43,24 @@ try:
 except Exception:
     print("the driver returned nothing readable"); raise SystemExit
 print(v.get("error") or "unnamed driver error" if isinstance(v, dict) else "")')
-    [ -z "$err" ] && return 0
+    if [ -z "$err" ]; then
+      # A refusal the retry absorbed is still a fact about the application, and staying silent about
+      # it is the same shape as the defect this helper was written for, one level in: a control that
+      # was unpressable for six seconds is indistinguishable here from one that never was.
+      # "the Back control took 1.5s" is about Radix; "Start recording took 8s" is about the product.
+      if [ "$n" -gt 0 ]; then
+        say "clicking $what took $((SECONDS - t0))s and $((n + 1)) attempts. At the first refusal: $first_why"
+      fi
+      return 0
+    fi
     case "$err" in
       "element not interactable"|"element click intercepted")
         n=$((n + 1))
+        # Sampled at the *first* refusal as well as the last: by the time the budget expires the page
+        # has moved on, so a late read-back does not report the state that caused the refusal.
+        [ -z "$first_why" ] && first_why=$(wd_why "$el")
         if [ "$n" -ge $((WD_CLICK_BUDGET * 2)) ]; then
-          die "clicking $what: the driver refused for ${WD_CLICK_BUDGET}s with '$err'. $(wd_why "$el") The element is on screen and cannot be pressed — that is a state nothing is leaving, not a slow application."
+          die "clicking $what: the driver refused for ${WD_CLICK_BUDGET}s with '$err'. At the first refusal: $first_why Now: $(wd_why "$el") The element is on screen and cannot be pressed — that is a state nothing is leaving, not a slow application."
         fi
         sleep 0.5
         ;;

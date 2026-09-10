@@ -83,11 +83,18 @@ assert.ok(
     `six were there on 2026-09-10, so either a pass stopped reading the log or this census has gone blind`
 );
 
+// "This application's Rust does not write it" is the claim, and it is not the same as "nothing writes
+// it". A line a dependency emits -- `Reactor error: Client disconnected` comes from the `pulseaudio`
+// crate -- does appear in the log, and is still not a sentinel we own: it changes on a `cargo update`
+// with no signal to anyone. Both are refused, and the message says which, because a check that fires
+// for the right reason with the wrong message is the class these rules are about.
 const unwritten = oracles.filter((o) => !rust.includes(o.literal));
 assert.deepEqual(
   unwritten.map((o) => `${o.where} greps '${o.pattern}'`),
   [],
-  `these oracles read lines the application never writes, so their verdict about it cannot be earned:\n  ` +
+  `these oracles read lines this application's own Rust does not write, so their verdict about it ` +
+    `cannot be earned. A line a dependency emits counts here too: it reaches the log, and it changes ` +
+    `under us without a signal.\n  ` +
     unwritten.map((o) => `${o.where}  '${o.literal}'`).join('\n  ')
 );
 
