@@ -56,7 +56,10 @@ async function render(component, ctx, extra = {}) {
       // the onboarding provider itself. Stubbed to its children, because what is under test is the
       // choice, not the chrome around it.
       '../OnboardingContainer': {
-        OnboardingContainer: ({ children }) => React.createElement('div', null, children),
+        // Renders the footer too: #154 moved the primary control into it, and a children-only
+        // passthrough hides the very button the assertions below are about.
+        OnboardingContainer: ({ children, footer }) =>
+          React.createElement('div', null, children, React.createElement('footer', null, footer)),
       },
       // `__esModule` is not decoration: the picker is a default export, and TypeScript's interop
       // wraps a module without that flag in `{ default: mod }` — so the component would come out as
@@ -147,10 +150,14 @@ const click = async (el) => {
   const text = container.textContent;
 
   for (const [provider, destination] of [
-    ['Claude', 'sent to Anthropic'],
-    ['OpenAI', 'sent to OpenAI'],
-    ['Groq', 'sent to Groq'],
-    ['OpenRouter', 'sent to OpenRouter'],
+    // The verb is the approved prototype's, not this check's invention: `c-inline-scroll` writes
+    // "Sends each transcript to {dest}. Needs an API key." on every remote option. This used to
+    // pin "sent to Anthropic", the copy before #154, and enforcing that would have made the check
+    // require wording the product owner replaced.
+    ['Claude', 'Sends each transcript to Anthropic'],
+    ['OpenAI', 'Sends each transcript to OpenAI'],
+    ['Groq', 'Sends each transcript to Groq'],
+    ['OpenRouter', 'Sends each transcript to OpenRouter'],
   ]) {
     assert.ok(text.includes(provider), `${provider} must be offered`);
     assert.ok(

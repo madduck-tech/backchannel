@@ -9,19 +9,17 @@ export interface OnboardingPermissions {
 }
 
 export interface OnboardingContainerProps {
+  /** The persistent footer of the approved shell: a readout and the primary action. #154 */
+  footer?: React.ReactNode;
+  /** The scrolling region, so a step can bring its own chosen row to the top of it. */
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
   title: string;
   description?: React.ReactNode;
   children: React.ReactNode;
   step?: number;
   totalSteps?: number;
-  stepOffset?: number;
   hideProgress?: boolean;
   className?: string;
-  showNavigation?: boolean;
-  onNext?: () => void;
-  onPrevious?: () => void;
-  canGoNext?: boolean;
-  canGoPrevious?: boolean;
 }
 
 export interface PermissionRowProps {

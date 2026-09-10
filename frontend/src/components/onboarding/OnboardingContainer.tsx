@@ -1,104 +1,101 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ProgressIndicator } from './shared/ProgressIndicator';
-import { useOnboarding } from '@/contexts/OnboardingContext';
 import type { OnboardingContainerProps } from '@/types/onboarding';
 
+/**
+ * The shell every first-run screen sits in, and it is the approved one. (#154)
+ *
+ * `design/prototypes/onboarding-summariser.html` (`c-inline-scroll`, approved 2026-09-08) is a
+ * fixed-height grid: a step strip, a head that does not move, a region that scrolls, and a footer
+ * that stays. Read out of it rather than remembered:
+ *
+ *     body   { height: 100vh; display: grid; grid-template-rows: auto minmax(0,1fr) auto }
+ *     main   { min-height: 0;  display: grid; grid-template-rows: auto minmax(0,1fr) }
+ *     .scroll{ overflow-y: auto; min-height: 0; scrollbar-gutter: stable }
+ *     footer { min-height: 56px }
+ *     .col   { max-width: 1000px; margin: 0 auto }
+ *
+ * **What it replaced, and why that mattered.** The old container was a centred `max-w-2xl` column
+ * whose children scrolled as one long page, with no footer at all: each step rendered its own
+ * Continue inside the scrolling content. So on a 520px-tall window — the minimum
+ * `tauri.conf.json` permits — the summariser's key field and its Continue were both below the fold,
+ * and the product owner reported choosing a provider and nothing happening. #138 fixed that by
+ * scrolling the chosen option into view, which is a repair to a layout that was never the approved
+ * one.
+ *
+ * `footer` is optional so the two steps that have not been redesigned keep working unchanged.
+ */
 export function OnboardingContainer({
   title,
   description,
   children,
   step,
-  totalSteps = 5,
-  stepOffset = 0,
+  totalSteps = 4,
   hideProgress = false,
   className,
-  showNavigation = false,
-  onNext,
-  onPrevious,
-  canGoNext = true,
-  canGoPrevious = true,
+  footer,
+  scrollRef,
 }: OnboardingContainerProps) {
-  const { goToStep, goPrevious, goNext } = useOnboarding();
-
-  const handlePrevious = () => {
-    if (onPrevious) {
-      onPrevious();
-    } else {
-      goPrevious();
-    }
-  };
-
-  const handleNext = () => {
-    if (onNext) {
-      onNext();
-    } else {
-      goNext();
-    }
-  };
-
-  const handleStepClick = (s: number) => {
-    goToStep(s + stepOffset);
-  };
+  /** The strip's names, from the prototype's `<nav class="strip">`. */
+  const STEPS = ['Transcription', 'Summariser', 'Download', 'Audio check'];
+  const names = STEPS.slice(0, totalSteps);
 
   return (
-    <div className="fixed inset-0 bg-sunken flex items-center justify-center z-modal overflow-hidden">
-      <div className={cn('w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6', className)}>
-        {/* Progress Indicator with Navigation - Fixed */}
-        {step && !hideProgress && (
-          <div className="mb-2 relative flex-shrink-0">
-            {/* Navigation Buttons */}
-            {showNavigation && (
-              <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 flex justify-between pointer-events-none">
-                <button
-                  onClick={handlePrevious}
-                  disabled={!canGoPrevious || step === 1}
-                  className={cn(
-                    'pointer-events-auto w-8 h-8 rounded-full bg-elevated border border-line shadow-sm flex items-center justify-center transition-all duration-200',
-                    canGoPrevious && step !== 1
-                      ? 'hover:bg-sunken hover:shadow-md hover:scale-110 text-ink'
-                      : 'opacity-0 cursor-not-allowed'
-                  )}
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
+    <div className="fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink">
+      {step && !hideProgress ? (
+        <nav
+          aria-label="Setup steps"
+          className="flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs"
+        >
+          {names.map((name, i) => {
+            const n = i + 1;
+            const state = n < step ? 'done' : n === step ? 'current' : 'todo';
+            return (
+              <span
+                key={name}
+                aria-current={state === 'current' ? 'step' : undefined}
+                className={cn(
+                  '-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent',
+                  state === 'todo' ? 'text-ink-faint' : 'text-ink',
+                  state === 'current' && 'border-brand-soft-ink'
+                )}
+              >
+                <b className="font-mono font-normal">{n}</b>
+                {name}
+              </span>
+            );
+          })}
+        </nav>
+      ) : (
+        <div />
+      )}
 
-                <button
-                  onClick={handleNext}
-                  disabled={!canGoNext || step === totalSteps}
-                  className={cn(
-                    'pointer-events-auto w-8 h-8 rounded-full bg-elevated border border-line shadow-sm flex items-center justify-center transition-all duration-200',
-                    canGoNext && step !== totalSteps
-                      ? 'hover:bg-sunken hover:shadow-md hover:scale-110 text-ink'
-                      : 'opacity-0 cursor-not-allowed'
-                  )}
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
+      <main className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+        <div className="px-6 pt-7">
+          <div className="mx-auto w-full max-w-[1000px]">
+            <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink">
+              {title}
+            </h1>
+            {description && (
+              <p className="mt-2 max-w-[68ch] text-sm text-ink-muted">{description}</p>
             )}
-
-            {/* Progress Indicator */}
-            <ProgressIndicator current={step} total={totalSteps} onStepClick={handleStepClick} />
           </div>
-        )}
-
-        {/* Header - Fixed */}
-        <div className="mb-4 text-center space-y-3 flex-shrink-0">
-          <h1 className="text-4xl font-semibold text-ink animate-fade-in-up">{title}</h1>
-          {description && (
-            <p className="text-base text-ink-muted max-w-md mx-auto animate-fade-in-up delay-75">
-              {description}
-            </p>
-          )}
         </div>
 
-        {/* Content - Scrollable */}
-        <div className="flex-1 overflow-y-auto pr-2">
-          <div className="space-y-6">{children}</div>
+        {/* `min-h-0` is what makes this scroll instead of growing the grid row; without it the
+            footer leaves the window on a short one, which is the defect this shell exists to end. */}
+        <div ref={scrollRef} className="min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]">
+          <div className={cn('mx-auto w-full max-w-[1000px]', className)}>{children}</div>
         </div>
-      </div>
+      </main>
+
+      {footer ? (
+        <footer className="flex min-h-[56px] items-center gap-3 border-t border-line bg-panel px-6 py-2.5">
+          <div className="mx-auto flex w-full max-w-[1000px] items-center gap-3">{footer}</div>
+        </footer>
+      ) : (
+        <div />
+      )}
     </div>
   );
 }

@@ -91,12 +91,69 @@ const holds = (what, cond, why) => {
       '  fetched this run — the reverse of the same lie.'
   );
 
+  // **This assertion changed with #154, and what it said before is stated because it guarded
+  // behaviour the same change rewrote** (ADR 0022: a check may not be pointed at the change by the
+  // change). It used to read:
+  //
+  //     /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step)
+  //
+  // — the gate #111 cycle B built, which also waits for the summary model. The prototype's own gate
+  // is `finished = () => T.done >= T.mb` over the **transcription** file, and its footer reads
+  // "Continue is available when it has arrived". The old assertion encoded a decision the approved
+  // design does not make, and on screen it produced the contradiction the product owner
+  // photographed: "You can continue while this finishes" above a button disabled for the summary.
   holds(
-    'the download screen keeps Continue off until every file has arrived',
-    /disabled=\{!parakeetDownloaded \|\| waitingForSummary/.test(step),
+    'the download screen gates Continue on the transcription model, as the prototype does',
+    /disabled=\{!finished \|\| isCompleting\}/.test(step) &&
+      /const finished = parakeetDownloaded \|\|/.test(step) &&
+      !/waitingForSummary/.test(step),
     'A person who continues without the transcription model reaches a recorder that cannot\n' +
-      '  transcribe. The prototype disables the button; so does this screen, and this check is what\n' +
-      '  keeps the two from drifting apart.'
+      '  transcribe, so the gate stays — on that file. Waiting for the summariser as well is what\n' +
+      '  the approved design removed, and the third clause is what stops it coming back.'
+  );
+}
+
+// --- the summariser offers the seven the prototype offers, in its order ------------------------------
+//
+// The heading counts them out loud -- "Seven choices" -- so a sixth or an eighth makes the screen
+// contradict itself. Read from the prototype's own `P = [...]` rather than retyped here, so a change
+// there is a stale check rather than a silent disagreement.
+{
+  const p = proto('onboarding-summariser');
+  const wanted = [...p.matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(
+    wanted.length, 7,
+    `the approved summariser lists ${wanted.length} providers; this check assumes the seven its ` +
+      'heading counts'
+  );
+
+  const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
+  const got = [...step.matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
+  holds(
+    'the summariser offers the approved seven, in the approved order',
+    JSON.stringify(got) === JSON.stringify(wanted),
+    `The prototype's order is what a person reads down: what runs here first, what leaves second.\n` +
+      `  prototype: ${wanted.join(', ')}\n  screen:    ${got.join(', ')}`
+  );
+}
+
+// --- what a remote summariser costs: nothing ---------------------------------------------------------
+//
+// The provider must gate the local download. Held here as well as in Stage 2's `remote` mode,
+// because that mode needs a built AppImage and twenty minutes, and this regression is one line:
+// before #155 `summaryProvider` appeared four times in `OnboardingContext.tsx` -- the type, the
+// state, the write into the saved status, the export -- and in no condition at all, so choosing
+// Claude fetched 2709.8 MB of Gemma.
+{
+  const ctx = impl('src/contexts/OnboardingContext.tsx');
+  const code = ctx.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  holds(
+    'only a local summariser has weights to fetch, and the download is gated on that',
+    /shouldStartSummary\s*=[\s\S]{0,200}?summaryNeedsDownload/.test(code) &&
+      /summaryNeedsDownload\s*=\s*summaryProvider === 'builtin-ai'/.test(code),
+    'A cloud provider needs a key, not 3651 MiB of weights. Ollama uses a model already on the\n' +
+      '  machine. Without the provider in this condition all six behave identically, and the person\n' +
+      '  who chose Claude waits for a download they will never use.'
   );
 }
 
@@ -112,7 +169,10 @@ const holds = (what, cond, why) => {
   const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
   holds(
     'the summariser scrolls the chosen option, not the field',
-    /scrollTop\s*=\s*Math\.max\(0,\s*option\.offsetTop/.test(step),
+    // The identifier changed with #154 (`option` -> `opt`, matching the prototype's own `o`); the
+    // decision did not, and it is the decision this pins: the chosen row goes to the top of the
+    // scrolling region, by `offsetTop`, not by a minimum-distance scroll.
+    /scrollTop\s*=\s*Math\.max\(0,\s*\w+\.offsetTop/.test(step),
     '`scrollIntoView` on the field scrolls the minimum distance, which on a 520px window leaves the\n' +
       '  option itself out of view — the person cannot see what they chose.'
   );

@@ -21,11 +21,20 @@
 # `ok` has told us nothing about what reached the disk; that rule is in .claude/rules/testing.md and
 # this pass is one of the places it was not being applied.
 #
-#   scripts/stage2-onboarding-check.sh <AppImage> [chooses|keeps] [profile-dir]
+#   scripts/stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote] [profile-dir]
 #
 #     chooses  the chosen model's file must appear                      (default)
 #     keeps    a different model is already on disk; the chosen one must still arrive,
 #              and the one already there must not be fetched again
+#     remote   a cloud summariser is chosen; `models/summary` must stay EMPTY while the
+#              transcription model still arrives
+#
+# **`remote` exists because the other two never varied the summariser.** Both leave it on its
+# default, which is `builtin-ai`, so for eight days this pass walked the flow with the one provider
+# whose behaviour was correct. A person who chose Claude got 2709.8 MB of Gemma they will never use,
+# and every check here was green throughout (#155). An absence is the oracle, so it carries a
+# positive sentinel: the transcription model must arrive in the same run, or "nothing downloaded"
+# is indistinguishable from "nothing ran".
 set -euo pipefail
 
 APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps] [profile-dir]}"
@@ -47,7 +56,7 @@ PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps) ;; *) die "mode must be chooses or keeps, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote) ;; *) die "mode must be chooses, keeps or remote, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -61,7 +70,11 @@ mkdir -p "$APPDATA/models"
 
 # The summary model only. Deliberately no onboarding marker: seeding it is what blinds the other two
 # passes to these very screens.
-if [ -d "$CACHE/models/summary" ]; then
+# `remote` seeds no summary model at all: a cloud provider needs none, so an empty `models/summary`
+# is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
+# "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
+# which is the same class of mistake as an empty one that is not a pass.
+if [ "$MODE" != remote ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   say "seeded the summary model only; no onboarding marker, no transcription model"
@@ -166,8 +179,25 @@ await "document.querySelector('input[name=\\\"transcription-model\\\"]:checked')
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the model screen"
 click "$CONT"
 
-# --- the summariser screen, left on its default (its model is seeded, so nothing is fetched) ------
-await "document.body.innerText.includes('Choose a summariser')" "the summariser screen" 30
+# --- the summariser screen ------------------------------------------------------------------------
+#
+# `chooses` and `keeps` leave it on its default, which is `builtin-ai`, and its model is seeded, so
+# nothing is fetched for it. `remote` picks a cloud provider and types a key, which is the state
+# neither of the others has ever entered.
+await "document.body.innerText.includes('Where should the summary be written')" "the summariser screen" 30
+if [ "$MODE" = remote ]; then
+  OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
+  [ -n "$OPT" ] || die "no Claude option on the summariser screen"
+  click "$OPT"
+  await "document.querySelector('input[type=password]') !== null" "Claude's key field" 10
+  KEY=$(find_el '{"using":"css selector","value":"input[type=password]"}')
+  [ -n "$KEY" ] || die "no key field after choosing Claude"
+  curl -s -m 20 -X POST "$BASE/element/$KEY/value" -H 'Content-Type: application/json' \
+    -d '{"text":"sk-not-a-real-key-for-a-gate-run"}' > /dev/null
+  # A typed value is not a stored one: assert the field holds it before moving on.
+  await "(document.querySelector('input[type=password]')||{}).value.length > 10" "the key to be typed" 10
+  say "chose Claude and typed a key — nothing local should be fetched for the summariser"
+fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
 click "$CONT"
 say "walked to the download screen"
@@ -201,6 +231,24 @@ if [ -z "$FOUND" ]; then
   die "first run finished without fetching $CHOSEN_ID, the model that was chosen"
 fi
 say "the chosen model arrived whole: $CHOSEN_FILE ($(stat -c %s "$APPDATA/models/$CHOSEN_FILE") bytes, ${CHOSEN_MB} MB advertised)"
+
+# --- remote: the summariser fetched nothing, and the sentinel says the run was real ---------------
+#
+# An absence proves nothing on its own. The transcription file above is the sentinel: it arrived in
+# this same run, through this same flow, so an empty `models/summary` is a decision rather than a
+# process that never started.
+if [ "$MODE" = remote ]; then
+  SUMMARY_DIR="$APPDATA/models/summary"
+  BYTES=$( [ -d "$SUMMARY_DIR" ] && du -sb "$SUMMARY_DIR" | cut -f1 || echo 0 )
+  say "models/summary holds ${BYTES} bytes after choosing a cloud summariser (nothing was seeded)"
+  if [ "${BYTES:-0}" -gt 1000000 ]; then
+    ls -la "$SUMMARY_DIR" | sed 's/^/    /'
+    die "a cloud summariser fetched ${BYTES} bytes of a local model; it needs a key, not weights"
+  fi
+  say "PASS (remote): the chosen model arrived and the cloud summariser downloaded nothing"
+  PASSED=1
+  exit 0
+fi
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then

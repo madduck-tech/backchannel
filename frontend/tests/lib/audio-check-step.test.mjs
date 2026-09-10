@@ -34,7 +34,10 @@ async function render({ result, fail } = {}) {
     ...boundaryStubs().modules,
     '@/contexts/OnboardingContext': { useOnboarding: () => ({ goNext: () => {} }) },
     '../OnboardingContainer': {
-      OnboardingContainer: ({ children }) => React.createElement('div', null, children),
+      // Renders the footer too: #154 moved the primary control into it, and a children-only
+      // passthrough hides it from every assertion in this file.
+      OnboardingContainer: ({ children, footer }) =>
+        React.createElement('div', null, children, React.createElement('footer', null, footer)),
     },
     '@tauri-apps/api/core': {
       invoke: async (cmd, args) => {

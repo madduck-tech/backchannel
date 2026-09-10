@@ -1,13 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Mic, Sparkles, Check, Loader2, Download } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { toast } from 'sonner';
-import { motion, AnimatePresence } from 'framer-motion';
-import { getSummaryModelSizeLabel, getSummaryModelSizeMb } from '@/lib/onboarding-summary-model';
+import { getSummaryModelSizeMb } from '@/lib/onboarding-summary-model';
 
 import { transcribeModelSizeMb } from '@/lib/onboarding-transcribe-models';
 
@@ -71,9 +70,6 @@ export function DownloadProgressStep() {
   });
 
   // The size shown beside the name. `null` for a model outside the recommended four -- there is no
-  // frontend copy of all 85 rows, and the download's first progress event supplies the real total.
-  const chosenSizeMb = transcribeModelSizeMb(selectedTranscribeModel);
-  const transcribeSizeLabel = chosenSizeMb === null ? 'size from the download' : `~${chosenSizeMb} MB`;
 
   const [isCompleting, setIsCompleting] = useState(false);
   const parakeetDownloadStartedRef = useRef(false);
@@ -389,24 +385,20 @@ export function DownloadProgressStep() {
     // Once. Re-running on every change of the flag it sets would loop.
   }, []);
 
-  // A cloud summariser downloads nothing, so there is nothing to wait for on its account. Only a
-  // local one adds 3651 MiB.
-  const summaryIsLocal = summaryProvider === 'builtin-ai';
-  const waitingForSummary = summaryIsLocal && !summaryModelDownloaded;
-
-  // What the control is waiting for, in words. `null` when it is not waiting.
+  // **This overrides #111 cycle B, deliberately, and the reason is written here rather than lost.**
   //
-  // It used to read `!parakeetDownloaded` alone, so Continue unblocked the moment the 706 MiB
-  // transcription model finished while 3651 MiB of summary model was still arriving -- and the user
-  // walked into an application whose summariser was not there yet. #111 cycle B: wait for
-  // everything the two choices selected, and nothing they did not.
-  const waitingLabel = isCompleting
-    ? 'Finishing setup…'
-    : !parakeetDownloaded
-      ? 'Waiting for the transcription model…'
-      : waitingForSummary
-        ? 'Waiting for the summary model…'
-        : null;
+  // That cycle made Continue wait for the summary model too, so nobody walked into an application
+  // whose summariser had not arrived. The concern is real. What it produced on screen was a
+  // contradiction the product owner photographed on 2026-09-09: "You can continue while this
+  // finishes" over a button disabled with "Waiting for the summary model", and the toast that
+  // explains the first sentence -- "You can start using the app. Recording will be available once
+  // speech recognition is ready" -- sitting in a branch the disabled button could never reach.
+  //
+  // Three sites, two answers. The approved prototype settles it: `finished = () => T.done >= T.mb`
+  // over the **transcription** file, and a footer reading "Continue is available when it has
+  // arrived". Recording needs speech recognition; the summariser is wanted when a meeting ends, and
+  // its download continues in the background, which is what the toast already promised. After #155 a
+  // remote summariser fetches nothing at all, so this only ever concerned `builtin-ai`.
 
   const handleContinue = async () => {
     // Verify actual model availability (catches state drift)
@@ -467,182 +459,169 @@ export function DownloadProgressStep() {
     }
   };
 
-  const renderDownloadCard = (
-    title: string,
-    icon: React.ReactNode,
+  /**
+   * One row per file, which is what `a-two-rows` is. (#154)
+   *
+   * `design/prototypes/onboarding-download.html`, approved 2026-09-08. What it decides, read out of
+   * it rather than remembered:
+   *
+   *   - a row is a name, a state, a line saying why the file is wanted, and either a bar or a
+   *     sentence -- never both;
+   *   - a file already here reads `on this device · N MB` and gets
+   *     "Already here from an earlier install. Nothing to fetch." in place of the bar;
+   *   - one being fetched reads `N of M MB`;
+   *   - the footer says how much is left and that Continue waits for it.
+   */
+  const row = (
+    name: string,
+    why: string,
     state: DownloadState,
-    modelSize: string,
-    sizeUnit = 'MB'
+    unit: string,
+    key: string
   ) => {
-    // Present before this run started: complete, and nothing crossed the wire to make it so.
     const alreadyHere = state.status === 'completed' && !state.fetched;
+    const arrived = state.status === 'completed';
     return (
-    <div className="bg-elevated rounded-xl border border-line p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-sunken flex items-center justify-center">
-            {icon}
-          </div>
-          <div>
-            <h3 className="font-medium text-ink">{title}</h3>
-            <p className="text-sm text-ink-muted">{modelSize}</p>
-          </div>
+      <section
+        key={key}
+        aria-label={name}
+        className="border-b border-line py-4 last:border-b-0"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <span className="font-mono text-sm text-ink">{name}</span>
+          <span className="text-sm text-ink-faint">
+            {arrived ? (
+              <>
+                <b className="font-medium text-ink">on this device</b> ·{' '}
+                {state.totalMb.toFixed(0)} {unit}
+              </>
+            ) : state.status === 'error' ? (
+              <span className="text-danger-ink">Failed</span>
+            ) : (
+              `${state.downloadedMb.toFixed(0)} of ${state.totalMb.toFixed(0)} ${unit}`
+            )}
+          </span>
         </div>
-        <div>
-          {state.status === 'waiting' && (
-            <span className="text-sm text-ink-muted">Waiting...</span>
-          )}
-          {state.status === 'downloading' && (
-            <Loader2 className="w-5 h-5 text-ink animate-spin" />
-          )}
-          {state.status === 'completed' && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-ink-muted">On this device</span>
-              <div className="w-6 h-6 rounded-full bg-brand-soft flex items-center justify-center">
-                <Check className="w-4 h-4 text-brand" />
-              </div>
-            </div>
-          )}
-          {state.status === 'error' && (
-            <span className="text-sm text-danger-ink">Failed</span>
-          )}
-        </div>
-      </div>
+        <p className="mt-1 text-sm leading-[19px] text-ink-faint">{why}</p>
 
-      {/* A file that was already here is stated, not drawn.
-          The product owner photographed this screen reading `0.0 MB / 705.3 MB` over a bar for a
-          model that was already on disk: nothing was being fetched, so there were no bytes to count
-          and both numbers were meaningless. The approved prototype's present row is a sentence. */}
-      {alreadyHere && (
-        <p className="text-sm text-ink-muted">
-          Already here from an earlier install. Nothing to fetch.
-        </p>
-      )}
-
-      {/* Progress Bar */}
-      {!alreadyHere && (state.status === 'downloading' || state.status === 'completed') && (
-        <div className="space-y-2">
-          <div className="w-full h-2 bg-ink/10 rounded-full overflow-hidden">
+        {alreadyHere ? (
+          <p className="mt-2.5 flex items-center gap-2 text-sm text-ink">
+            <Check className="h-4 w-4 shrink-0 text-brand" aria-hidden />
+            Already here from an earlier install. Nothing to fetch.
+          </p>
+        ) : (
+          <div
+            role="progressbar"
+            aria-label={name}
+            aria-valuemin={0}
+            aria-valuemax={Math.round(state.totalMb)}
+            aria-valuenow={Math.round(state.downloadedMb)}
+            className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-ink/10"
+          >
             <div
-              className="h-full bg-brand rounded-full transition-all duration-300"
+              className="h-full rounded-full bg-brand transition-all duration-300"
               style={{ width: `${state.progress}%` }}
             />
           </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-ink-muted">
-              {state.status === 'completed'
-                ? `${state.totalMb.toFixed(1)} ${sizeUnit} fetched`
-                : `${state.downloadedMb.toFixed(1)} of ${state.totalMb.toFixed(1)} ${sizeUnit}`}
-            </span>
-            <div className="flex items-center gap-2">
-              {state.speedMbps > 0 && (
-                <span className="text-ink-muted">
-                  {state.speedMbps.toFixed(1)} {sizeUnit}/s
-                </span>
-              )}
-              <span className="font-semibold text-ink">
-                {Math.round(state.progress)}%
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
+        )}
 
-      {state.status === 'error' && state.error && (
-        <div className="mt-2 p-3 bg-danger-soft border border-danger/40 rounded-md">
-          <p className="text-sm text-danger-ink font-medium">Download Error</p>
-          <p className="text-xs text-danger-ink mt-1">{state.error}</p>
-          {(title === 'Transcription Engine' || title === 'Summary Engine') && (
+        {state.status === 'error' && state.error && (
+          <div className="mt-2.5 rounded-md border border-danger/40 bg-danger-soft p-3">
+            <p className="text-xs text-danger-ink">{state.error}</p>
             <button
-              onClick={title === 'Transcription Engine' ? handleRetryDownload : handleRetrySummaryDownload}
-              className="mt-3 w-full h-9 px-4 bg-ink hover:bg-ink/90 text-canvas text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2"
+              onClick={key === 'transcription' ? handleRetryDownload : handleRetrySummaryDownload}
+              className="mt-2 h-8 rounded-md bg-ink px-3 text-sm font-medium text-canvas"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Try Again
+              Try again
             </button>
-          )}
-        </div>
-      )}
-    </div>
+          </div>
+        )}
+      </section>
     );
   };
 
+  // A remote summariser fetches nothing, so it gets no row. Until #155 the screen showed one and the
+  // application downloaded 2.7 GB behind it for a person who had chosen Claude.
+  const summaryIsFetched = summaryProvider === 'builtin-ai';
+  const rows = [
+    row(
+      selectedTranscribeModel,
+      'Turns speech into text on this device. Chosen on the previous step.',
+      parakeetState,
+      'MB',
+      'transcription'
+    ),
+    summaryIsFetched
+      ? row(
+          selectedSummaryModel || recommendedSummaryModel,
+          'Writes the summary when a meeting ends, on this device.',
+          summaryState,
+          'MiB',
+          'summary'
+        )
+      : null,
+  ].filter(Boolean);
+
+  /**
+   * Continue waits for the **transcription** model, and only for it.
+   *
+   * The prototype's gate is `finished = () => T.done >= T.mb` over the transcription file, and its
+   * readout says "Continue is available when it has arrived". Recording needs speech recognition;
+   * the summariser is wanted when a meeting ends. Before this the screen said "You can continue
+   * while this finishes" over a button disabled with "Waiting for the summary model", and the toast
+   * that explains the first sentence sat in a branch the disabled button could never reach. #155
+   */
+  const transcriptionLeftMb = Math.max(0, parakeetState.totalMb - parakeetState.downloadedMb);
+  // Either the context says the model is on disk, or this run fetched it. **Not** the row's status
+  // alone: `verifyModelPresence` sets that to `completed` the moment the backend reports a model,
+  // and the repair it performs is `setParakeetDownloaded(true)` -- so the context is what carries the
+  // answer, and reading past it would let a person through on a status nothing had confirmed.
+  const finished = parakeetDownloaded || (parakeetState.status === 'completed' && parakeetState.fetched);
+
   return (
     <OnboardingContainer
-      title="Getting things ready"
-      description="You can start using Conversationaly after downloading the Transcription Engine."
+      title={rows.length > 1 ? 'Getting the two files you chose' : 'Getting the file you chose'}
+      description={
+        finished
+          ? 'Everything you chose is on this device.'
+          : 'Continue when the transcription model is on this device.'
+      }
       step={3}
       totalSteps={isMac ? 4 : 3}
-    >
-      <div className="flex flex-col items-center space-y-6">
-        {/* Download Cards */}
-        <div className="w-full max-w-lg space-y-4">
-          {renderDownloadCard(
-            'Transcription Engine',
-            <Mic className="w-5 h-5 text-ink-muted" />,
-            parakeetState,
-            transcribeSizeLabel
-          )}
-
-          {renderDownloadCard(
-            'Summary Engine',
-            <Sparkles className="w-5 h-5 text-ink-muted" />,
-            summaryState,
-            getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel),
-            'MiB'
-          )}
-        </div>
-
-        {/* Info Message - Only show when Parakeet is downloaded */}
-        <AnimatePresence>
-          {parakeetDownloaded && !summaryModelDownloaded && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
-              className="w-full max-w-lg bg-sunken rounded-lg p-4 text-sm text-ink"
-            >
-              <div className="flex items-start gap-3">
-                <Download className="w-5 h-5 text-ink-muted flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium">You can continue while this finishes</p>
-                  <p className="text-ink mt-1">
-                    Download will continue in the background.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Continue.
-            It spends most of its time on screen disabled, and while disabled it used to render a
-            bare spinner: no text, no label, no title. So for most of the first run the only control
-            on the first screen of the application had **no accessible name at all**. It says what it
-            is waiting for now, in words, to everyone. #92. */}
-        <div className="w-full max-w-xs">
+      footer={
+        <>
+          <span className="min-w-0 flex-1 text-xs leading-[17px] text-ink-faint">
+            {finished ? (
+              'Everything you chose is on this device.'
+            ) : (
+              <>
+                <b className="font-medium text-ink">{transcriptionLeftMb.toFixed(0)} MB</b> left to
+                fetch. Continue is available when the transcription model has arrived.
+              </>
+            )}
+          </span>
+          {/* The visible word stays "Continue" and the footer's readout carries the reason, which is
+              what `a-two-rows` does. The accessible name says what it is waiting *for*: a disabled
+              control that reads only "Continue" tells a screen reader nothing about why, and this is
+              the state the button is in for most of the first run. #92. */}
           <Button
             onClick={handleContinue}
-            disabled={!parakeetDownloaded || waitingForSummary || isCompleting}
-            aria-label={waitingLabel ?? 'Continue'}
-            title={waitingLabel ?? undefined}
-            className="w-full h-11 bg-ink hover:bg-ink/90 text-canvas disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!finished || isCompleting}
+            aria-label={
+              isCompleting
+                ? 'Finishing setup…'
+                : finished
+                  ? 'Continue'
+                  : 'Waiting for the transcription model…'
+            }
+            className="h-8 shrink-0 px-4"
           >
-            {waitingLabel ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
-                {waitingLabel}
-              </>
-            ) : (
-              'Continue'
-            )}
+            {isCompleting ? 'Finishing…' : 'Continue'}
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
+      <div className="mt-5">{rows}</div>
     </OnboardingContainer>
   );
 }

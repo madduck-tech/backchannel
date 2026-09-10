@@ -77,7 +77,14 @@ function harness({
     '@tauri-apps/api/core': stubs.core,
     '@tauri-apps/api/event': stubs.event,
     '@/contexts/OnboardingContext': { useOnboarding: () => onboarding },
-    '../OnboardingContainer': { OnboardingContainer: ({ children }) => children },
+    // The stub renders the **footer** as well as the children, because #154 moved the primary
+    // control there. A children-only passthrough silently dropped the one thing this file asserts
+    // about -- it looked like "the screen offers no way forward" when the screen offers one and the
+    // stub was not showing it.
+    '../OnboardingContainer': {
+      OnboardingContainer: ({ children, footer }) =>
+        React.createElement('div', null, children, React.createElement('footer', null, footer)),
+    },
     'framer-motion': { motion: motionProxy, AnimatePresence: ({ children }) => children },
   };
   return { seen, stubs, overrides };
@@ -116,13 +123,12 @@ const clear = async () => {
  * **no accessible name for most of the time it was on screen**. #92 fixed that — assertion 5 below
  * holds it — and the structural lookup stays, because the button's name now changes with its state
  * and finding it by text would make the test depend on which state it is in.
+ *
+ * The address changed with #154 and the rule did not: it used to key on `max-w-xs`, a Tailwind class
+ * of the layout before the approved shell, and the shell puts the control in a persistent `<footer>`.
+ * Still structural, still independent of what the button currently says.
  */
-const continueButton = (container) => {
-  const wrap = [...container.querySelectorAll('div')].find((d) =>
-    (d.className || '').includes('max-w-xs') && d.querySelector('button')
-  );
-  return wrap?.querySelector('button');
-};
+const continueButton = (container) => container.querySelector('footer button');
 const click = async (el) => {
   await act(async () => { el.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
 };
@@ -245,10 +251,18 @@ console.log(
     /transcription model/i,
     `and the name must say what it is waiting for, not merely that it is waiting; got ${JSON.stringify(name)}`
   );
-  assert.ok(
-    waiting.container.textContent.includes('Waiting for the transcription model'),
-    'the words are on screen too, not only in the accessibility tree — a sighted user watching a ' +
-      'spinner is owed the same sentence'
+  // **This assertion's wording changed with #154; its substance did not.** It used to require the
+  // literal string "Waiting for the transcription model", which was the label #92 shipped. The
+  // approved prototype puts the reason in the footer's readout instead — "N MB left to fetch.
+  // Continue is available when the transcription model has arrived." — so pinning the old phrase
+  // would have made this check enforce copy the product owner replaced, which is what ADR 0023
+  // forbids. What #92 was about is kept: whatever the control is waiting for, a sighted user is
+  // told, in words, on screen.
+  assert.match(
+    waiting.container.textContent,
+    /transcription model/i,
+    'the reason is on screen too, not only in the accessibility tree — a sighted user watching a ' +
+      'disabled control is owed the same subject the accessible name names'
   );
 
   await clear();
