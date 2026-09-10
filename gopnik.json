@@ -33,6 +33,7 @@
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-ui-check.sh \"$APP\"",
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-onboarding-check.sh \"$APP\" chooses",
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-onboarding-check.sh \"$APP\" remote",
+      "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-onboarding-check.sh \"$APP\" present",
       "scripts/audio-harness.sh up || { echo 'audio harness could not come up: the audio half of this gate cannot run, and a verdict must say so rather than skip it'; exit 1; }",
       "umask 077; A2=$(mktemp -d /tmp/backchannel-stage2-audio.XXXXXX) && APP=$(./scripts/stage2-locate-app.sh) && scripts/stage2-record-check.sh \"$APP\" \"$A2\" 'ask not' 'country'; RC=$?; APID=$(cat \"$A2/pid\" 2>/dev/null); [ -n \"$APID\" ] && { kill -TERM -\"$APID\" 2>/dev/null || kill -TERM \"$APID\" 2>/dev/null; }; sleep 4; [ -n \"$APID\" ] && kill -KILL -\"$APID\" 2>/dev/null; case \"$A2\" in /tmp/backchannel-stage2-audio.*) rm -rf -- \"$A2\" ;; esac; scripts/audio-harness.sh down; exit $RC",
       "APP=$(./scripts/stage2-locate-app.sh) && scripts/stage2-two-channel-check.sh \"$APP\" normal",

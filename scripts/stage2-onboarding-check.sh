@@ -340,26 +340,10 @@ case "$FOOTV" in
   *) die "$FOOTV -- $FOOT" ;;
 esac
 
-# A file already on disk is stated in words and counts no bytes: the product owner photographed
-# `0.0 MB / 705.3 MB` under a full bar for a model that was already there.
-#
-# The **summary** model is the one to read, not the transcription one: `chooses` and `keeps` seed it
-# and fetch nothing for it, which is exactly the state. `keeps`'s spare transcription model is a
-# different thing — the person chose another, so this screen rightly gives it no row at all, and a
-# first version of this check asserted on a row that should not exist.
-if [ "$MODE" != remote ]; then
-  PRESENT_ROW=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/Writes the summary/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW\"; })()"')
-  say "the row for the seeded summary model reads: $PRESENT_ROW"
-  if [ "$PRESENT_ROW" = "NO ROW" ]; then
-    say "no summary row — the seed did not take, so this assertion has nothing to stand on"
-  else
-    printf '%s' "$PRESENT_ROW" | grep -q 'Already here from an earlier install' \
-      || die "a file already on disk is not stated in words: $PRESENT_ROW"
-    printf '%s' "$PRESENT_ROW" | grep -qE '[0-9]+(\.[0-9]+)? *(of|/) *[0-9]+' \
-      && die "a file already on disk is counting bytes nothing fetched: $PRESENT_ROW"
-    say "and it counts no bytes, because nothing was fetched for it"
-  fi
-fi
+# The presence row is asserted by the `present` mode, not here. `chooses` and `keeps` seed only a
+# **partial** summary model — 448 MB of 3651 MiB — so its row is correctly mid-download, and a first
+# version of this check called that a defect. The state where a file really is already here has to be
+# entered deliberately, which is what `present` is for.
 
 # --- the step after this one is reachable ---------------------------------------------------------
 #
