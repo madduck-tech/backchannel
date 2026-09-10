@@ -1,10 +1,16 @@
 // Components no page can reach.
 //
-// Reachability, not "has an importer". `CustomDialog.tsx` is imported by nothing, and
-// `SettingTabs.tsx` -- which it renders -- is imported by exactly one file: `CustomDialog`
-// itself. A check asking "does anything import this" passes SettingTabs and misses the
-// interior of a dead subtree, which is the middle of the very chain #17 cites as evidence.
-// So: reachable by import, transitively, from a Next entry file.
+// Reachability, not "has an importer". `CustomDialog.tsx` is imported by nothing, and until `91e901d`
+// it rendered `SettingTabs.tsx`, which was then imported by exactly one file: `CustomDialog` itself.
+// A check asking "does anything import this" passed SettingTabs and missed the interior of a dead
+// subtree, which is the middle of the very chain #17 cites as evidence. So: reachable by import,
+// transitively, from a Next entry file.
+//
+// The chain is gone -- #147 removed the unused import while switching `no-unused-vars` back on, so
+// today they are two separately dead files rather than a subtree, and this paragraph would read as a
+// live example of something no longer in the tree. Kept in the past tense because it is the reason
+// the rule is transitive, and corrected because a rationale presented as a current fact is a stale
+// excuse (#160).
 //
 // `src/components/ui/**` is excluded by rule. `components.json` vendors shadcn there, so
 // those files are generated rather than written here, and a vendored primitive nobody has
@@ -17,7 +23,8 @@ import assert from 'node:assert/strict';
 import { sourceFiles, rel, reachableFromEntries, entryFiles, assertSetEquals, STORY_FILES } from './reachability-shared.mjs';
 
 const UNREACHABLE = new Set([
-  // Dead subtree: nothing imports CustomDialog, and SettingTabs dies with it. The components
+  // Both dead: nothing imports CustomDialog, and nothing imports SettingTabs either since #147 took
+  // the unused import out of it. Until then it was one subtree. The components
   // SettingTabs renders -- RecordingSettings, ModelSettingsModal -- survive through other
   // importers, which is the point: this is a dead second entrance to live components.
   'src/components/CustomDialog.tsx',

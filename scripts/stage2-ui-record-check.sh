@@ -158,7 +158,11 @@ v=json.load(sys.stdin).get("value")
 # "no such element" -- non-empty, so every `[ -n "$X" ] || die` guard silently passes and the
 # next click goes to a nonsense id. Found when this harness died with no message at all.
 print(next((x for k,x in v.items() if k.startswith("element-")), "") if isinstance(v,dict) else "")'; }
-click() { curl -s -m 20 -X POST "$BASE/element/$1/click" -H 'Content-Type: application/json' -d '{}' >/dev/null; }
+# `click` comes from the shared helper: it dies naming a refusal the driver reported, after a bounded
+# wait for the transient one Radix produces on every Select close. Four passes each owned a
+# `curl ... >/dev/null` until #160, and so four passes could not tell a click that landed from one
+# that did not.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/webdriver.sh"
 by_text() { find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$1\\\"]\"}"; }
 await() { local want="$1" what="$2" secs="${3:-20}" n=0
   while [ "$n" -lt $((secs * 2)) ]; do
@@ -171,18 +175,18 @@ await "document.querySelectorAll('button').length > 0" 'the application to rende
 
 # --- pick the device the way a person does ----------------------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button"
-click "$S"
+click "$S" "the Settings control"
 await "document.querySelectorAll('[role=tab]').length > 0" 'the settings screen'
 T=$(by_text "Recordings"); [ -n "$T" ] || die "no Recordings tab"
-click "$T"
+click "$T" "the Recordings tab"
 await "[...document.querySelectorAll('[role=tab]')].some(t=>t.textContent.trim()==='Recordings'&&t.getAttribute('data-state')==='active')" \
       'the Recordings tab to become active'
 TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}'); [ -n "$TRIG" ] || die "no system-audio picker"
-click "$TRIG"
+click "$TRIG" "the system-audio picker"
 await "document.querySelectorAll('[role=option]').length > 0" 'the dropdown to open'
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role=\\\"option\\\"][normalize-space()=\\\"$PICK\\\"]\"}")
 [ -n "$OPT" ] || die "the dropdown does not offer '$PICK'; options: $(js '"return [...document.querySelectorAll(\"[role=option]\")].map(o=>o.textContent.trim())"')"
-click "$OPT"
+click "$OPT" "the device the pass chose"
 for _ in $(seq 1 30); do
   STORED=$(python3 -c 'import json,sys
 try:
@@ -197,11 +201,23 @@ say "picked through the UI, stored as '$STORED'"
 # The back control is an icon button: aria-label, no text, so by_text cannot see it.
 B=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Back\"]"}')
 [ -n "$B" ] || die "no Back control on the settings screen"
-click "$B"
-await "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
-      'the main screen with a Start recording button'
+click "$B" "the Back control on the settings screen"
+# A wait must name something **false in the state being left**. `Start recording` is in the sidebar,
+# which the settings screen does not cover, so this condition was true before the Back click and after
+# it -- and on 2026-09-10 that let this pass sit on the settings screen for the whole recording window
+# while reporting that the application never opened a microphone (#160). `[role=tab]` is rendered by
+# `src/app/settings/page.tsx:88` and by nothing else reachable, so its absence is the settings screen
+# being gone. (`components/SettingTabs.tsx` also renders tabs -- Transcript / Ai Summary / Preferences
+# / About -- and is imported by nothing in `src/`.)
+await "document.querySelectorAll('[role=tab]').length === 0 && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
+      'the settings screen to close and the main screen to offer Start recording'
 R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording button"
-click "$R"
+click "$R" "Start recording"
+# A click that landed is a Stop control on screen. Everything below this line reads the application's
+# own log, and without this assertion every way of failing to press the button arrives at the same
+# sentence about the application (#160). Now the log is read only after the application was asked.
+await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+      'the recording to start' 30
 say "recording"
 
 # The application's own log must name the device that was clicked: a transcript cannot say
@@ -231,7 +247,7 @@ fi
 # very defect this check is for. The stop control is an icon button with an aria-label.
 STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
 if [ -n "$STOP" ]; then
-  click "$STOP"
+  click "$STOP" "Stop recording"
   say "stopped; waiting for the audio to be finalised"
   for _ in $(seq 1 60); do
     [ -n "$(find "$APPDATA" "$PROFILE/rec" -type f \( -name "*.mp4" -o -name "*.wav" -o -name "*.m4a" \) 2>/dev/null | head -1)" ] && break

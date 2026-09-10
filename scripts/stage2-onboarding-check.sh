@@ -28,6 +28,25 @@
 #              and the one already there must not be fetched again
 #     remote   a cloud summariser is chosen; `models/summary` must stay EMPTY while the
 #              transcription model still arrives
+#     present  the chosen model is already on disk; the screen must say so in words and count no
+#              bytes, and Continue must be available at once
+#     narrow   the whole walk at 720x520 -- the smallest window tauri.conf.json permits -- with the
+#              catalogue opened and a row clicked. Three of the four defects #157 measured as caught
+#              by nothing were missed because every other mode walks one path at one size.
+#
+# **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
+# "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
+#
+#     mode      varies                        leaves on the default
+#     chooses   the transcription model        summariser (builtin-ai), window size, permissions
+#     keeps     the transcription model,       summariser (builtin-ai), window size, permissions
+#               plus one already on disk
+#     remote    the summariser (claude)        transcription model (still moonshine-tiny), window
+#                                              size, permissions
+#
+# None of the three varies the window, so nothing here would see a control that only fails at
+# `minHeight: 520` -- `storybook-summariser-reveal.test.mjs` is what covers that, in a browser.
+# None reaches the macOS permissions step, which ADR 0005 puts out of reach of this machine entirely.
 #
 # **`remote` exists because the other two never varied the summariser.** Both leave it on its
 # default, which is `builtin-ai`, so for eight days this pass walked the flow with the one provider
@@ -56,7 +75,7 @@ PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote) ;; *) die "mode must be chooses, keeps or remote, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow) ;; *) die "mode must be chooses, keeps, remote, present or narrow, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -77,7 +96,10 @@ mkdir -p "$APPDATA/models"
 if [ "$MODE" != remote ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
-  say "seeded the summary model only; no onboarding marker, no transcription model"
+  # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
+  # model -- so first run fetches the rest every time. Measured 2026-09-10, after this pass had
+  # claimed otherwise in its own output for as long as the cache had been incomplete.
+  say "seeded a partial summary model ($(du -sh "$APPDATA/models/summary" | cut -f1) of 3651 MiB); the rest is fetched"
 else
   say "no summary model in $CACHE — first run will fetch one, and this pass will take much longer"
 fi
@@ -89,7 +111,15 @@ if [ "$MODE" = keeps ]; then
   say "placed $PRESENT_FILE on disk first: $PRESENT_BEFORE"
 fi
 
-[ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
+if [ "$MODE" = present ]; then
+  # The state the product owner photographed: a file already there, drawn as a bar over
+  # `0.0 MB / 705.3 MB`. Seeding the chosen model is the only way to enter it deliberately.
+  [ -f "$CACHE/models/$CHOSEN_FILE" ] || die "mode 'present' needs $CHOSEN_FILE in $CACHE/models"
+  cp -a "$CACHE/models/$CHOSEN_FILE" "$APPDATA/models/$CHOSEN_FILE"
+  say "placed the model the person will choose on disk first: $CHOSEN_FILE"
+else
+  [ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
+fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
@@ -151,7 +181,11 @@ find_el() { curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/
   | python3 -c 'import json,sys
 v=json.load(sys.stdin).get("value")
 print(list(v.values())[0] if isinstance(v,dict) and v and "error" not in v else "")' 2>/dev/null; }
-click() { curl -s -m 20 -X POST "$BASE/element/$1/click" -H 'Content-Type: application/json' -d '{}' >/dev/null; }
+# `click` comes from the shared helper: it dies naming a refusal the driver reported, after a bounded
+# wait for the transient one Radix produces on every Select close. Four passes each owned a
+# `curl ... >/dev/null` until #160, and so four passes could not tell a click that landed from one
+# that did not.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/webdriver.sh"
 by_text() { find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$1\\\"]\"}"; }
 
 # Wait for a condition in the page, or fail naming it.
@@ -168,16 +202,79 @@ await() {
 await "document.body.innerText.includes('Choose a transcription model')" "the first-run screen" 90
 say "first run is on screen"
 
+# --- narrow: the smallest window the application permits, the catalogue, and a row -----------------
+if [ "$MODE" = narrow ]; then
+  RECT=$(curl -s -m 20 -X POST "$BASE/window/rect" -H 'Content-Type: application/json' \
+    -d '{"width":720,"height":520,"x":40,"y":40}')
+  say "set-window-rect answered: $(printf '%s' "$RECT" | head -c 120)"
+  await "window.innerWidth <= 760" "the window to become narrow" 15
+  say "viewport: $(js '"return window.innerWidth + \"x\" + window.innerHeight"')"
+
+  # 1. The catalogue's search field must not be covered by the list below it. The product owner
+  #    photographed the table sitting on top of it; the removal that caused it had been verified by
+  #    checking an element was gone, which says nothing about what moved into its place.
+  CAT=$(by_text "Browse every model")
+  [ -n "$CAT" ] || die "no 'Browse every model' button on the first-run screen"
+  click "$CAT" "the catalogue button"
+  await "document.querySelector('input[type=search], input[placeholder*=Search i]') !== null" "the catalogue's search field" 20
+  # The field is scrolled into view first: at 720x520 the catalogue's list is taller than the window,
+  # and `elementFromPoint` outside the viewport returns null, which is not "covered" -- reporting it
+  # as such would be the check being wrong. The question is what sits at the field's own centre once
+  # the field is on screen.
+  OVER=$(js '"return (() => { const f=document.querySelector(\"input[type=search], input[placeholder*=Search i]\"); if(!f) return \"NO FIELD\"; f.scrollIntoView({block:\"center\"}); const r=f.getBoundingClientRect(); if (r.top < 0 || r.bottom > window.innerHeight) return \"OFF SCREEN at \" + Math.round(r.top) + \"..\" + Math.round(r.bottom) + \" in \" + window.innerHeight; const top=document.elementFromPoint(r.left+r.width/2, r.top+r.height/2); return (top===f||f.contains(top)||f===top) ? \"CLEAR\" : \"COVERED by \" + (top ? top.tagName + \".\" + (top.className||\"\").toString().slice(0,40) : \"null\"); })()"')
+  say "the search field at its own centre: $OVER"
+  [ "$OVER" = CLEAR ] || die "the catalogue's search field is not the thing at its own centre: $OVER"
+
+  # 2. A row in the catalogue must not start a download. Onboarding passes `canDownload={false}`;
+  #    Settings mounts the same component and must keep its button, which is why removing it was the
+  #    wrong fix and a mode is the right one.
+  # Asserted as an absence of the control, not as a race with a download. The first version clicked
+  # "some button in a row" and counted `models/` four seconds later; with the defect restored it still
+  # passed, because the click landed elsewhere and four seconds is not a download. A button that is
+  # not there cannot be pressed, which is the instruction — and ADR 0023's shape for it.
+  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove)$/.test(t)).length"')
+  say "buttons in the catalogue that would fetch or delete: $FETCHERS"
+  [ "$FETCHERS" = "0" ] \
+    || die "the catalogue offers $FETCHERS download/remove buttons during first run; a row selects, it does not fetch"
+
+  # And nothing reached the disk while we were in there, which is the same claim from the other side.
+  BEFORE=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,'moonshine')]]\"}")
+  if [ -n "$ROW" ]; then click "$ROW"; sleep 4; fi
+  AFTER=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
+  [ "$BEFORE" = "$AFTER" ] \
+    || die "clicking a catalogue row put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
+  say "and a click on a row fetched nothing: models/ still holds $AFTER entries"
+
+  # Back to the recommended four, and on through the flow at this size. The row click above may have
+  # selected a model and closed the catalogue on its own, so both shapes are accepted rather than one
+  # assumed: what matters is that the option the rest of this pass chooses is reachable again.
+  BACK=$(by_text "Hide the catalogue")
+  [ -n "$BACK" ] && click "$BACK"
+  # By element, not by text: "Recommended transcription models" is the panel's `aria-label`, so it is
+  # never in `innerText` and that await could not have returned true. Unquoted attribute selector on
+  # purpose too -- a `"` here has to survive the shell, this script's JSON body and the driver, and
+  # the first version's did not.
+  await "document.querySelectorAll('[name=transcription-model]').length > 0" \
+        "the recommended options to be on screen again" 20
+  say "the catalogue closed and the recommended options are back"
+fi
+
 # --- choose a model that is not the default -------------------------------------------------------
 #
 # The radio itself is `sr-only`, so the label carrying the id is the clickable thing.
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,\\\"$CHOSEN_ID\\\")]]\"}")
 [ -n "$OPT" ] || die "no option labelled $CHOSEN_ID on the first-run screen"
-click "$OPT"
-await "document.querySelector('input[name=\\\"transcription-model\\\"]:checked') !== null" "a checked option" 10
+click "$OPT" "the transcription model the pass chose"
+# The checked option must be **the one the pass clicked**. `OnboardingContext.tsx:120` initialises
+# `selectedTranscribeModel` to `parakeet-tdt-0.6b-v3-q8`, so a radio is already checked on arrival and
+# "something is checked" was true in the state being left (#160). The radio carries no `value`, so the
+# label it sits in is what names it.
+await "(function(){var r=document.querySelector('input[name=transcription-model]:checked');var l=r&&r.closest('label');return !!l&&l.textContent.indexOf('$CHOSEN_ID')>=0;})()" \
+      "$CHOSEN_ID to become the checked option" 10
 
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the model screen"
-click "$CONT"
+click "$CONT" "Continue on the transcription screen"
 
 # --- the summariser screen ------------------------------------------------------------------------
 #
@@ -188,7 +285,7 @@ await "document.body.innerText.includes('Where should the summary be written')" 
 if [ "$MODE" = remote ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
-  click "$OPT"
+  click "$OPT" "the summariser the pass chose"
   await "document.querySelector('input[type=password]') !== null" "Claude's key field" 10
   KEY=$(find_el '{"using":"css selector","value":"input[type=password]"}')
   [ -n "$KEY" ] || die "no key field after choosing Claude"
@@ -198,9 +295,49 @@ if [ "$MODE" = remote ]; then
   await "(document.querySelector('input[type=password]')||{}).value.length > 10" "the key to be typed" 10
   say "chose Claude and typed a key — nothing local should be fetched for the summariser"
 fi
+# 3. At 720x520 the key field must be in view when it appears. The product owner chose a remote
+#    provider and reported that nothing happened; the field was there, 210px below the fold. Every
+#    other mode runs at the default window, where this cannot fail.
+if [ "$MODE" = narrow ]; then
+  OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
+  [ -n "$OPT" ] || die "no Claude option on the summariser screen"
+  click "$OPT" "the summariser the pass chose"
+  await "document.querySelector('input[type=password]') !== null" "Claude's key field" 15
+  FIELD=$(js '"return (() => { const f=document.querySelector(\"input[type=password]\"); const r=f.getBoundingClientRect(); return JSON.stringify({top:Math.round(r.top),bottom:Math.round(r.bottom),vh:window.innerHeight,inside:!!f.closest(\"[role=radio]\")}); })()"')
+  say "the key field: $FIELD"
+  printf '%s' "$FIELD" | python3 -c '
+import json,sys
+m=json.load(sys.stdin)
+if not m["inside"]: print("BROKEN: the key field is not inside its option")
+elif not (m["top"] >= 0 and m["bottom"] <= m["vh"]): print(f"BROKEN: the key field is at {m[chr(34)+chr(116)+chr(111)+chr(112)+chr(34)]}..{m[chr(34)+chr(98)+chr(111)+chr(116)+chr(116)+chr(111)+chr(109)+chr(34)]} in a {m[chr(34)+chr(118)+chr(104)+chr(34)]}px viewport")
+else: print("OK")' > /tmp/bc-key.$$ 2>&1
+  KEYV=$(cat /tmp/bc-key.$$); rm -f /tmp/bc-key.$$
+  [ "$KEYV" = OK ] || die "$KEYV"
+  say "and it is inside its option and in view at this size"
+  # Back to a local summariser so the rest of the walk matches the other modes.
+  LOCAL=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'builtin-ai')]]\"}")
+  [ -n "$LOCAL" ] || die "no builtin-ai option on the summariser screen to switch back to"
+  click "$LOCAL" "the on-this-machine summariser"
+fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
-click "$CONT"
+click "$CONT" "Continue on the summariser screen"
 say "walked to the download screen"
+
+# --- present: the chosen file was already here, and the screen says so ----------------------------
+if [ "$MODE" = present ]; then
+  await "document.body.innerText.includes('$CHOSEN_ID')" "the row for the chosen model" 30
+  ROW=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/'"$CHOSEN_ID"'/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW\"; })()"')
+  say "the row for the file already on disk reads: $ROW"
+  printf '%s' "$ROW" | grep -q 'Already here from an earlier install' \
+    || die "a file already on disk is not stated in words: $ROW"
+  printf '%s' "$ROW" | grep -qE '[0-9]+(\.[0-9]+)? *(of|/) *[0-9]+' \
+    && die "a file already on disk is counting bytes nothing fetched: $ROW"
+  DIS=$(js '"return String(!!document.querySelector(\"footer button\").disabled)"')
+  [ "$DIS" = "false" ] || die "the chosen model is already on disk and Continue is still disabled"
+  say "PASS (present): the file already here is stated in words, counts no bytes, and Continue is available at once"
+  PASSED=1
+  exit 0
+fi
 
 # --- the oracle: what reached the disk ------------------------------------------------------------
 #
@@ -250,6 +387,58 @@ if [ "$MODE" = remote ]; then
   exit 0
 fi
 
+# --- what the screen said while the file was arriving ---------------------------------------------
+#
+# **The disk oracle is right and it is also why three defects survived.** "A progress bar is a claim
+# by the same code under test; a file is not" is true, and it is the reason this pass was green while
+# the product owner was looking at `0.0 MB / 705.3 MB` for a file already on disk, at `~716 MB` for a
+# 34 MB model, and at "You can continue" over a disabled button. The file arriving says nothing about
+# what a person reads while it does. So the screen is read **as well**, never instead. (#157 measure C)
+#
+# Asserted against the model actually chosen, so the check cannot pass on a constant: `moonshine-tiny`
+# is 34 MB and the default is 740, which is the pair that was wrong.
+CARD=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/'"$CHOSEN_ID"'/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW FOR THE CHOSEN MODEL\"; })()"')
+say "the row for the chosen model reads: $CARD"
+printf '%s' "$CARD" | grep -q "$CHOSEN_ID" \
+  || die "the download screen shows no row naming $CHOSEN_ID; it named a different model or none"
+printf '%s' "$CARD" | grep -qE "(^|[^0-9])${CHOSEN_MB}( |\.)" \
+  || die "the row for $CHOSEN_ID does not state its ${CHOSEN_MB} MB: $CARD"
+printf '%s' "$CARD" | grep -qE "\b(740|716)\b" \
+  && die "the row states another model's size while fetching $CHOSEN_ID: $CARD"
+say "and it states the chosen model's own size, not the default's"
+
+# The footer's sentence and the button's state must agree. This is the contradiction the product
+# owner photographed: "You can continue while this finishes" above a control disabled with "Waiting
+# for the summary model", and the toast that explains the first sentence sitting in a branch the
+# disabled button could never reach. Three sites, two answers, every check green.
+FOOT=$(js '"return (() => { const f=document.querySelector(\"footer\"); if(!f) return \"NO FOOTER\"; const b=f.querySelector(\"button\"); return JSON.stringify({ read: (f.innerText||\"\").replace(/\\s+/g,\" \").trim(), disabled: !!(b && b.disabled) }); })()"')
+say "the footer says: $FOOT"
+printf '%s' "$FOOT" | python3 -c '
+import json, sys, re
+raw = sys.stdin.read().strip()
+if raw == "NO FOOTER":
+    print("NO FOOTER"); sys.exit(0)
+f = json.loads(raw)
+read, disabled = f["read"], f["disabled"]
+promises = bool(re.search(r"you can continue|continue while", read, re.I))
+waits    = bool(re.search(r"left to fetch|waiting for", read, re.I))
+if disabled and promises: print("BROKEN: the footer says a person may continue while the control is disabled")
+elif disabled and not waits: print("BROKEN: the control is disabled and the footer does not say what it waits for")
+elif (not disabled) and waits: print("BROKEN: the footer says it is still waiting while the control is enabled")
+else: print("OK")
+' > /tmp/bc-foot.$$ 2>&1
+FOOTV=$(cat /tmp/bc-foot.$$); rm -f /tmp/bc-foot.$$
+case "$FOOTV" in
+  OK) say "the footer and the control agree" ;;
+  "NO FOOTER") die "the download screen has no footer; the approved shell puts the control in one" ;;
+  *) die "$FOOTV -- $FOOT" ;;
+esac
+
+# The presence row is asserted by the `present` mode, not here. `chooses` and `keeps` seed only a
+# **partial** summary model — 448 MB of 3651 MiB — so its row is correctly mid-download, and a first
+# version of this check called that a defect. The state where a file really is already here has to be
+# entered deliberately, which is what `present` is for.
+
 # --- the step after this one is reachable ---------------------------------------------------------
 #
 # `AudioCheckStep` is 227 lines with a test file of its own, `OnboardingFlow.tsx:64` renders it at
@@ -257,9 +446,12 @@ fi
 # instead of `goNext()`, so first run ended here while the strip named four steps.
 # `onboarding-flow.test.mjs:78` asserts which component step 4 renders and never asked whether
 # anything sets step 4 — the map without the edges. This is the edge, driven.
-await "!document.querySelector('footer button[disabled]')" "Continue to become available" 120
+# Named, not absent: `footer` is optional in `OnboardingContainer`, so "no disabled footer button" is
+# also true of a screen with no footer button at all (#160, the same family as #157's sentinel rule).
+await "[...document.querySelectorAll('footer button')].some(b=>b.textContent.trim()==='Continue' && !b.disabled)" \
+      "Continue to become available" 120
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download screen"
-click "$CONT"
+click "$CONT" "Continue on the download screen"
 await "document.body.innerText.includes('Check your audio')" "the audio check, which is step 4" 30
 DEVICES=$(js '"return [...document.querySelectorAll(\"select, [role=combobox], button\")].length"')
 say "the audio check is on screen, and offers ${DEVICES} controls to pick a device with"

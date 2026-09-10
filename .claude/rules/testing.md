@@ -73,6 +73,53 @@ found six defects by hand in the flow that had just merged.*
   `design/prototypes/`, not a session directory. #111 shipped four onboarding screens and the
   repository can produce an approval for none. *Honesty-based; stop and ask.*
 
+## What a pass must vary (#157)
+
+*Honesty-based, and it is the rule the machine-enforced ones cannot reach: a pass that drives the
+real flow, end to end, against the real artifact, and takes the default value of every input it
+offers.*
+
+- **A pass that only ever takes defaults covers one path, and the verdict says so.** Measured
+  2026-09-10: `stage2-onboarding-check.sh` had two modes and both left the summariser on
+  `builtin-ai`. For eight days it walked first run with the one provider whose behaviour was correct,
+  while choosing any of the other five downloaded 2709.8 MB of a local model nobody would use. One
+  other value of one input was all it needed.
+- **Name the inputs the pass leaves alone.** Not "this pass covers onboarding" but "this pass covers
+  onboarding with the default summariser, the default window and no seeded models". A reader can then
+  see the hole; "covers onboarding" hides it.
+- **An absence is not a result without a positive sentinel from the same run.** `remote` mode asserts
+  `models/summary` stays empty, which is indistinguishable from a run that never started — so the
+  transcription model arriving in that same run is what makes the emptiness mean something. The first
+  version of that oracle reported 469 372 646 bytes "fetched" that were the seed itself.
+
+## What a harness may never do to the product (#160)
+
+*The two censuses are machine-enforced by `gate-click-failure-is-a-failure.test.mjs` and
+`a-gate-oracle-reads-a-line-the-app-writes.test.mjs`. The two rules under them rest on honesty.*
+
+- **A driver's refusal is a result; discarding it is not the same as not receiving one.** Measured
+  2026-09-10: two Element Click requests answered
+  `{"value":{"error":"element not interactable"}}`, four passes wrote their click as
+  `curl … >/dev/null`, and `stage2-two-channel-check.sh` reported *"the application never created a
+  microphone stream"*. A day went into an application defect that did not exist. This had been fixed
+  once already, on 2026-09-08, in `stage2-record-check.sh` alone — and the test that fixed it kept its
+  denominator at one script while four others carried the identical shape. *Extending a denominator is
+  part of a fix, not a follow-up* — the same sentence as ADR 0022's first bullet, one layer out.
+- **A wait that is satisfied in the state it is meant to leave guards nothing.** The pass waited for a
+  button reading `Start recording`; that button is in the sidebar, which the settings screen does not
+  cover, so the condition was true before the navigation and after it. Twelve seconds later the
+  settings screen was still up, with zero Stop controls. A wait names something **false in the state
+  being left**. Two more of the same shape were found by reading every wait in all four passes rather
+  than only the one that failed: `input[name=transcription-model]:checked` (a model is preselected, so
+  it was true on arrival) and `!footer button[disabled]` (`footer` is optional, so it was true of a
+  screen with no footer at all).
+- **An oracle that reads the product's log must first assert the product was asked, and must read a
+  line the product writes.** Between the click and `grep "Creating microphone stream"` there was
+  `sleep 8` and nothing else, so every way of failing to press the button arrived at the same sentence
+  about the application. And the pass's "enumeration hang" branch grepped for two sentinels the
+  application logged **neither** of, which left its condition as "the PulseAudio reactor logged an
+  error" — true of every healthy run, including the three that day that went on to pass.
+
 ## What an instruction becomes (ADR 0023)
 
 *Honesty-based. Nothing parses an issue, and the rule exists because the machine-enforced ones did

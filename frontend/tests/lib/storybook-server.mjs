@@ -19,11 +19,30 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
   '.svg': 'image/svg+xml', '.png': 'image/png', '.map': 'application/json' };
 
 /** Newest mtime under the directories a story bundle is built from. */
+/**
+ * Files the harness writes into `src/` itself, which are not sources and must not age the build.
+ *
+ * **This is what made the suite fail one run in five, measured 2026-09-10.** `gallery.mjs` writes
+ * `src/__gallery_entry.tsx` while it runs. That bumped `newestSource()` mid-suite, so a story test
+ * starting afterwards found the build stale, took the lock and **rebuilt while its neighbours were
+ * serving** — `build-storybook` empties `storybook-static`, and the pages that were mid-flight got
+ * Storybook's own error page:
+ *
+ *     waited 90000ms for `document.querySelector('[data-pane]')`
+ *       page said: Error fetching `/index.json`
+ *
+ * Two builds in one run, in the log, twice. The lock was never broken: every process took it, as
+ * #136 requires. It was the *freshness* that moved, because a generated file was being counted as a
+ * source. #143.
+ */
+const GENERATED = /^__/;
+
 function newestSource() {
   let newest = 0;
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      if (e.isFile() && GENERATED.test(e.name)) continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
       else newest = Math.max(newest, statSync(p).mtimeMs);
@@ -69,7 +88,10 @@ export function ensureBuilt() {
 
     if (held) {
       try {
-        if (fresh()) return false;
+        const f = fresh();
+        if (process.env.BC_LOCK_LOG) console.error(`[LOCK ${process.pid}] fresh=${f}`);
+        if (f) return false;
+        if (process.env.BC_LOCK_LOG) console.error(`[LOCK ${process.pid}] BUILDING`);
         execFileSync('pnpm', ['build-storybook'], { cwd: root, stdio: 'inherit' });
         writeFileSync(DONE, new Date().toISOString());
         return true;

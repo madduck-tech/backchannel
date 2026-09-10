@@ -48,7 +48,6 @@ export function DownloadProgressStep() {
   const chosenRef = useRef(selectedTranscribeModel);
   useEffect(() => { chosenRef.current = selectedTranscribeModel; }, [selectedTranscribeModel]);
 
-  const [isMac, setIsMac] = useState(false);
 
   const [parakeetState, setParakeetState] = useState<DownloadState>({
     status: parakeetDownloaded ? 'completed' : 'waiting',
@@ -167,19 +166,6 @@ export function DownloadProgressStep() {
     }
   };
 
-  // Detect platform on mount
-  useEffect(() => {
-    const checkPlatform = async () => {
-      try {
-        const { platform } = await import('@tauri-apps/plugin-os');
-        setIsMac(platform() === 'macos');
-      } catch {
-        setIsMac(navigator.userAgent.includes('Mac'));
-      }
-    };
-
-    checkPlatform();
-  }, []);
 
   // Start the required transcription model immediately; summary readiness must not block it.
   useEffect(() => {
@@ -569,7 +555,12 @@ export function DownloadProgressStep() {
           : 'Continue when the transcription model is on this device.'
       }
       step={3}
-      totalSteps={isMac ? 4 : 3}
+      // Four on every platform, because every platform reaches the audio check now. This read
+      // `isMac ? 4 : 3` while off macOS the flow ended here, so the strip said three on this screen
+      // and four on the two before it — and the fourth was one nobody could reach. The product owner
+      // counted them. macOS's fifth step hides the strip (`PermissionsStep` passes `hideProgress`),
+      // so four is the whole strip everywhere.
+      totalSteps={4}
       footer={
         <>
           <span className="min-w-0 flex-1 text-xs leading-[17px] text-ink-faint">
