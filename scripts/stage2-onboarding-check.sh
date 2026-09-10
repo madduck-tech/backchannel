@@ -29,6 +29,20 @@
 #     remote   a cloud summariser is chosen; `models/summary` must stay EMPTY while the
 #              transcription model still arrives
 #
+# **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
+# "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
+#
+#     mode      varies                        leaves on the default
+#     chooses   the transcription model        summariser (builtin-ai), window size, permissions
+#     keeps     the transcription model,       summariser (builtin-ai), window size, permissions
+#               plus one already on disk
+#     remote    the summariser (claude)        transcription model (still moonshine-tiny), window
+#                                              size, permissions
+#
+# None of the three varies the window, so nothing here would see a control that only fails at
+# `minHeight: 520` -- `storybook-summariser-reveal.test.mjs` is what covers that, in a browser.
+# None reaches the macOS permissions step, which ADR 0005 puts out of reach of this machine entirely.
+#
 # **`remote` exists because the other two never varied the summariser.** Both leave it on its
 # default, which is `builtin-ai`, so for eight days this pass walked the flow with the one provider
 # whose behaviour was correct. A person who chose Claude got 2709.8 MB of Gemma they will never use,
@@ -249,6 +263,26 @@ if [ "$MODE" = remote ]; then
   PASSED=1
   exit 0
 fi
+
+# --- what the screen said while the file was arriving ---------------------------------------------
+#
+# **The disk oracle is right and it is also why three defects survived.** "A progress bar is a claim
+# by the same code under test; a file is not" is true, and it is the reason this pass was green while
+# the product owner was looking at `0.0 MB / 705.3 MB` for a file already on disk, at `~716 MB` for a
+# 34 MB model, and at "You can continue" over a disabled button. The file arriving says nothing about
+# what a person reads while it does. So the screen is read **as well**, never instead. (#157 measure C)
+#
+# Asserted against the model actually chosen, so the check cannot pass on a constant: `moonshine-tiny`
+# is 34 MB and the default is 740, which is the pair that was wrong.
+CARD=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/'"$CHOSEN_ID"'/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW FOR THE CHOSEN MODEL\"; })()"')
+say "the row for the chosen model reads: $CARD"
+printf '%s' "$CARD" | grep -q "$CHOSEN_ID" \
+  || die "the download screen shows no row naming $CHOSEN_ID; it named a different model or none"
+printf '%s' "$CARD" | grep -qE "(^|[^0-9])${CHOSEN_MB}( |\.)" \
+  || die "the row for $CHOSEN_ID does not state its ${CHOSEN_MB} MB: $CARD"
+printf '%s' "$CARD" | grep -qE "\b(740|716)\b" \
+  && die "the row states another model's size while fetching $CHOSEN_ID: $CARD"
+say "and it states the chosen model's own size, not the default's"
 
 # --- the step after this one is reachable ---------------------------------------------------------
 #

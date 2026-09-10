@@ -73,6 +73,25 @@ found six defects by hand in the flow that had just merged.*
   `design/prototypes/`, not a session directory. #111 shipped four onboarding screens and the
   repository can produce an approval for none. *Honesty-based; stop and ask.*
 
+## What a pass must vary (#157)
+
+*Honesty-based, and it is the rule the machine-enforced ones cannot reach: a pass that drives the
+real flow, end to end, against the real artifact, and takes the default value of every input it
+offers.*
+
+- **A pass that only ever takes defaults covers one path, and the verdict says so.** Measured
+  2026-09-10: `stage2-onboarding-check.sh` had two modes and both left the summariser on
+  `builtin-ai`. For eight days it walked first run with the one provider whose behaviour was correct,
+  while choosing any of the other five downloaded 2709.8 MB of a local model nobody would use. One
+  other value of one input was all it needed.
+- **Name the inputs the pass leaves alone.** Not "this pass covers onboarding" but "this pass covers
+  onboarding with the default summariser, the default window and no seeded models". A reader can then
+  see the hole; "covers onboarding" hides it.
+- **An absence is not a result without a positive sentinel from the same run.** `remote` mode asserts
+  `models/summary` stays empty, which is indistinguishable from a run that never started — so the
+  transcription model arriving in that same run is what makes the emptiness mean something. The first
+  version of that oracle reported 469 372 646 bytes "fetched" that were the seed itself.
+
 ## What an instruction becomes (ADR 0023)
 
 *Honesty-based. Nothing parses an issue, and the rule exists because the machine-enforced ones did
