@@ -30,6 +30,9 @@
 #              transcription model still arrives
 #     present  the chosen model is already on disk; the screen must say so in words and count no
 #              bytes, and Continue must be available at once
+#     narrow   the whole walk at 720x520 -- the smallest window tauri.conf.json permits -- with the
+#              catalogue opened and a row clicked. Three of the four defects #157 measured as caught
+#              by nothing were missed because every other mode walks one path at one size.
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -72,7 +75,7 @@ PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote|present) ;; *) die "mode must be chooses, keeps, remote or present, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow) ;; *) die "mode must be chooses, keeps, remote, present or narrow, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -195,6 +198,54 @@ await() {
 await "document.body.innerText.includes('Choose a transcription model')" "the first-run screen" 90
 say "first run is on screen"
 
+# --- narrow: the smallest window the application permits, the catalogue, and a row -----------------
+if [ "$MODE" = narrow ]; then
+  RECT=$(curl -s -m 20 -X POST "$BASE/window/rect" -H 'Content-Type: application/json' \
+    -d '{"width":720,"height":520,"x":40,"y":40}')
+  say "set-window-rect answered: $(printf '%s' "$RECT" | head -c 120)"
+  await "window.innerWidth <= 760" "the window to become narrow" 15
+  say "viewport: $(js '"return window.innerWidth + \"x\" + window.innerHeight"')"
+
+  # 1. The catalogue's search field must not be covered by the list below it. The product owner
+  #    photographed the table sitting on top of it; the removal that caused it had been verified by
+  #    checking an element was gone, which says nothing about what moved into its place.
+  CAT=$(by_text "Browse every model")
+  [ -n "$CAT" ] || die "no 'Browse every model' button on the first-run screen"
+  click "$CAT"
+  await "document.querySelector('input[type=search], input[placeholder*=Search i]') !== null" "the catalogue's search field" 20
+  # The field is scrolled into view first: at 720x520 the catalogue's list is taller than the window,
+  # and `elementFromPoint` outside the viewport returns null, which is not "covered" -- reporting it
+  # as such would be the check being wrong. The question is what sits at the field's own centre once
+  # the field is on screen.
+  OVER=$(js '"return (() => { const f=document.querySelector(\"input[type=search], input[placeholder*=Search i]\"); if(!f) return \"NO FIELD\"; f.scrollIntoView({block:\"center\"}); const r=f.getBoundingClientRect(); if (r.top < 0 || r.bottom > window.innerHeight) return \"OFF SCREEN at \" + Math.round(r.top) + \"..\" + Math.round(r.bottom) + \" in \" + window.innerHeight; const top=document.elementFromPoint(r.left+r.width/2, r.top+r.height/2); return (top===f||f.contains(top)||f===top) ? \"CLEAR\" : \"COVERED by \" + (top ? top.tagName + \".\" + (top.className||\"\").toString().slice(0,40) : \"null\"); })()"')
+  say "the search field at its own centre: $OVER"
+  [ "$OVER" = CLEAR ] || die "the catalogue's search field is not the thing at its own centre: $OVER"
+
+  # 2. A row in the catalogue must not start a download. Onboarding passes `canDownload={false}`;
+  #    Settings mounts the same component and must keep its button, which is why removing it was the
+  #    wrong fix and a mode is the right one.
+  BEFORE=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
+  ROW=$(find_el '{"using":"css selector","value":"[class*=bg-elevated] button, li button"}')
+  if [ -n "$ROW" ]; then click "$ROW"; sleep 4; fi
+  AFTER=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
+  [ "$BEFORE" = "$AFTER" ] \
+    || die "clicking in the catalogue put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
+  say "a click in the catalogue fetched nothing: models/ still holds $AFTER entries"
+
+  # Back to the recommended four, and on through the flow at this size. The row click above may have
+  # selected a model and closed the catalogue on its own, so both shapes are accepted rather than one
+  # assumed: what matters is that the option the rest of this pass chooses is reachable again.
+  BACK=$(by_text "Hide the catalogue")
+  [ -n "$BACK" ] && click "$BACK"
+  # By element, not by text: "Recommended transcription models" is the panel's `aria-label`, so it is
+  # never in `innerText` and that await could not have returned true. Unquoted attribute selector on
+  # purpose too -- a `"` here has to survive the shell, this script's JSON body and the driver, and
+  # the first version's did not.
+  await "document.querySelectorAll('[name=transcription-model]').length > 0" \
+        "the recommended options to be on screen again" 20
+  say "the catalogue closed and the recommended options are back"
+fi
+
 # --- choose a model that is not the default -------------------------------------------------------
 #
 # The radio itself is `sr-only`, so the label carrying the id is the clickable thing.
@@ -224,6 +275,29 @@ if [ "$MODE" = remote ]; then
   # A typed value is not a stored one: assert the field holds it before moving on.
   await "(document.querySelector('input[type=password]')||{}).value.length > 10" "the key to be typed" 10
   say "chose Claude and typed a key — nothing local should be fetched for the summariser"
+fi
+# 3. At 720x520 the key field must be in view when it appears. The product owner chose a remote
+#    provider and reported that nothing happened; the field was there, 210px below the fold. Every
+#    other mode runs at the default window, where this cannot fail.
+if [ "$MODE" = narrow ]; then
+  OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
+  [ -n "$OPT" ] || die "no Claude option on the summariser screen"
+  click "$OPT"
+  await "document.querySelector('input[type=password]') !== null" "Claude's key field" 15
+  FIELD=$(js '"return (() => { const f=document.querySelector(\"input[type=password]\"); const r=f.getBoundingClientRect(); return JSON.stringify({top:Math.round(r.top),bottom:Math.round(r.bottom),vh:window.innerHeight,inside:!!f.closest(\"[role=radio]\")}); })()"')
+  say "the key field: $FIELD"
+  printf '%s' "$FIELD" | python3 -c '
+import json,sys
+m=json.load(sys.stdin)
+if not m["inside"]: print("BROKEN: the key field is not inside its option")
+elif not (m["top"] >= 0 and m["bottom"] <= m["vh"]): print(f"BROKEN: the key field is at {m[chr(34)+chr(116)+chr(111)+chr(112)+chr(34)]}..{m[chr(34)+chr(98)+chr(111)+chr(116)+chr(116)+chr(111)+chr(109)+chr(34)]} in a {m[chr(34)+chr(118)+chr(104)+chr(34)]}px viewport")
+else: print("OK")' > /tmp/bc-key.$$ 2>&1
+  KEYV=$(cat /tmp/bc-key.$$); rm -f /tmp/bc-key.$$
+  [ "$KEYV" = OK ] || die "$KEYV"
+  say "and it is inside its option and in view at this size"
+  # Back to a local summariser so the rest of the walk matches the other modes.
+  LOCAL=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'builtin-ai')]]\"}")
+  [ -n "$LOCAL" ] && click "$LOCAL"
 fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
 click "$CONT"
