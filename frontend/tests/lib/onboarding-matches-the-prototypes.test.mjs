@@ -104,7 +104,7 @@ const holds = (what, cond, why) => {
   // photographed: "You can continue while this finishes" above a button disabled for the summary.
   holds(
     'the download screen gates Continue on the transcription model, as the prototype does',
-    /disabled=\{!finished \|\| isCompleting\}/.test(step) &&
+    /disabled=\{!finished\}/.test(step) &&
       /const finished = parakeetDownloaded \|\|/.test(step) &&
       !/waitingForSummary/.test(step),
     'A person who continues without the transcription model reaches a recorder that cannot\n' +

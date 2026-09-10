@@ -198,37 +198,29 @@ const click = async (el) => {
     'Continue must ask the backend ITSELF whether a model is really there — the component says this ' +
       'catches state drift, and trusting the flag is how a deleted model becomes a broken first run'
   );
-  assert.equal(ok.seen.completed, 1, 'and with everything in place it must complete onboarding');
-}
-
-// --- 4: completing is once, and a failure gives the button back ----------------------------------
-{
-  await clear();
-  const { container, seen } = await render();
-  const go = continueButton(container);
-  await click(go);
-  await click(go);
+  // **This assertion changed with the audio check.** It used to read
+  // `assert.equal(ok.seen.completed, 1, 'and with everything in place it must complete onboarding')`
+  // — true while this screen was the last one off macOS. It is not any more: every platform now goes
+  // to the audio check, which is step 4 of the four the strip names and which, until this change,
+  // `OnboardingFlow.tsx:64` rendered and nobody reached. The guarantees that belong to *completing*
+  // — once per press, and a failure gives the button back — moved with the behaviour, to
+  // `audio-check-step.test.mjs`, rather than being deleted.
   assert.equal(
-    seen.completed,
+    ok.seen.next,
     1,
-    'a second press while completing must not complete onboarding twice'
+    'and with everything in place it must hand the person on to the audio check — the screen that ' +
+      'proves the microphone and the speakers before a first meeting depends on being reached'
   );
-
-  await clear();
-  const failed = await render({ failComplete: true });
-  await click(continueButton(failed.container));
-  assert.equal(failed.seen.completed, 1, 'the failing attempt must have been made');
   assert.equal(
-    continueButton(failed.container).disabled,
-    false,
-    'and a failure must give the button back — leaving a new user on a dead spinner is the worst ' +
-      'first impression this screen can make'
+    ok.seen.completed,
+    0,
+    'and it must not finish onboarding itself: doing that off macOS is what skipped the audio check'
   );
 }
 
 console.log(
   'ok - first run: no engine means no way past, Continue asks the backend rather than trusting the ' +
-    'flag, onboarding completes once per press, and a failure gives the button back'
+    'flag, and a complete download hands on to the audio check instead of ending the flow'
 );
 
 // --- 5: the control says what it is waiting for, in every state ----------------------------------

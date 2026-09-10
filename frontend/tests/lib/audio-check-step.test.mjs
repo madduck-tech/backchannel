@@ -28,11 +28,20 @@ const DEVICES = [
   { name: 'Speakers Monitor', device_type: 'Output' },
 ];
 
-async function render({ result, fail } = {}) {
+async function render({ result, fail, failComplete = false } = {}) {
   const calls = [];
+  const seen = { completed: 0, next: 0 };
   const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
     ...boundaryStubs().modules,
-    '@/contexts/OnboardingContext': { useOnboarding: () => ({ goNext: () => {} }) },
+    '@/contexts/OnboardingContext': {
+      useOnboarding: () => ({
+        goNext: () => { seen.next += 1; },
+        completeOnboarding: async () => {
+          seen.completed += 1;
+          if (failComplete) throw new Error('could not persist onboarding state');
+        },
+      }),
+    },
     '../OnboardingContainer': {
       // Renders the footer too: #154 moved the primary control into it, and a children-only
       // passthrough hides it from every assertion in this file.
@@ -73,7 +82,7 @@ async function render({ result, fail } = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   await act(async () => { createRoot(container).render(React.createElement(AudioCheckStep, null)); });
-  return { container, calls, played };
+  return { container, calls, played, seen };
 }
 
 const buttons = (c) => [...c.querySelectorAll('button')];
@@ -198,6 +207,35 @@ const click = async (el) => {
   assert.ok(
     !/auto_save:\s*true/.test(command),
     'nothing here may write a recording to disk'
+  );
+}
+
+// --- completing is once, and a failure gives the button back -------------------------------------
+//
+// **These moved here from `first-run-step.test.mjs` with the behaviour they guard.** The download
+// screen used to finish onboarding off macOS — which is exactly why nobody reached this step, the
+// one that proves the microphone and the speakers before a first meeting. Now every platform lands
+// here and this screen finishes, so the guarantees follow: a second press must not complete twice,
+// and a failure must give the control back rather than leave a new user on a dead spinner.
+{
+  const { container, seen } = await render();
+  const go = [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Continue');
+  assert.ok(go, 'the audio check must offer a way forward');
+  await click(go);
+  await click(go);
+  assert.equal(seen.completed, 1, 'a second press while completing must not complete onboarding twice');
+  assert.equal(seen.next, 0, 'and off macOS it must finish rather than walk on to a step that renders nothing');
+}
+{
+  const { container, seen } = await render({ failComplete: true });
+  const go = [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Continue');
+  await click(go);
+  assert.equal(seen.completed, 1, 'the failing attempt must have been made');
+  assert.equal(
+    [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Continue').disabled,
+    false,
+    'and a failure must give the button back — leaving a new user on a dead spinner is the worst ' +
+      'first impression this screen can make'
   );
 }
 
