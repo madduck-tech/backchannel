@@ -129,6 +129,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     openrouter: null,
   });
 
+  // Update individual provider API key
+  const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
+    setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
+  }, []);
+
   // Ollama models list and error state
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [error, setError] = useState<string>('');
@@ -412,10 +417,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Update individual provider API key
-  const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
-    setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
-  }, []);
 
   // Lazy load preference settings (only loads if not already cached)
   const loadPreferences = useCallback(async () => {
