@@ -134,6 +134,38 @@ assert.deepEqual(
     '  and advanced into only inside `if (isMac)`. The product owner asked where it was.'
 );
 
+// --- and the strip names as many steps as the flow has ---------------------------------------------
+//
+// The product owner counted them: the first two screens said four and the download screen said three,
+// because `totalSteps={isMac ? 4 : 3}` was left over from when the flow ended there. A strip that
+// promises a step the flow does not deliver is the same defect as a step nothing routes to, seen from
+// the other end — and it is the one a person notices first.
+const container = strip(read('src/components/onboarding/OnboardingContainer.tsx'));
+const stripNames = /const STEPS = \[([^\]]+)\]/.exec(container);
+assert.ok(stripNames, 'OnboardingContainer no longer names its steps; this check has gone stale');
+const named = stripNames[1].split(',').filter((x) => x.trim()).length;
+
+const promised = new Map();
+for (const f of steps) {
+  const src = strip(read(`src/components/onboarding/steps/${f}`));
+  // A step that hides the strip promises nothing: macOS's permissions step passes `hideProgress`.
+  if (/hideProgress\s*=\s*\{?\s*true/.test(src)) continue;
+  for (const m of src.matchAll(/totalSteps=\{([^}]+)\}/g)) promised.set(f, m[1].trim());
+}
+
+const disagree = [...promised].filter(([, v]) => v !== String(named));
+assert.deepEqual(
+  disagree.map(([f, v]) => `${f} promises ${v} steps; the strip names ${named}`), [],
+  'a screen tells the person a different number of steps from the one the strip has.\n' +
+    '  Every screen of one flow shows the same strip, so they either agree or one of them is lying.'
+);
+assert.ok(
+  named === Math.max(...rendered.filter((r) => !r.guard).map((r) => r.step)),
+  `the strip names ${named} steps and the flow renders ${Math.max(...rendered.filter((r) => !r.guard).map((r) => r.step))} ` +
+    'without a platform guard. A named step the flow never shows is a promise; an unnamed one it does ' +
+    'show is a surprise.'
+);
+
 console.log(
   `ok - ${rendered.length} onboarding steps, every one below the ${reachableCeiling}-step ceiling ` +
     `and every one past the first advanced into by the step before it`

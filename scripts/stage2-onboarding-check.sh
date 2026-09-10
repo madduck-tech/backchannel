@@ -284,6 +284,54 @@ printf '%s' "$CARD" | grep -qE "\b(740|716)\b" \
   && die "the row states another model's size while fetching $CHOSEN_ID: $CARD"
 say "and it states the chosen model's own size, not the default's"
 
+# The footer's sentence and the button's state must agree. This is the contradiction the product
+# owner photographed: "You can continue while this finishes" above a control disabled with "Waiting
+# for the summary model", and the toast that explains the first sentence sitting in a branch the
+# disabled button could never reach. Three sites, two answers, every check green.
+FOOT=$(js '"return (() => { const f=document.querySelector(\"footer\"); if(!f) return \"NO FOOTER\"; const b=f.querySelector(\"button\"); return JSON.stringify({ read: (f.innerText||\"\").replace(/\\s+/g,\" \").trim(), disabled: !!(b && b.disabled) }); })()"')
+say "the footer says: $FOOT"
+printf '%s' "$FOOT" | python3 -c '
+import json, sys, re
+raw = sys.stdin.read().strip()
+if raw == "NO FOOTER":
+    print("NO FOOTER"); sys.exit(0)
+f = json.loads(raw)
+read, disabled = f["read"], f["disabled"]
+promises = bool(re.search(r"you can continue|continue while", read, re.I))
+waits    = bool(re.search(r"left to fetch|waiting for", read, re.I))
+if disabled and promises: print("BROKEN: the footer says a person may continue while the control is disabled")
+elif disabled and not waits: print("BROKEN: the control is disabled and the footer does not say what it waits for")
+elif (not disabled) and waits: print("BROKEN: the footer says it is still waiting while the control is enabled")
+else: print("OK")
+' > /tmp/bc-foot.$$ 2>&1
+FOOTV=$(cat /tmp/bc-foot.$$); rm -f /tmp/bc-foot.$$
+case "$FOOTV" in
+  OK) say "the footer and the control agree" ;;
+  "NO FOOTER") die "the download screen has no footer; the approved shell puts the control in one" ;;
+  *) die "$FOOTV -- $FOOT" ;;
+esac
+
+# A file already on disk is stated in words and counts no bytes: the product owner photographed
+# `0.0 MB / 705.3 MB` under a full bar for a model that was already there.
+#
+# The **summary** model is the one to read, not the transcription one: `chooses` and `keeps` seed it
+# and fetch nothing for it, which is exactly the state. `keeps`'s spare transcription model is a
+# different thing — the person chose another, so this screen rightly gives it no row at all, and a
+# first version of this check asserted on a row that should not exist.
+if [ "$MODE" != remote ]; then
+  PRESENT_ROW=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/Writes the summary/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW\"; })()"')
+  say "the row for the seeded summary model reads: $PRESENT_ROW"
+  if [ "$PRESENT_ROW" = "NO ROW" ]; then
+    say "no summary row — the seed did not take, so this assertion has nothing to stand on"
+  else
+    printf '%s' "$PRESENT_ROW" | grep -q 'Already here from an earlier install' \
+      || die "a file already on disk is not stated in words: $PRESENT_ROW"
+    printf '%s' "$PRESENT_ROW" | grep -qE '[0-9]+(\.[0-9]+)? *(of|/) *[0-9]+' \
+      && die "a file already on disk is counting bytes nothing fetched: $PRESENT_ROW"
+    say "and it counts no bytes, because nothing was fetched for it"
+  fi
+fi
+
 # --- the step after this one is reachable ---------------------------------------------------------
 #
 # `AudioCheckStep` is 227 lines with a test file of its own, `OnboardingFlow.tsx:64` renders it at
