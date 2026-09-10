@@ -25,7 +25,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 say() { printf 'stage2-core: %s\n' "$*"; }
 die() { printf 'stage2-core: %s\n' "$*" >&2; exit 1; }
 
-APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored]"
+APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty]"
 MODE="${2:-scores}"
 PORT="${BC_CORE_PORT:-4448}"; NATIVE_PORT="${BC_CORE_NATIVE_PORT:-4449}"
 CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
@@ -33,24 +33,39 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 # to leave `DEFAULT_TRANSCRIBE_MODEL`, which is `parakeet-tdt-0.6b-v3-q8` and is the one family in the
 # catalogue that reports real token probabilities.
 #
-#   scores    parakeet-tdt-0.6b-v3-q8. **The positive sentinel.** Of eighteen architectures only five
-#             build a token row and only `parakeet` ever assigns a real probability
-#             (`arch/parakeet/decoder.cpp:1640`, `std::exp(row[label])`), so it is the one family that
-#             can prove a confidence is producible at all. It is also `DEFAULT_TRANSCRIBE_MODEL`, and
-#             that is a consequence, not a shortcut: the non-default coverage is `unscored`'s job.
-#             An earlier draft used `moonshine-tiny-q8` here and claimed "one badge at 50%" — that
-#             family returns **no tokens at any length** and can carry no badge, and the 50% was the
-#             microphone meter. A mode that asserts an absence while proving no presence is the shape
-#             `.claude/rules/testing.md` forbids, and it was this file breaking its own rule.
-#   unscored  gigaam-v3-ctc-q8 (259 MB), reached through the catalogue and **not** the default. It
-#             leaves every `p` at the zero sentinel, which is the family #162 was found on and the
-#             mode that goes red when the fix is reverted. Russian-only, so the English sample comes
-#             back as phonetic Cyrillic -- correct behaviour of that model, and why this mode asserts
-#             that rows arrived rather than what they say.
+#   scores    parakeet-tdt-0.6b-v3-q4 (502 MB). **The positive sentinel, and not the default.** Of
+#             eighteen architectures only four that reach the catalogue build a token row, and only
+#             `parakeet` assigns a real probability (`arch/parakeet/decoder.cpp:1640`,
+#             `std::exp(row[label])`). `DEFAULT_TRANSCRIBE_MODEL` is the q8 of this same family; the
+#             q4 is the same architecture and the same code path, measured at mean 0.9958 over this
+#             sample, so this mode proves a confidence is producible **without** taking the default.
+#             An earlier draft used `moonshine-tiny-q8` here and claimed "one badge at 50%". That
+#             family builds no `TokenEntry` and sets `result_kind = TRANSCRIBE_TIMESTAMPS_NONE`, so it
+#             returns no tokens at any length and **cannot carry a confidence badge** — that much is
+#             read from source. What the 50% was is inference: most likely the microphone meter, per
+#             the selector bug recorded further down this file.
+#   unscored  gigaam-v3-ctc-q8 (259 MB), reached through the catalogue. It leaves every `p` at the
+#             zero sentinel, which is the family #162 was found on and the mode that goes red when
+#             that fix is reverted. Russian-only, so the English sample comes back as phonetic
+#             Cyrillic -- correct behaviour of that model, and why this mode asserts that rows
+#             arrived rather than what they say.
+#   empty     moonshine-tiny-q8 (34 MB). The **larger** half of #162 and the one the other two cannot
+#             reach: both of them build token rows, so reverting the `tokens.is_empty()` guard turns
+#             neither red. 53 of the catalogue's 86 rows come from an architecture that builds none,
+#             and for all of them a fabricated 1.0 used to reach the tooltip as *"Decode confidence
+#             100%"*. This mode is that class.
+#
+# **What no mode here drives.** A *rendered* badge. Every family that scores at all scores above the
+# 0.8 quiet threshold on this sample, deliberately — `ConfidenceIndicator` renders nothing above it —
+# and a low-confidence decode cannot be arranged from a clean recording. The rendering path has its
+# positive sentinel in `a-score-nobody-gave-is-not-rendered.test.mjs`, which renders 0.45 as `45%` in
+# a real DOM. So: this file proves the **value**, that file proves the **rendering**, and the tooltip
+# at `VirtualizedTranscriptView.tsx:156` is driven by neither.
 case "$MODE" in
-  scores)   MODEL_ID="${BC_CORE_MODEL:-parakeet-tdt-0.6b-v3-q8}"; WORDS=(country "ask what you can do") ;;
+  scores)   MODEL_ID="${BC_CORE_MODEL:-parakeet-tdt-0.6b-v3-q4}"; WORDS=(country "ask what you can do") ;;
   unscored) MODEL_ID="${BC_CORE_MODEL:-gigaam-v3-ctc-q8}";        WORDS=() ;;
-  *) die "unknown mode '$MODE' (scores|unscored)" ;;
+  empty)    MODEL_ID="${BC_CORE_MODEL:-moonshine-tiny-q8}";       WORDS=(country "ask what you can do") ;;
+  *) die "unknown mode '$MODE' (scores|unscored|empty)" ;;
 esac
 SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
 
@@ -318,11 +333,16 @@ case "$MODE" in
   scores)
     [ "$WITH_CONF" -ge 1 ] \
       || die "not one row carries a confidence. $MODEL_ID is the only family that assigns a real per-token probability, so if it produces none the field is unproducible and this pass proves nothing about the absence the other mode asserts"
-    printf '%s' "$CONF_MIN" | grep -qE '^0\.[0-9]' \
-      || die "the confidences in transcripts.json are '$CONF_MIN'..'$CONF_MAX', which is not a probability"
+    # A numeric range, not a leading `0.`: parakeet's measured values run 0.92..1.0, and a run whose
+    # lowest row is exactly 1.0 would fail a string match and die on a legitimate result.
+    python3 -c '
+import sys
+lo, hi = float(sys.argv[1]), float(sys.argv[2])
+sys.exit(0 if 0.0 <= lo <= hi <= 1.0 else 1)' "$CONF_MIN" "$CONF_MAX" \
+      || die "the confidences in transcripts.json run $CONF_MIN..$CONF_MAX, which is not a probability"
     say "the sentinel holds: a real confidence is producible, and $WITH_CONF of $ROWS_JSON rows carry one"
     ;;
-  unscored)
+  unscored | empty)
     [ "$WITH_CONF" -eq 0 ] \
       || die "$WITH_CONF of $ROWS_JSON rows were persisted with a confidence, and $MODEL_ID scores nothing: a number nobody computed reached the disk (#162)"
     say "no row was persisted with a score nobody gave"

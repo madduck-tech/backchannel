@@ -88,7 +88,9 @@ impl Decoder {
                 let transcript = keep_partial_on_truncation(session.run(samples, run_options))?;
                 // `None` when the family scores nothing, which is what `ports.rs:54` says the
                 // value means. `Some(mean_token_confidence(..))` was unconditional here, and for a
-                // family whose `Token::p` is NaN it painted a red `0%` on every line (#162).
+                // family that leaves every `Token::p` at the zero sentinel it painted a red `0%` on
+                // every line (#162); for the 53 catalogue rows whose architecture builds no token
+                // row at all it painted a green 100%.
                 let confidence = scored_confidence(&transcript);
 
                 let turns = speaker_turns(&transcript);

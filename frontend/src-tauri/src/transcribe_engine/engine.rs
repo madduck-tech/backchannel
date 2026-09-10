@@ -753,10 +753,12 @@ mod tests {
     /// A decoder that scores nothing must say so, not score everything zero.
     ///
     /// Measured 2026-09-10 (#162): with `gigaam-v3-ctc-q8` every line of every recording carried a
-    /// red `0%` "Low confidence" badge. `transcribe_cpp`'s own comment (`result.rs:77`) says
-    /// `Token::p` is **NaN when the family produces none**; the mean of a set holding NaN is NaN;
-    /// `segmented.rs:89` wrapped it in `Some`; `serde_json` cannot write a non-finite float so the
-    /// event carried `confidence: null`; and the UI scored `null` as zero.
+    /// red `0%` "Low confidence" badge. The first diagnosis blamed NaN, from one sentence of the ABI
+    /// header, and was wrong — the measurement below is what it actually returns. `transcribe-session.h:93`
+    /// declares the row as `float p = 0.0f;`, `arch/gigaam` never assigns it, and `segmented.rs`
+    /// wrapped that finite `0.0` in `Some`. NaN is still refused here because the header documents it
+    /// for families that report nothing at all, and `serde_json` would carry it to the frontend as
+    /// `null` — a value the UI's `!== undefined` guard let through.
     ///
     /// `ports.rs:54` already says what the right answer is -- *"`None` is not zero confidence -- it
     /// means this decoder has nothing to report"*. This holds the producer to it.
