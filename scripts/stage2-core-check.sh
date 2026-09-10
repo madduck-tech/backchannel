@@ -239,7 +239,7 @@ done
 # phonetic mush and asserting on its content would be asserting on that model's failure mode. What
 # matters here is that lines arrived at all -- an empty transcript makes every badge assertion below
 # vacuously true, which is the shape of a check that proves nothing.
-LINES=$(js '"return document.querySelectorAll(\"span.readout\").length"')
+LINES=$(js '"return document.querySelectorAll(\"p\").length"')
 [ "${LINES:-0}" -ge 4 ] \
   || die "only ${LINES:-0} transcript rows reached the screen; with fewer than four the badge assertions below cannot fail"
 if [ "${#WORDS[@]}" -gt 0 ]; then
@@ -254,7 +254,11 @@ fi
 # and the UI's guard was `!== undefined` -- so every line carried a red `0%` reading *Low confidence*.
 # A badge is legitimate when a model actually scored the line low. What is never legitimate is a badge
 # on a line nobody scored, and `NaN%` on any line at all.
-BADGES=$(js '"return [...document.querySelectorAll(\"span.readout\")].map(s=>s.textContent.trim()).filter(t=>/%$/.test(t)).join(\" \")"' \
+# Selected by the badge's own accessible name, not by `span.readout` + a percentage: the live
+# microphone meter (`AudioLevelMeter.tsx:76`) renders `{rms}%` in a `span.readout` too, and a first
+# version of this assertion counted the meter's `3%` as a confidence. A check that measures the wrong
+# element is the same defect as the one it is guarding against.
+BADGES=$(js '"return [...document.querySelectorAll(\"[aria-label^=\\\"Transcription confidence\\\"]\")].map(s=>s.textContent.trim()).join(\" \")"' \
   | python3 -c 'import json,sys
 try: print(json.load(sys.stdin) or "")
 except Exception: print("")')

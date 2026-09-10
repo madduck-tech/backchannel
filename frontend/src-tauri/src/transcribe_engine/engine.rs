@@ -1013,7 +1013,14 @@ mod token_probability_measurement {
         let wav = std::env::var("BC_MEASURE_WAV").unwrap_or_else(|_| {
             glob_first("~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav")
         });
-        let samples = read_wav_mono_16k(&wav);
+        let mut samples = read_wav_mono_16k(&wav);
+        // A live recording decodes VAD segments, not whole files, and a family may fill `p` for some
+        // and not others. `BC_MEASURE_SECONDS` takes the first N seconds so a segment-sized decode can
+        // be measured next to the whole-file one.
+        if let Ok(secs) = std::env::var("BC_MEASURE_SECONDS") {
+            let n = (secs.parse::<f32>().unwrap_or(0.0) * 16_000.0) as usize;
+            if n > 0 && n < samples.len() { samples.truncate(n); }
+        }
         eprintln!("model: {path}\nwav:   {wav}  ({} samples)", samples.len());
 
         let model = transcribe_cpp::Model::load(&path).expect("the model opens");

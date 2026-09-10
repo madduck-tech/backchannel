@@ -98,17 +98,18 @@ async function rowWith(confidence) {
 }
 
 /**
- * Every percentage badge on screen, as written.
+ * Every confidence badge on screen, as written.
  *
- * Scoped to `span.readout` — the badge's own innermost element. Matching every `<span>` counts the
- * badge twice, because its wrapper carries the same `textContent`, and a first draft of this file
- * read `0% 0%` and took it for two call sites. The timestamp is also a `.readout`, and reads `00:00`,
- * so the pattern is what separates them.
+ * Selected by the badge's own accessible name. Two earlier selectors were wrong in two different
+ * ways: every `<span>` counted each badge twice, because its wrapper carries the same `textContent`
+ * (a first draft read `0% 0%` and took it for two call sites); and `span.readout` plus a percentage
+ * pattern also matches the live microphone meter, which renders `{rms}%` in a `span.readout`
+ * (`AudioLevelMeter.tsx:76`) — that one was caught by a Stage 2 run reporting a `3%` confidence for a
+ * model that had produced no token probabilities at all.
  */
 const badges = (container) =>
-  Array.from(container.querySelectorAll('span.readout'))
-    .map((s) => s.textContent.trim())
-    .filter((t) => /^-?\d+(\.\d+)?%$|^NaN%$/.test(t));
+  Array.from(container.querySelectorAll('[aria-label^="Transcription confidence"]'))
+    .map((s) => s.textContent.trim());
 
 // --- what cannot be a score renders nothing --------------------------------------------------
 for (const [name, value] of [
