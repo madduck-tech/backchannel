@@ -137,7 +137,7 @@ export function AudioCheckStep() {
                 if (tone.status === 'rejected') {
                     // The device result would read "nothing arrived, pick another", which blames a
                     // device that was never given anything to hear.
-                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${String(tone.reason)}` });
+                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${tone.reason instanceof Error ? tone.reason.message : String(tone.reason)}` });
                     return;
                 }
                 set({ status: 'done', result: capture.value });
@@ -195,7 +195,12 @@ export function AudioCheckStep() {
         osc.start();
         await new Promise((r) => setTimeout(r, 2500));
         osc.stop();
+        // Read before closing: a context that never left `suspended` played nothing. That is what Web
+        // Audio does in the AppImage today, where WebKit finds no audio sink (#173), and the row then
+        // told the person their device was silent. Naming the tone is the honest outcome.
+        const ran = ctx.state === 'running';
         await ctx.close();
+        if (!ran) throw new Error('the audio output never started');
     }, []);
 
     const inputs = devices.filter((d) => d.device_type === 'Input');
