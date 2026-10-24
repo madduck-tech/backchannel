@@ -34,6 +34,12 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/audio/import.rs::test_import_pipeline_decode_vad',
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
+  ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
+   { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
+     why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +
+          '50 ms zero windows next to the same speech whole, and needs a model on disk and an env var ' +
+          'to say which. #168 records its output per model. What the check must hand the decoder, one ' +
+          'side and nothing else, is asserted there' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_puts_in_token_p',
    { coveredBy: 'a_family_that_scores_nothing_reports_no_confidence',
      why: 'an instrument, not an assertion: it prints what a given .gguf puts in Token::p and needs ' +

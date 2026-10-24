@@ -1067,6 +1067,45 @@ mod token_probability_measurement {
         eprintln!("scored_confidence     = {:?}", scored_confidence(&transcript));
     }
 
+    /// What a model makes of speech cut up by silence, against the same speech whole (#168).
+    ///
+    /// The first-run audio check used to hand the decoder both sides of the transcription channel:
+    /// 50 ms of the device, then 50 ms of the zero window the unopened side sends, over and over.
+    /// Source shows that shape; it cannot show what a given acoustic model does with it. This prints
+    /// both decodes of one sample with the same model, and whether their word sequences agree.
+    #[test]
+    #[ignore = "needs a model on disk; run by name with BC_MEASURE_MODEL=<path to a .gguf>"]
+    fn what_a_family_hears_through_interleaved_zeros() {
+        let path = std::env::var("BC_MEASURE_MODEL")
+            .expect("set BC_MEASURE_MODEL to a .gguf to measure");
+        let wav = std::env::var("BC_MEASURE_WAV").unwrap_or_else(|_| {
+            glob_first("~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav")
+        });
+        let clean = read_wav_mono_16k(&wav);
+        // One 50 ms window of each side at 16 kHz, in the order `forward_mixed` sends them.
+        const WINDOW: usize = 800;
+        let mut interleaved = Vec::with_capacity(clean.len() * 2);
+        for window in clean.chunks(WINDOW) {
+            interleaved.extend_from_slice(window);
+            interleaved.extend(std::iter::repeat_n(0.0, window.len()));
+        }
+        eprintln!("model: {path}\nwav:   {wav}  ({} samples clean, {} interleaved)", clean.len(), interleaved.len());
+
+        let model = transcribe_cpp::Model::load(&path).expect("the model opens");
+        let mut session = model.session().expect("a session opens");
+        let words = |text: &str| -> Vec<String> {
+            text.split_whitespace()
+                .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase())
+                .filter(|w| !w.is_empty())
+                .collect()
+        };
+        let a = session.run(&clean, &RunOptions::default()).expect("the clean decode runs");
+        let b = session.run(&interleaved, &RunOptions::default()).expect("the interleaved decode runs");
+        eprintln!("clean:       {}", a.text.trim());
+        eprintln!("interleaved: {}", b.text.trim());
+        eprintln!("same word sequence: {}", words(&a.text) == words(&b.text));
+    }
+
     fn glob_first(pattern: &str) -> String {
         let expanded = pattern.replace('~', &std::env::var("HOME").unwrap());
         let out = std::process::Command::new("sh")
