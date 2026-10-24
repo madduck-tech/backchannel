@@ -214,6 +214,87 @@ CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download s
 click "$CONT" "Continue on the download screen"
 
 await "document.body.innerText.includes('Check your audio')" "the audio check" 30
+
+# --- the audio check, with a microphone speaking a known sentence (#168) ---------------------------
+#
+# The one pass that can hold this screen to its promise, *"This proves each one with words, not a
+# moving bar"*, because the harness is speaking `jfk.wav` into a virtual source. The onboarding pass
+# presses the same control with no signal and accepts silence (#167); here silence is a failure.
+#
+# Pick the harness's own source, by name. The harness makes it the *default input*, but this screen
+# checks the device in its picker, whose first entry is whatever the machine lists first. The
+# description PipeWire reports is read back from the graph, never assumed (see the two-channel note in
+# `gopnik.json`). The picker is a Radix `Select`, so it is opened and its option clicked, as a person
+# does it.
+HARNESS_DESC=$(pw-dump | python3 -c '
+import json, sys
+for o in json.load(sys.stdin):
+    p = (o.get("info") or {}).get("props") or {}
+    if p.get("node.name") == "backchannel_harness_src":
+        print(p.get("node.description") or ""); break
+')
+[ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph"
+TRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Microphone\"]"}')
+[ -n "$TRIG" ] || die "no microphone picker on the audio check"
+click "$TRIG" "the microphone picker"
+await "document.querySelectorAll('[role=option]').length > 0" "the microphone list to open" 15
+OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='option'][contains(normalize-space(),\\\"$HARNESS_DESC\\\")]\"}")
+[ -n "$OPT" ] || die "the audio check does not offer the harness microphone '$HARNESS_DESC'; it offers: $(js '"return [...document.querySelectorAll(\"[role=option]\")].map(o=>o.textContent.trim()).join(\" | \")"')"
+click "$OPT" "the harness microphone"
+await "(function(){var t=document.querySelector('button[aria-label=Microphone]');return !!t&&t.textContent.indexOf('$HARNESS_DESC')>=0;})()" \
+      "the picker to show the harness microphone" 10
+
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
+audio_check_press
+[ "$(audio_check_field "$AUDIO_CHECK" kind)" = HEARD ] \
+  || die "the harness microphone is speaking and the check did not return words: '$(audio_check_field "$AUDIO_CHECK" outcome)'"
+
+# The application's own log, read through `$LOG` so `a-gate-oracle-reads-a-line-the-app-writes.test.mjs`
+# holds every pattern below to a string the Rust writes.
+LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+[ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+
+# **One side, by count.** Decoders and the loop position cannot move this number, so it is what holds
+# the interleaving (#168). `LISTEN` is read from the source the AppImage was built from, and the pass
+# fails closed without it. The band is (LISTEN - 1 s) .. (LISTEN + 0.5 s) at 16 kHz, and it assumes
+# pipewire-pulse delivery, which the harness requires. Both sides interleaved measured 195 198 for
+# six seconds.
+BUILT_FROM=$(tr -d '[:space:]' < "$APP.built-from" 2>/dev/null)
+[ -n "$BUILT_FROM" ] || die "no $APP.built-from, so this pass cannot read the LISTEN the binary was built with"
+LISTEN_S=$(git show "$BUILT_FROM:frontend/src-tauri/src/audio/device_check.rs" 2>/dev/null \
+  | grep -oE 'const LISTEN: Duration = Duration::from_secs\([0-9]+\)' | grep -oE '[0-9]+\)' | tr -d ')')
+[ -n "$LISTEN_S" ] || die "could not read LISTEN from device_check.rs at $BUILT_FROM"
+SAMPLES=$(grep -oE "Device check on [^:]+: [0-9]+ samples" "$LOG" | tail -1 | grep -oE '[0-9]+ samples' | grep -oE '[0-9]+')
+[ -n "$SAMPLES" ] || die "the application logged no 'Device check on' line, so nothing says what the decoder was handed"
+LO=$(( (LISTEN_S - 1) * 16000 )); HI=$(( LISTEN_S * 16000 + 8000 ))
+say "the check handed the decoder $SAMPLES samples for a ${LISTEN_S}s window (one side: $LO..$HI)"
+[ "$SAMPLES" -ge "$LO" ] && [ "$SAMPLES" -le "$HI" ] \
+  || die "the decoder was handed $SAMPLES samples for a ${LISTEN_S}s window. One side is $LO..$HI; both sides interleaved is about $((LISTEN_S * 32000)). The check is not hearing one device"
+
+# **Which model.** `engine.rs:224` logs `Loading model <id> from <path>` before every load. A check that
+# loads the default for someone who chose another passes every assertion that takes the default.
+LOADED=$(grep -oE "Loading model [a-z0-9._-]+" "$LOG" | tail -1 | awk '{print $3}')
+say "the model the application loaded for the check: '${LOADED:-<not stated in the log>}'"
+[ "$LOADED" = "$MODEL_ID" ] \
+  || die "the audio check decoded with '${LOADED:-<unknown>}' and the person chose '$MODEL_ID'"
+
+# **Words, from the decoded text alone.** `gigaam-v3-ctc` is Russian-only and answers this English
+# sample in phonetic Cyrillic, so `unscored` asserts the count and the model and not the vocabulary.
+if [ ${#WORDS[@]} -gt 0 ]; then
+  N=$(audio_check_field "$AUDIO_CHECK" sampleWords)
+  [ "$N" -ge 3 ] \
+    || die "the check decoded '$(audio_check_field "$AUDIO_CHECK" decoded)', which holds $N distinct words of the sample; three are required"
+  say "the decoded text holds $N distinct words of the sample: $(audio_check_field "$AUDIO_CHECK" decoded)"
+fi
+
+# --- the system row is not pressed here, and why (#173) ------------------------------------------
+#
+# It was, for one run: with a null sink as the default output, the row answered `Nothing arrived`.
+# The AppImage carries no GStreamer plugins, so Web Audio has no output and the tone never sounds
+# (`GStreamer element autoaudiosink not found`, the application's own stderr). That press, and the
+# sink it plays into, are #173's oracle, red until the media framework ships. Until then the system
+# row's tone is held by jsdom alone (`audio-check-step.test.mjs`), and a verdict says so.
+
 FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
 [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
 click "$FIN" "the control that finishes first run"
@@ -351,6 +432,12 @@ esac
 
 
 # --- the summary ------------------------------------------------------------------------------------
+# Waited for, not assumed. After Stop the meeting page renders a moment later, and the lookup used to
+# run straight away: on 2026-10-24 (round 4 of #168's gate) it found nothing, and the button list the
+# failure printed a moment later did contain it. The recording screen has no such button, so this is
+# false in the state being left.
+await "[...document.querySelectorAll('button')].some(b=>/^Generate [Ss]ummary$/.test(b.textContent.trim()))" \
+      "the meeting page's Generate Summary control" 30
 G=$(by_text "Generate Summary"); [ -n "$G" ] || G=$(by_text "Generate summary")
 [ -n "$G" ] || die "no Generate Summary control after a recording; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).slice(0,30).join(\" / \")"')"
 click "$G" "Generate Summary"

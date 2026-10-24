@@ -38,10 +38,14 @@ pub mod playback_monitor; // NEW: Playback device detection for BT warnings
 // Transcription module (provider abstraction, engine management, worker pool)
 pub mod transcription;
 
+// The first-run audio check: proves a capture device with words before a meeting depends on it. A
+// product surface, so it ships. Until #167 it sat between the attribute below and the module that
+// attribute was written for (`bfa8d3a` inserted it there), and every release build lacked it.
+pub mod device_check;
 // Capture-start measurement for the dictation question. Debug builds only — it
 // opens a microphone from a command and must never reach a release binary.
+// `command-reachability.test.mjs` holds the set of commands no shipped build registers.
 #[cfg(debug_assertions)]
-pub mod device_check;
 pub mod dictation_probe;
 
 // Shared utilities for import and retranscription

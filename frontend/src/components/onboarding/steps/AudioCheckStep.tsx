@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,10 +32,15 @@ import { cn } from '@/lib/utils';
 
 type Device = { name: string; device_type: 'Input' | 'Output' };
 type CheckResult = { device: string; heard_audio: boolean; text: string };
-type State = { status: 'idle' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
+/**
+ * `loading` is its own state rather than a silent wait inside `listening`: a model can take seconds
+ * to reach memory, and a button reading *Listening…* while nothing listens is the same lie as a level
+ * meter that moves for a silent device (#168).
+ */
+type State = { status: 'idle' | 'loading' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
 
 export function AudioCheckStep() {
-    const { goNext, completeOnboarding } = useOnboarding();
+    const { goNext, completeOnboarding, selectedTranscribeModel } = useOnboarding();
     const [isMac, setIsMac] = useState(false);
     /** One press, one completion. Without it a second click starts a second `completeOnboarding`. */
     const [finishing, setFinishing] = useState(false);
@@ -87,18 +92,63 @@ export function AudioCheckStep() {
             .catch((error) => console.error('[AudioCheckStep] Could not list devices:', error));
     }, []);
 
+    /**
+     * One check at a time, across both rows: they share one engine. Two quick presses used to open
+     * the device twice, and pressing the other row while a model loaded started a second load of the
+     * same model (#168). The ref stops the second press within the same tick; the state disables both
+     * buttons once React renders.
+     */
+    const busy = useRef(false);
+    const [checking, setChecking] = useState(false);
+
+    /**
+     * `alongside` runs once the device is being opened: the system row's tone. It used to start
+     * before this function had loaded the model, so a load longer than the 2.5 s tone left the
+     * device listening to silence (#168).
+     */
     const check = useCallback(
-        async (name: string, system: boolean, set: (s: State) => void) => {
-            if (!name) return;
-            set({ status: 'listening' });
+        async (name: string, system: boolean, set: (s: State) => void, alongside?: () => Promise<void>) => {
+            if (!name || busy.current) return;
+            busy.current = true;
+            setChecking(true);
             try {
-                const result = await invoke<CheckResult>('check_capture_device', { name, system });
-                set({ status: 'done', result });
+                // Words need a model in memory, and nothing puts one there during first run: the
+                // only preload is the call detector's (`call_detector.rs:225`), on a meeting
+                // application launching. So every press used to answer `Could not transcribe what
+                // <device> heard: No model loaded` (#168). Both sides decode: the tone is heard
+                // audio too.
+                //
+                // **The model chosen two screens earlier, by name.** Not the readiness path
+                // (`transcribe_validate_model_ready`): it resolves the model from
+                // `transcript_settings`, which first run writes only in `completeOnboarding`, so here
+                // it would load `DEFAULT_TRANSCRIBE_MODEL` for someone who chose another.
+                if ((await invoke<string | null>('transcribe_get_current_model')) !== selectedTranscribeModel) {
+                    set({ status: 'loading' });
+                    await invoke('transcribe_load_model', { modelName: selectedTranscribeModel });
+                }
+                set({ status: 'listening' });
+                // `allSettled`, not `all`: a tone that fails must not end this function while the
+                // device is still listening, or the guard lets a second check start beside the first.
+                const [capture, tone] = await Promise.allSettled([
+                    invoke<CheckResult>('check_capture_device', { name, system }),
+                    alongside ? alongside() : Promise.resolve(),
+                ]);
+                if (capture.status === 'rejected') throw capture.reason;
+                if (tone.status === 'rejected') {
+                    // The device result would read "nothing arrived, pick another", which blames a
+                    // device that was never given anything to hear.
+                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${String(tone.reason)}` });
+                    return;
+                }
+                set({ status: 'done', result: capture.value });
             } catch (error) {
                 set({ status: 'error', error: String(error) });
+            } finally {
+                busy.current = false;
+                setChecking(false);
             }
         },
-        []
+        [selectedTranscribeModel]
     );
 
     /**
@@ -107,18 +157,36 @@ export function AudioCheckStep() {
      * Web Audio rather than cpal: the Rust side has no playback path at all
      * (`grep -rn build_output_stream src-tauri/src` is empty), and a tone needs none.
      */
-    const playTone = useCallback(async () => {
+    /**
+     * The tone's audio context, made **inside the click**, before anything is awaited. A webview may
+     * start audio only from a user gesture, and the tone now plays after the model has loaded, which
+     * is no longer inside the gesture (#168). `null` where there is no Web Audio at all.
+     */
+    const openToneContext = (): AudioContext | Error | null => {
         const AudioCtx =
             window.AudioContext ??
             (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (typeof AudioCtx !== 'function') return null;
+        try {
+            return new AudioCtx();
+        } catch (error) {
+            return error instanceof Error ? error : new Error(String(error));
+        }
+    };
+
+    const playTone = useCallback(async (ctx: AudioContext | Error | null) => {
+        if (ctx instanceof Error) throw ctx;
         // Guarded rather than assumed. Without it the whole check dies where Web Audio is absent,
         // and the listening half -- which is the half that proves anything -- would never run.
-        if (typeof AudioCtx !== 'function') {
+        if (!ctx) {
             console.warn('[AudioCheckStep] No Web Audio here; listening without playing a tone.');
             await new Promise((r) => setTimeout(r, 2500));
             return;
         }
-        const ctx = new AudioCtx();
+        // Not awaited. A context the webview will not start leaves `resume()` pending forever, and
+        // awaiting it held both rows shut until a reload (the gate's adversary, round 3). Made in the
+        // click, the context normally runs; if it does not, the tone is silent and the device says so.
+        if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.frequency.value = 440;
@@ -148,6 +216,7 @@ export function AudioCheckStep() {
                     onChange={setMic}
                     state={micState}
                     action="Check by speaking"
+                    busy={checking}
                     onCheck={() => check(mic, false, setMicState)}
                 />
 
@@ -159,10 +228,17 @@ export function AudioCheckStep() {
                     onChange={setSpeakers}
                     state={sysState}
                     action="Play a tone and listen"
-                    onCheck={async () => {
-                        const checking = check(speakers, true, setSysState);
-                        await playTone();
-                        await checking;
+                    busy={checking}
+                    onCheck={() => {
+                        if (busy.current || !speakers) return;
+                        const ctx = openToneContext();
+                        // Closed on every path, not only after a tone that played: a load that fails
+                        // never reaches the tone, and each open context holds an output stream.
+                        void check(speakers, true, setSysState, () => playTone(ctx)).finally(() => {
+                            if (ctx && !(ctx instanceof Error) && ctx.state !== 'closed') {
+                                void ctx.close().catch(() => undefined);
+                            }
+                        });
                     }}
                 />
 
@@ -190,6 +266,7 @@ function Row({
     onChange,
     state,
     action,
+    busy,
     onCheck,
 }: {
     label: string;
@@ -199,6 +276,8 @@ function Row({
     onChange: (v: string) => void;
     state: State;
     action: string;
+    /** A check is running on either row; they share one engine. */
+    busy: boolean;
     onCheck: () => void;
 }) {
     return (
@@ -222,9 +301,10 @@ function Row({
                     size="sm"
                     variant="outline"
                     onClick={onCheck}
-                    disabled={!value || state.status === 'listening'}
+                    disabled={!value || busy || state.status === 'listening' || state.status === 'loading'}
                 >
-                    {state.status === 'listening' ? 'Listening…' : action}
+                    {state.status === 'loading' ? 'Loading the model…'
+                        : state.status === 'listening' ? 'Listening…' : action}
                 </Button>
                 <Outcome state={state} />
             </div>

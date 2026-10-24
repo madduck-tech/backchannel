@@ -28,13 +28,24 @@ const DEVICES = [
   { name: 'Speakers Monitor', device_type: 'Output' },
 ];
 
-async function render({ result, fail, failComplete = false } = {}) {
+// Not the default: a check that loads `DEFAULT_TRANSCRIBE_MODEL` for someone who chose another passes
+// every assertion that takes the default (#168).
+const CHOSEN = 'gigaam-v3-e2e-rnnt-q8';
+const DEFAULT_MODEL = 'parakeet-tdt-0.6b-v3-q8';
+
+async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails, suspended } = {}) {
   const calls = [];
+  // One timeline for IPC and the tone, so an ordering between them can be asserted.
+  const events = [];
   const seen = { completed: 0, next: 0 };
+  // What `TranscribeEngine` holds. Nothing during first run: no load path runs before this screen,
+  // and `check_capture_device` decodes with whatever is there (#168).
+  let inMemory = loaded;
   const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
     ...boundaryStubs().modules,
     '@/contexts/OnboardingContext': {
       useOnboarding: () => ({
+        selectedTranscribeModel: CHOSEN,
         goNext: () => { seen.next += 1; },
         completeOnboarding: async () => {
           seen.completed += 1;
@@ -51,9 +62,21 @@ async function render({ result, fail, failComplete = false } = {}) {
     '@tauri-apps/api/core': {
       invoke: async (cmd, args) => {
         calls.push({ cmd, args });
+        events.push(cmd === 'check_capture_device' ? `check:${args.system ? 'system' : 'mic'}` : cmd);
         if (cmd === 'get_audio_devices') return DEVICES;
+        if (cmd === 'transcribe_get_current_model') return inMemory;
+        if (cmd === 'transcribe_load_model') {
+          if (holdLoad) await holdLoad;
+          if (failLoad) throw new Error(failLoad);
+          inMemory = args.modelName;
+          events.push('loaded');
+          return null;
+        }
         if (cmd === 'check_capture_device') {
+          if (holdCheck) await holdCheck;
           if (fail) throw new Error(fail);
+          // The engine's answer when nothing is in memory, which is what every press got (#168).
+          if (!inMemory) throw new Error(`Could not transcribe what ${args.name} heard: No model loaded`);
           return result ?? { device: args.name, heard_audio: true, text: 'testing one two' };
         }
         return null;
@@ -64,11 +87,18 @@ async function render({ result, fail, failComplete = false } = {}) {
   // skipped by the component's own guard — the guard is asserted separately by not installing this.
   const played = [];
   window.AudioContext = class {
+    constructor() {
+      events.push('ctx');
+      if (toneFails) throw new Error('NotSupportedError: no audio output');
+      // A context the webview will not start: `resume()` stays pending, as the spec allows.
+      this.state = suspended ? 'suspended' : 'running';
+    }
+    resume() { return new Promise(() => {}); }
     createOscillator() {
       return {
         frequency: {},
         connect: (n) => n,
-        start: () => played.push('start'),
+        start: () => { played.push('start'); events.push('tone'); },
         stop: () => played.push('stop'),
       };
     }
@@ -76,13 +106,13 @@ async function render({ result, fail, failComplete = false } = {}) {
       return { gain: {}, connect: () => this.destination };
     }
     get destination() { return {}; }
-    async close() {}
+    async close() { this.state = 'closed'; events.push('close'); }
   };
 
   const container = document.createElement('div');
   document.body.appendChild(container);
   await act(async () => { createRoot(container).render(React.createElement(AudioCheckStep, null)); });
-  return { container, calls, played, seen };
+  return { container, calls, played, seen, events };
 }
 
 const buttons = (c) => [...c.querySelectorAll('button')];
@@ -165,6 +195,178 @@ const click = async (el) => {
   );
 }
 
+// --- 4b: words need a model in memory, and it is the one the person chose (#168) ------------------
+{
+  // Nothing in memory: the chosen model is loaded by name, before the device is opened.
+  const { container, calls } = await render();
+  await click(byText(container, 'Check by speaking'));
+  const order = calls.map((c) => c.cmd).filter((c) => c === 'transcribe_load_model' || c === 'check_capture_device');
+  assert.deepEqual(order, ['transcribe_load_model', 'check_capture_device'], 'a model must be in memory before the check decodes');
+  assert.equal(
+    calls.find((c) => c.cmd === 'transcribe_load_model').args.modelName,
+    CHOSEN,
+    'and it must be the model chosen two screens earlier, by name. The readiness path resolves it from ' +
+      '`transcript_settings`, which first run writes only at the end, so it would load the default'
+  );
+  assert.match(container.textContent, /testing one two/);
+}
+{
+  // The default in memory, another chosen: the chosen one replaces it.
+  const { calls } = await (async () => {
+    const r = await render({ loaded: DEFAULT_MODEL });
+    await click(byText(r.container, 'Check by speaking'));
+    return r;
+  })();
+  assert.equal(calls.find((c) => c.cmd === 'transcribe_load_model')?.args.modelName, CHOSEN, 'a different model in memory is replaced');
+}
+{
+  // Already the chosen one: nothing is loaded twice.
+  const { container, calls } = await render({ loaded: CHOSEN });
+  await click(byText(container, 'Check by speaking'));
+  assert.ok(!calls.some((c) => c.cmd === 'transcribe_load_model'), 'the model already in memory is not loaded again');
+  assert.match(container.textContent, /testing one two/);
+}
+{
+  // While it loads, the button says so. *Listening…* while nothing listens is the moving-bar lie.
+  let release;
+  const holdLoad = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ holdLoad });
+  const press = act(async () => {
+    byText(container, 'Check by speaking').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await press;
+  const busy = byText(container, 'Loading the model');
+  assert.ok(busy, `the button must read "Loading the model…" while the model reaches memory: ${buttons(container).map((b) => b.textContent).join(' / ')}`);
+  assert.equal(busy.disabled, true, 'and must not take a second press');
+  assert.ok(!calls.some((c) => c.cmd === 'check_capture_device'), 'and no device is opened before the model is ready');
+  await act(async () => { release(); await holdLoad; });
+}
+{
+  // A load that fails is the outcome, verbatim, and the device is never opened.
+  const { container, calls } = await render({ failLoad: "Model file not found: gigaam-v3-e2e-rnnt-Q8_0.gguf" });
+  await click(byText(container, 'Check by speaking'));
+  assert.match(container.textContent, /Model file not found/, 'a failed load must say what failed');
+  assert.ok(!calls.some((c) => c.cmd === 'check_capture_device'), 'and must not go on to open the device');
+  assert.equal(byText(container, 'Check by speaking').disabled, false, 'and the button comes back');
+}
+
+// --- 4c: one check at a time, and the tone plays while the device listens (#168) -----------------
+//
+// Found by the gate's adversary, and shown red on the previous version of this component: two quick
+// presses opened the device twice, the other row could start a second load of the same model, and
+// the tone, started before the model had loaded, could end before the device was opened.
+{
+  let release;
+  const holdCheck = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ loaded: CHOSEN, holdCheck });
+  const button = byText(container, 'Check by speaking');
+  await act(async () => {
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { release(); await holdCheck; });
+  assert.equal(
+    calls.filter((c) => c.cmd === 'check_capture_device').length,
+    1,
+    'two presses in one tick open the device once'
+  );
+}
+{
+  let release;
+  const holdLoad = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ holdLoad });
+  await act(async () => {
+    byText(container, 'Check by speaking').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  const other = byText(container, 'Play a tone and listen');
+  assert.equal(other.disabled, true, 'while one row loads the model, the other row cannot start: they share one engine');
+  await act(async () => { other.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+  assert.equal(calls.filter((c) => c.cmd === 'transcribe_load_model').length, 1, 'and no second load of the same model starts');
+  await act(async () => { release(); await holdLoad; });
+}
+{
+  let release;
+  const holdLoad = new Promise((r) => { release = r; });
+  const { container, events } = await render({ holdLoad });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  assert.ok(!events.includes('tone'), `no tone while the model is still loading, or it ends before anything listens: ${events.join(' > ')}`);
+  await act(async () => { release(); await holdLoad; await new Promise((r) => setTimeout(r, 2600)); });
+  const at = (e) => events.indexOf(e);
+  assert.ok(
+    at('loaded') >= 0 && at('loaded') < at('check:system') && at('check:system') < at('tone'),
+    `the order must be: model loaded, device opened, tone played. It was: ${events.join(' > ')}`
+  );
+}
+
+{
+  // A tone that cannot play must not release the guard while the device still listens (found by
+  // the gate's adversary in round 2: `Promise.all` rejected at once and both buttons came back).
+  let release;
+  const holdCheck = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ loaded: CHOSEN, holdCheck, toneFails: true });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  assert.equal(
+    byText(container, 'Check by speaking').disabled,
+    true,
+    'while the device is still listening, the other row stays shut even though the tone already failed'
+  );
+  await act(async () => {
+    byText(container, 'Check by speaking').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  assert.equal(calls.filter((c) => c.cmd === 'check_capture_device').length, 1, 'and no second check starts beside the first');
+  await act(async () => { release(); await holdCheck; });
+  assert.match(
+    container.textContent,
+    /The tone could not play/,
+    'the outcome names the tone, not the device: "nothing arrived, pick another" would blame a device given nothing to hear'
+  );
+}
+{
+  // The tone's context is made in the click, before any await: a webview may start audio only from
+  // a user gesture, and the tone now plays after the model has loaded.
+  const { container, events } = await render({ loaded: CHOSEN });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  assert.ok(
+    events.indexOf('ctx') >= 0 && events.indexOf('ctx') < events.indexOf('transcribe_get_current_model'),
+    `the audio context must exist before the first await of the press: ${events.join(' > ')}`
+  );
+  await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+}
+
+{
+  // A context that never starts must not hold the screen (round 3: an awaited `resume()` left both
+  // rows disabled until a reload).
+  const { container, calls } = await render({ loaded: CHOSEN, suspended: true });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2700)); });
+  assert.ok(calls.some((c) => c.cmd === 'check_capture_device' && c.args.system), 'the device was checked');
+  assert.equal(byText(container, 'Play a tone and listen')?.disabled, false, 'and the row comes back, whatever the context did');
+  assert.equal(byText(container, 'Check by speaking').disabled, false, 'and so does the other one');
+}
+{
+  // Every context made in a click is closed, including when the tone never plays: three presses whose
+  // model load fails leaked three in round 3.
+  const { container, events } = await render({ failLoad: 'Failed to load model: not downloaded' });
+  for (let k = 0; k < 3; k++) {
+    await act(async () => {
+      byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
+  const made = events.filter((e) => e === 'ctx').length;
+  assert.equal(made, 3, 'the sentinel: three presses made three contexts');
+  assert.equal(events.filter((e) => e === 'close').length, made, `each one is closed: ${events.join(' > ')}`);
+}
+
 // --- 5: the step is offered, not mandatory -------------------------------------------------------
 {
   const { container } = await render();
@@ -207,6 +409,46 @@ const click = async (el) => {
   assert.ok(
     !/auto_save:\s*true/.test(command),
     'nothing here may write a recording to disk'
+  );
+  // The idle unloader must leave the model alone while the check uses it (#168). The guard's
+  // behaviour is unit-tested beside the unloader (`a_device_check_keeps_the_model_loaded_while_it_runs`);
+  // what that test cannot see is whether the command takes it **and keeps it**, so the wiring is read
+  // here, from code with its comments removed. Round 2's version matched a substring, and `let _ =`,
+  // `drop(...)` and a commented-out line all passed it (the gate's adversary).
+  // Block comments first, then line comments: round 3's version stripped only `//`, and a
+  // `/* … */` around the guard line passed it.
+  const code = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  // The command's own body: from its signature to the first closing brace at column 0.
+  const fromCommand = code(command).slice(code(command).indexOf('pub async fn check_capture_device'));
+  const body = fromCommand.slice(0, fromCommand.indexOf('\n}\n') + 2);
+  // At the function body's own level (four spaces), so the guard lives until the function returns.
+  // Taken inside a block (`{ let g = take(); }`, or under an `if`) it ends at that block's brace and
+  // holds nothing, and nothing later mentions it (the gate's adversary, round 4).
+  const bound = /\n {4}let\s+(_[a-z][a-z_]*)\s*=\s*crate::audio::common::DeviceCheckHoldsEngine::take\(\);/.exec(body);
+  assert.ok(
+    bound && bound.index < body.indexOf('.transcribe_batch('),
+    'the check must take the engine guard into a **named** binding before it decodes. `let _ =` and a bare ' +
+      'call drop it on the spot, and a tick after five idle minutes then drops the model it just loaded'
+  );
+  // Any later mention of the binding before the decode is a way to end it early: `drop(g)`,
+  // `std::mem::forget(g)` (which also leaks the count), or a move into an inner scope.
+  // Nor gated: `#[cfg(debug_assertions)]` above the take compiles cleanly and leaves release builds
+  // with no guard at all, #167's own mistake one level down (the gate's adversary, round 5).
+  const above = body.slice(0, bound.index).trimEnd().split('\n').pop().trim();
+  assert.ok(!above.startsWith('#['), `the take must not sit under an attribute: \`${above}\` gates it out of some builds`);
+  const before = body.slice(bound.index + bound[0].length, body.indexOf('.transcribe_batch('));
+  assert.ok(
+    !new RegExp(`\\b${bound[1]}\\b`).test(before),
+    `and must not touch it again before the decode: \`${bound[1]}\` is used in between`
+  );
+  const sides = body.match(/side_checked\([^)]*\)/g) ?? [];
+  assert.deepEqual(sides, ['side_checked(system)'], 'the side read follows the row that was pressed, not a constant');
+  const loadCommand = code(fs.readFileSync(path.join(root, 'src-tauri/src/transcribe_engine/commands.rs'), 'utf8'));
+  const load = loadCommand.slice(loadCommand.indexOf('pub async fn transcribe_load_model'));
+  assert.ok(
+    load.slice(0, load.indexOf('#[command]')).includes('touch_engine_idle()'),
+    'a model just loaded must reset the idle clock, or the next tick can unload it before anything uses it'
   );
 }
 

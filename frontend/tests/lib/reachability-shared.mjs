@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { absentFromEveryShippedBuild, handlerEntries, innerCfgs, moduleDeclarations } from './cfg-gates.mjs';
 
 export const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const srcDir = path.join(root, 'src');
@@ -86,6 +87,57 @@ export function registeredCommandNames() {
       .map((e) => e.split('::').pop().trim())
       .filter((e) => /^[a-z][A-Za-z0-9_]*$/.test(e))
   );
+}
+
+/**
+ * Commands registered in `generate_handler!` that **no shipped build** registers (#167).
+ *
+ * The gates that apply to a command are its handler entry's own `cfg`s, plus, for every module its
+ * path crosses, the `cfg`s above that module's `mod` declaration and the inner `#![cfg]`s at the top
+ * of its file. #167's root was a module gate: `audio/mod.rs` carried `#[cfg(debug_assertions)] pub
+ * mod device_check;`, so a census reading only the handler would have called the entry fixed while
+ * the module stayed compiled out. What counts is decided by `absentFromEveryShippedBuild`, which
+ * evaluates the gates rather than matching their text (see `cfg-gates.mjs`).
+ *
+ * A path segment that names no `mod` declaration throws: a command this cannot place is one whose
+ * gates it would otherwise silently ignore.
+ */
+export function commandsAbsentFromShippedBuilds() {
+  const srcRoot = path.join(root, 'src-tauri', 'src');
+  const libPath = path.join(srcRoot, 'lib.rs');
+  const lib = fs.readFileSync(libPath, 'utf8');
+  const marker = lib.indexOf('generate_handler!');
+  if (marker < 0) throw new Error('generate_handler! not found in lib.rs');
+  const start = lib.indexOf('[', marker);
+  let depth = 0, end = -1;
+  for (let i = start; i < lib.length; i++) {
+    if (lib[i] === '[') depth++;
+    else if (lib[i] === ']' && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) throw new Error('unbalanced generate_handler! block');
+
+  const out = new Set();
+  for (const entry of handlerEntries(lib.slice(start + 1, end))) {
+    const segs = entry.path.split('::').map((s) => s.trim()).filter((s) => s && s !== 'crate');
+    const name = segs.pop();
+    const gates = [...entry.cfgs];
+    let dir = srcRoot, file = libPath, text = lib;
+    for (const seg of segs) {
+      const decls = moduleDeclarations(text);
+      if (!decls.has(seg)) {
+        throw new Error(`${entry.path}: no \`mod ${seg};\` in ${path.relative(root, file)}`);
+      }
+      gates.push(...decls.get(seg));
+      const next = [path.join(dir, `${seg}.rs`), path.join(dir, seg, 'mod.rs')].find((f) => fs.existsSync(f));
+      if (!next) throw new Error(`${entry.path}: module ${seg} has no file under ${path.relative(root, dir)}`);
+      file = next;
+      text = fs.readFileSync(file, 'utf8');
+      gates.push(...innerCfgs(text));
+      dir = path.join(dir, seg);
+    }
+    if (absentFromEveryShippedBuild(gates)) out.add(name);
+  }
+  return out;
 }
 
 /** Resolve one import specifier to a file under src, or null. */

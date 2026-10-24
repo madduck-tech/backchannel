@@ -566,9 +566,11 @@ pub fn run() {
             // Device monitoring commands (AirPods/Bluetooth disconnect/reconnect)
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
+            // The first-run audio check's only control. It ships; until #167 it sat under the
+            // probe's attribute below, and a release build answered "not found".
+            audio::device_check::check_capture_device,
             // Capture-start measurement, debug builds only (audio/dictation_probe.rs)
             #[cfg(debug_assertions)]
-            audio::device_check::check_capture_device,
             audio::dictation_probe::dictation_probe,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,

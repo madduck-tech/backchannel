@@ -3,6 +3,7 @@ use anyhow::Result;
 use log::{debug, info};
 use once_cell::sync::Lazy;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -45,10 +46,52 @@ pub(crate) async fn engine_idle_elapsed() -> Duration {
     ENGINE_LAST_USE.lock().await.elapsed()
 }
 
-/// Is a batch job (import or retranscription) holding the engine right now?
+/// Is a batch job (import, retranscription, or the first-run audio check) holding the engine?
 fn batch_in_progress() -> bool {
     crate::audio::import::is_import_in_progress()
         || crate::audio::retranscription::is_retranscription_in_progress()
+        || DEVICE_CHECKS_RUNNING.load(Ordering::SeqCst) > 0
+}
+
+/// The first-run audio check decodes with the engine, and the unloader used to know nothing of it.
+///
+/// It loads the model the person chose and then listens for six seconds before decoding. Neither
+/// the load nor the check reset the idle clock, so after five minutes on the earlier screens a tick
+/// could drop the weights between the load and the decode, and the press answered `No model loaded`
+/// (#168, found by the gate's adversary). The check holds this guard for as long as it uses the
+/// engine, and the unloader counts it as a batch job, including in its re-check under the lock.
+///
+/// A count, not a flag: with a flag, the first of two overlapping checks cleared it on return while
+/// the second still decoded (found by the gate's adversary in round 2).
+static DEVICE_CHECKS_RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+/// Held by `check_capture_device` while it uses the engine; releasing it resets the idle clock.
+///
+/// `#[must_use]`, so `take();` on its own is a warning, and under `-D warnings` an error: a guard
+/// dropped where it is taken holds nothing.
+///
+/// The private field means only `take()` can make one: a value built any other way would decrement a
+/// count it never incremented, and an underflowed count reads as "running" forever.
+#[must_use = "the engine is held only while this value is alive; bind it to a named variable"]
+pub(crate) struct DeviceCheckHoldsEngine {
+    _only_take_makes_one: (),
+}
+
+impl DeviceCheckHoldsEngine {
+    pub(crate) fn take() -> Self {
+        DEVICE_CHECKS_RUNNING.fetch_add(1, Ordering::SeqCst);
+        DeviceCheckHoldsEngine { _only_take_makes_one: () }
+    }
+}
+
+impl Drop for DeviceCheckHoldsEngine {
+    fn drop(&mut self) {
+        DEVICE_CHECKS_RUNNING.fetch_sub(1, Ordering::SeqCst);
+        // The model was just used, so the five minutes start now rather than from the last screen.
+        if let Ok(mut last) = ENGINE_LAST_USE.try_lock() {
+            *last = Instant::now();
+        }
+    }
 }
 
 /// The decision one tick of the idle unloader makes, as a pure function so the
@@ -527,8 +570,13 @@ mod tests {
 
     /// Any use of the engine has to reset the clock, or a long meeting followed
     /// by a short pause would look idle enough to unload.
+    /// The idle clock is one static; the tests that move it take turns, or a parallel run lets one
+    /// read the other's value.
+    static IDLE_CLOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+
     #[tokio::test]
     async fn touch_engine_idle_pushes_the_deadline_out() {
+        let _turn = IDLE_CLOCK.lock().await;
         *ENGINE_LAST_USE.lock().await = Instant::now() - Duration::from_secs(3600);
         let stale = engine_idle_elapsed().await;
         assert!(should_unload_idle(false, false, stale, FIVE_MIN));
@@ -538,6 +586,34 @@ mod tests {
         let fresh = engine_idle_elapsed().await;
         assert!(fresh < Duration::from_secs(1), "{fresh:?}");
         assert!(!should_unload_idle(false, false, fresh, FIVE_MIN));
+    }
+
+    /// The audio check holds the engine like a batch job: no tick may unload while it listens or
+    /// decodes, however long the person spent on the earlier screens (#168).
+    #[tokio::test]
+    async fn a_device_check_keeps_the_model_loaded_while_it_runs() {
+        let _turn = IDLE_CLOCK.lock().await;
+        *ENGINE_LAST_USE.lock().await = Instant::now() - Duration::from_secs(3600);
+        let stale = engine_idle_elapsed().await;
+        assert!(should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN), "the sentinel: idle enough to unload");
+
+        let held = DeviceCheckHoldsEngine::take();
+        assert!(
+            !should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN),
+            "a running device check must stop the unloader, or the press answers `No model loaded`"
+        );
+
+        // Two overlapping checks: the first one ending must not release the engine from the second.
+        let second = DeviceCheckHoldsEngine::take();
+        drop(held);
+        assert!(
+            !should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN),
+            "one check ending must not free the engine while another still decodes"
+        );
+        drop(second);
+        let fresh = engine_idle_elapsed().await;
+        assert!(fresh < Duration::from_secs(1), "releasing the check resets the clock: {fresh:?}");
+        assert!(!should_unload_idle(false, batch_in_progress(), fresh, FIVE_MIN));
     }
 
     #[test]

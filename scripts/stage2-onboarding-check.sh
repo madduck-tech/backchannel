@@ -453,8 +453,27 @@ await "[...document.querySelectorAll('footer button')].some(b=>b.textContent.tri
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download screen"
 click "$CONT" "Continue on the download screen"
 await "document.body.innerText.includes('Check your audio')" "the audio check, which is step 4" 30
-DEVICES=$(js '"return [...document.querySelectorAll(\"select, [role=combobox], button\")].length"')
-say "the audio check is on screen, and offers ${DEVICES} controls to pick a device with"
+
+# --- the audio check, pressed (#167) --------------------------------------------------------------
+#
+# This used to count the screen's controls and stop, and every release build answered `Command
+# check_capture_device not found` to the one that mattered. The product owner found it by pressing it.
+# No harness is up in this pass, so the device carries no known signal, and any answer the command's
+# body gives is accepted: a rendered result or one of its own errors. Whether the words come back is
+# `stage2-core-check.sh`'s assertion, which has a microphone speaking a known sentence (#168).
+#
+# The two #167 assertions are collected before either fails, so one run against a build that has
+# both defects reports both rather than the first. The decoded words are not logged: with no harness
+# the picker's first input is the machine's real microphone.
+AUDIO_CHECK_REDACT=1
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
+audio_check_press
+FAILED_167=""
+if OUT=$( (audio_check_require_body_answer) 2>&1 ); then :; else FAILED_167="$OUT"; fi
+if OUT=$( (probe_stays_out) 2>&1 ); then say "${OUT#stage2-onboarding-check: }"; else FAILED_167="${FAILED_167:+$FAILED_167
+}$OUT"; fi
+[ -z "$FAILED_167" ] || die "the audio check (#167):
+$FAILED_167"
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
