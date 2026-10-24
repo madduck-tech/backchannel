@@ -123,19 +123,28 @@ const buttons = (c) =>
   // jsdom evaluates no container queries, so this holds the rule as declared. The defect being
   // fixed is that the old rule was `hidden lg:inline` — a *viewport* query at 1024px on buttons
   // living in a pane whose width is unrelated.
+  //
+  // The container is the bar's **wrapper**, never the bar (#165). Until #165 this asserted
+  // `bar.className` matches `/@container\/bar/`, which is the arrangement that collapsed it:
+  // inline-size containment sized the `w-fit` bar as if empty, 26 × 115 at every width. The geometry,
+  // and the breakpoint's value, are measured in Chrome by `the-action-bar-is-one-row.test.mjs`.
   assert.match(
-    bar.className,
+    bar.parentElement.className,
     /@container\/bar/,
-    'the bar must declare itself a container, or the queries below it measure nothing'
+    'the bar’s wrapper must declare the container, or the queries inside it measure nothing'
   );
+  assert.doesNotMatch(bar.className, /@container/, 'the bar must not be its own container: it is content-sized');
   const source = fs.readFileSync(
     path.join(root, 'src/components/MeetingDetails/MeetingActionBar.tsx'),
     'utf8'
   );
+  // Until #165 this required `@[560px]/bar:`, the prototype's number. The product owner moved the
+  // breakpoint to where the wide arrangement fits on one row; its value is derived and checked in
+  // Chrome, so here only its form is held: a container breakpoint, not a viewport one.
   assert.match(
     source,
-    /@\[560px\]\/bar:/,
-    'the labels must respond to the bar’s own width at a stated breakpoint'
+    /@\[\d+px\]\/bar:/,
+    'the labels must respond to the bar’s own room at a stated breakpoint'
   );
   assert.ok(
     !/\bhidden (sm|md|lg|xl|2xl):inline\b/.test(source),
@@ -146,5 +155,5 @@ const buttons = (c) =>
 console.log(
   'ok - meeting action bar: all five actions survive the toolbar, each is disabled or absent where ' +
     'it would fail, the recorded length appears only when known, and the responsive rule is a ' +
-    'container query on the bar rather than a viewport query on the window'
+    'container query on the bar’s wrapper rather than a viewport query on the window'
 );

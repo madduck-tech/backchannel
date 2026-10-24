@@ -431,6 +431,36 @@ sys.exit(0 if 0.0 <= lo <= hi <= 1.0 else 1)' "$CONF_MIN" "$CONF_MAX" \
 esac
 
 
+# --- the action bar, measured in the application (#165) ------------------------------------------
+#
+# The product owner photographed the bar as a 26 px column, and saw it again in this pass's own window.
+# Nothing in the gate had ever read a layout in the application: the geometry checks ran in Chrome on a
+# story. This reads the bar on the meeting page, in WebKitGTK, at the window the pass runs. N comes from
+# the class in the component at the AppImage's own revision, never from a copy here.
+await "!!document.querySelector('[role=toolbar]')" "the meeting page's action bar" 30
+BAR_N=$(git show "$BUILT_FROM:frontend/src/components/MeetingDetails/MeetingActionBar.tsx" 2>/dev/null \
+  | grep -oE '@\[[0-9]+px\]/bar:' | head -1 | grep -oE '[0-9]+')
+[ -n "$BAR_N" ] || die "could not read the bar's breakpoint from MeetingActionBar.tsx at $BUILT_FROM"
+BAR=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/meeting-bar-read.js" \
+  | curl -s -m 30 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d @- \
+  | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+print(v if isinstance(v, str) else json.dumps({"found": False}))')
+bar() { python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get(sys.argv[2]); print("" if v is None else (round(v,1) if isinstance(v,float) else v))' "$BAR" "$1"; }
+[ "$(bar found)" = "True" ] || die "harness: could not read the action bar ($BAR)"
+say "the action bar: room $(bar room)px (window $(bar innerWidth)px), bar $(bar width) x $(bar height), breakpoint ${BAR_N}px; rendered: [$(bar three)], \`•••\` $(bar trigger)"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) >= float(sys.argv[2]) else 1)' "$(bar room)" "$BAR_N" \
+  || die "the bar has $(bar room)px of room, below its ${BAR_N}px breakpoint, so this pass would see the narrow arrangement and the wide one it exists to check would go untested"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)' "$(bar height)" "$(bar oneRowMax)" \
+  || die "the action bar is $(bar width) x $(bar height) in the application: not one row (at most $(bar oneRowMax))"
+[ "$(bar outside)" = 0 ] || die "$(bar outside) of the action bar's controls lie outside its box in the application"
+[ "$(bar three)" = "['Retranscribe', 'Speakers', 'Open folder']" ] \
+  || die "at $(bar room)px of room the bar must render Retranscribe, Speakers and Open folder; it renders [$(bar three)]"
+[ "$(bar trigger)" = False ] || die "at $(bar room)px of room the bar must render no \`•••\`; it does"
+say "the action bar is one row that fits, in the wide arrangement, in the application"
+
 # --- the summary ------------------------------------------------------------------------------------
 # Waited for, not assumed. After Stop the meeting page renders a moment later, and the lookup used to
 # run straight away: on 2026-10-24 (round 4 of #168's gate) it found nothing, and the button list the
