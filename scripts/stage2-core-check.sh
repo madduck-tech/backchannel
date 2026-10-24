@@ -432,6 +432,12 @@ esac
 
 
 # --- the summary ------------------------------------------------------------------------------------
+# Waited for, not assumed. After Stop the meeting page renders a moment later, and the lookup used to
+# run straight away: on 2026-10-24 (round 4 of #168's gate) it found nothing, and the button list the
+# failure printed a moment later did contain it. The recording screen has no such button, so this is
+# false in the state being left.
+await "[...document.querySelectorAll('button')].some(b=>/^Generate [Ss]ummary$/.test(b.textContent.trim()))" \
+      "the meeting page's Generate Summary control" 30
 G=$(by_text "Generate Summary"); [ -n "$G" ] || G=$(by_text "Generate summary")
 [ -n "$G" ] || die "no Generate Summary control after a recording; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).slice(0,30).join(\" / \")"')"
 click "$G" "Generate Summary"

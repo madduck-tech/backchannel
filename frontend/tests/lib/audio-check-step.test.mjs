@@ -422,7 +422,10 @@ const click = async (el) => {
   // The command's own body: from its signature to the first closing brace at column 0.
   const fromCommand = code(command).slice(code(command).indexOf('pub async fn check_capture_device'));
   const body = fromCommand.slice(0, fromCommand.indexOf('\n}\n') + 2);
-  const bound = /let\s+(_[a-z][a-z_]*)\s*=\s*crate::audio::common::DeviceCheckHoldsEngine::take\(\);/.exec(body);
+  // At the function body's own level (four spaces), so the guard lives until the function returns.
+  // Taken inside a block (`{ let g = take(); }`, or under an `if`) it ends at that block's brace and
+  // holds nothing, and nothing later mentions it (the gate's adversary, round 4).
+  const bound = /\n {4}let\s+(_[a-z][a-z_]*)\s*=\s*crate::audio::common::DeviceCheckHoldsEngine::take\(\);/.exec(body);
   assert.ok(
     bound && bound.index < body.indexOf('.transcribe_batch('),
     'the check must take the engine guard into a **named** binding before it decodes. `let _ =` and a bare ' +

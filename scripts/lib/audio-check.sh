@@ -56,7 +56,7 @@ audio_check_press() {
   v=$(audio_check_read "$row")
   [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: the audio check's '$row' row is not on screen ($v)"
   [ "$(audio_check_field "$v" button)" = "$action" ] \
-    || die "harness: the microphone control reads '$(audio_check_field "$v" button)' before anything was pressed"
+    || die "harness: the '$row' control reads '$(audio_check_field "$v" button)' before anything was pressed"
   [ "$(audio_check_field "$v" disabled)" = "False" ] \
     || die "harness: '$action' is disabled, so the picker holds no device ('$(audio_check_field "$v" device)'). A press here would return success and do nothing"
   [ -z "$(audio_check_field "$v" outcome)" ] || die "harness: an outcome is on screen before the press: $(audio_check_field "$v" outcome)"
