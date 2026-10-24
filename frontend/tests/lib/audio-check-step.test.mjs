@@ -374,7 +374,7 @@ const click = async (el) => {
 
 // --- 4d: a tone that never sounded is named, not blamed on the device (#173) ----------------------
 //
-// Until #173, Web Audio had no output in the AppImage: every context stays `suspended`. The row then heard nothing
+// Until #173, Web Audio had no output in the AppImage: every context stayed `suspended`. The row then heard nothing
 // and told the person "Nothing arrived … pick another", which is false advice about a device that was
 // given nothing to hear. The exact string is chosen here and written down in #173.
 const TONE_NEVER_STARTED = 'The tone could not play, so there was nothing to hear: the audio output never started';
