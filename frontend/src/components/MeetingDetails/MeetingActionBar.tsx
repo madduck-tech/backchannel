@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Copy, FolderOpen, Loader2, MoreHorizontal, RefreshCw, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -66,14 +66,34 @@ export function MeetingActionBar({
     const empty = transcriptCount === 0;
     const canRetranscribe = Boolean(meetingId && meetingFolderPath);
 
+    // A menu left open when the bar turns wide would sit against a trigger that is now `display:
+    // none`, listing actions the bar already shows; Radix closes it on window blur only. So the
+    // menu closes when its trigger's box goes to 0 × 0, which is exactly what the container query
+    // does at the breakpoint. The trigger is watched rather than the wrapper's width so the number
+    // lives in one place, the class (#165).
+    const [menuOpen, setMenuOpen] = useState(false);
+    const trigger = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        const el = trigger.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(([entry]) => {
+            if (entry.contentRect.width === 0 && entry.contentRect.height === 0) setMenuOpen(false);
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, []);
+
     return (
         <>
+            {/* Two boxes on purpose (#165). The container is the wrapper, which spans the room
+                the bar has; the bar inside it stays content-sized. On one box, inline-size
+                containment sized it as if empty and `w-fit` resolved to that: 26 × 115 at every
+                width, the bar's own padding and border with nothing between them. */}
+            <div className="@container/bar w-full">
             <div
                 role="toolbar"
                 aria-label="Meeting actions"
-                // `@container` so the wrap responds to this bar's own width. The bar is
-                // named as a container by its host.
-                className="@container/bar pointer-events-auto mx-auto flex w-fit max-w-[calc(100%-2rem)] flex-wrap items-center justify-center gap-x-3.5 gap-y-2 rounded-lg border border-line bg-sunken px-3 py-2 shadow-float"
+                className="pointer-events-auto mx-auto flex w-fit max-w-[calc(100%-2rem)] flex-wrap items-center justify-center gap-x-3.5 gap-y-2 rounded-lg border border-line bg-sunken px-3 py-2 shadow-float"
             >
                 {recordedSeconds != null && (
                     <span className="flex items-baseline gap-1.5 whitespace-nowrap text-xs text-ink-faint">
@@ -89,9 +109,11 @@ export function MeetingActionBar({
                     Copy
                 </Button>
 
-                {/* Below 560px of bar these move into the menu rather than losing their
-                    words. An icon a user cannot name is a control they will not press. */}
-                <span className="hidden @[560px]/bar:contents">
+                {/* Wide: on the bar, where they fit on one row with the longest recorded time
+                    (`99:59:59`). Narrow: in the menu, keeping their words; an icon a user cannot
+                    name is a control they will not press. The number is the product owner's rule of
+                    2026-10-24 measured, and `the-action-bar-is-one-row.test.mjs` derives it again. */}
+                <span className="hidden @[665px]/bar:contents">
                     {canRetranscribe && (
                         <Button
                             size="sm"
@@ -124,36 +146,39 @@ export function MeetingActionBar({
                     </Button>
                 </span>
 
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button size="sm" variant="ghost" aria-label="More actions">
+                {/* Narrow only: a wide bar has no menu (prototype 114, and the product owner's
+                    decision of 2026-10-24). The menu's content is portalled, outside the container,
+                    so nothing inside it could ever answer a container query; with no menu at wide it
+                    does not need to. */}
+                <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                    <DropdownMenuTrigger asChild ref={trigger}>
+                        <Button size="sm" variant="ghost" aria-label="More actions" className="@[665px]/bar:hidden">
                             <MoreHorizontal className="h-4 w-4" aria-hidden />
                         </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                        <span className="@[560px]/bar:hidden">
-                            {canRetranscribe && (
-                                <DropdownMenuItem
-                                    onSelect={() => setShowRetranscribe(true)}
-                                    disabled={empty}
-                                >
-                                    Retranscribe
-                                </DropdownMenuItem>
-                            )}
-                            {canRetranscribe && (
-                                <DropdownMenuItem
-                                    onSelect={() => labelSpeakers({ downloadIfMissing: true })}
-                                    disabled={isLabelling || empty}
-                                >
-                                    Label speakers
-                                </DropdownMenuItem>
-                            )}
-                        </span>
+                        {canRetranscribe && (
+                            <DropdownMenuItem
+                                onSelect={() => setShowRetranscribe(true)}
+                                disabled={empty}
+                            >
+                                Retranscribe
+                            </DropdownMenuItem>
+                        )}
+                        {canRetranscribe && (
+                            <DropdownMenuItem
+                                onSelect={() => labelSpeakers({ downloadIfMissing: true })}
+                                disabled={isLabelling || empty}
+                            >
+                                Label speakers
+                            </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onSelect={() => void onOpenMeetingFolder()}>
                             Open meeting folder
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
+            </div>
             </div>
 
             {meetingId && meetingFolderPath && (
