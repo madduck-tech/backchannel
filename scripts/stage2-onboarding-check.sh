@@ -461,10 +461,17 @@ await "document.body.innerText.includes('Check your audio')" "the audio check, w
 # No harness is up in this pass, so the device carries no known signal, and any answer the command's
 # body gives is accepted: a rendered result or one of its own errors. Whether the words come back is
 # `stage2-core-check.sh`'s assertion, which has a microphone speaking a known sentence (#168).
+#
+# The two #167 assertions are collected before either fails, so one run against a build that has
+# both defects reports both rather than the first.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
 audio_check_press
-audio_check_require_body_answer
-probe_stays_out
+FAILED_167=""
+if OUT=$( (audio_check_require_body_answer) 2>&1 ); then :; else FAILED_167="$OUT"; fi
+if OUT=$( (probe_stays_out) 2>&1 ); then say "${OUT#stage2-onboarding-check: }"; else FAILED_167="${FAILED_167:+$FAILED_167
+}$OUT"; fi
+[ -z "$FAILED_167" ] || die "the audio check (#167):
+$FAILED_167"
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
