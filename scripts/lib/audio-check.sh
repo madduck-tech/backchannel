@@ -104,8 +104,10 @@ audio_check_require_body_answer() {
 probe_stays_out() {
   local body resp v
   body=$(python3 -c 'import json; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"dictation_probe\").then(function (v) { return \"RESOLVED:\" + JSON.stringify(v); }, function (e) { return \"REJECTED:\" + String(e); });", "args": []}))')
-  # `|| resp=""` is load-bearing here: the onboarding pass calls this inside `( )`, which does
-  # inherit errexit, so a failed request would otherwise end that subshell with no message.
+  # `|| resp=""` matters only to a caller at the top level of a `set -e` script, which is how
+  # `audio-check-harness.test.mjs` calls it. The onboarding pass calls it inside an `if` condition,
+  # where errexit is off, so there the guard changes nothing. Said here because round 2 claimed
+  # the opposite and the gate's adversary measured it.
   resp=$(curl -s -m 30 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body") || resp=""
   v=$(printf '%s' "$resp" | python3 -c 'import json,sys
 try:

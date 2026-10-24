@@ -29,6 +29,8 @@
 const FIXED = new Map([
   ['debug_assertions', false],
   ['test', false],
+  // Set only by `rustdoc`, so false in every artifact a person runs.
+  ['doc', false],
   ['true', true],
   ['false', false],
 ]);
@@ -124,10 +126,49 @@ function skipBracket(s, i) {
   throw new Error(`unbalanced attribute starting ${JSON.stringify(s.slice(i, i + 60))}`);
 }
 
-/** The predicate inside an attribute's text, if it is a `cfg`: `#[cfg(X)]` or `#![cfg(X)]` -> `X`. */
+/** Split at commas outside parentheses and strings. */
+function splitTop(text) {
+  const out = [];
+  let depth = 0, start = 0;
+  for (let k = 0; k < text.length; k++) {
+    const c = text[k];
+    if (c === '"') { k++; while (k < text.length && text[k] !== '"') { if (text[k] === '\\') k++; k++; } continue; }
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) { out.push(text.slice(start, k).trim()); start = k + 1; }
+  }
+  out.push(text.slice(start).trim());
+  return out.filter(Boolean);
+}
+
+/**
+ * The gates an attribute applies, as predicates.
+ *
+ * `#[cfg(X)]` and `#![cfg(X)]` gate on `X`. `#[cfg_attr(P, cfg(X))]` applies `cfg(X)` only when `P`
+ * holds, which is the gate `any(not(P), X)`. `#[cfg_attr(not(debug_assertions), cfg(false))]` removes
+ * an item from every release build, and a census that read only `cfg` called it shipped (the gate's
+ * adversary, round 2). Any other attribute gates nothing.
+ */
 function cfgOf(attr) {
-  const m = /^#!?\[\s*cfg\s*\(([\s\S]*)\)\s*\]$/.exec(attr);
-  return m ? m[1].trim() : null;
+  const cfg = /^#!?\[\s*cfg\s*\(([\s\S]*)\)\s*\]$/.exec(attr);
+  if (cfg) return [cfg[1].trim()];
+  const cfgAttr = /^#!?\[\s*cfg_attr\s*\(([\s\S]*)\)\s*\]$/.exec(attr);
+  if (!cfgAttr) return [];
+  const [when, ...applied] = splitTop(cfgAttr[1]);
+  return applied
+    .map((a) => /^cfg\s*\(([\s\S]*)\)$/.exec(a))
+    .filter(Boolean)
+    .map((m) => `any(not(${when}), ${m[1].trim()})`);
+}
+
+/** Skip a block comment starting at `s[i] === '/'`, nested as Rust nests them; the index after it. */
+function skipBlock(s, i) {
+  let depth = 0;
+  for (let k = i; k < s.length - 1; k++) {
+    if (s[k] === '/' && s[k + 1] === '*') { depth++; k++; }
+    else if (s[k] === '*' && s[k + 1] === '/') { depth--; k++; if (depth === 0) return k + 1; }
+  }
+  throw new Error('unterminated block comment');
 }
 
 /**
@@ -140,11 +181,10 @@ export function innerCfgs(source) {
   for (;;) {
     while (i < source.length && /\s/.test(source[i])) i++;
     if (source.startsWith('//', i)) { i = source.indexOf('\n', i); if (i < 0) break; continue; }
-    if (source.startsWith('/*', i)) { i = source.indexOf('*/', i) + 2; continue; }
+    if (source.startsWith('/*', i)) { i = skipBlock(source, i); continue; }
     if (source.startsWith('#![', i)) {
       const end = skipBracket(source, i + 2);
-      const p = cfgOf(source.slice(i, end));
-      if (p) out.push(p);
+      out.push(...cfgOf(source.slice(i, end)));
       i = end;
       continue;
     }
@@ -173,15 +213,12 @@ export function moduleDeclarations(source) {
     // A block comment, doc or plain, sits between an attribute and its item without breaking the
     // pairing. Read as an item, it reset the pending gates and the module read as ungated.
     if (t.startsWith('/*')) {
-      const close = source.indexOf('*/', i + lead);
-      if (close < 0) throw new Error('unterminated block comment');
-      i = close + 2;
+      i = skipBlock(source, i + lead);
       continue;
     }
     if (t.startsWith('#[')) {
       const end = skipBracket(source, i + lead + 1);
-      const p = cfgOf(source.slice(i + lead, end));
-      if (p) pending.push(p);
+      pending.push(...cfgOf(source.slice(i + lead, end)));
       i = end;
       continue;
     }
@@ -213,11 +250,10 @@ export function handlerEntries(body) {
   };
   while (i < body.length) {
     if (body.startsWith('//', i)) { const e = body.indexOf('\n', i); i = e < 0 ? body.length : e; continue; }
-    if (body.startsWith('/*', i)) { i = body.indexOf('*/', i) + 2; continue; }
+    if (body.startsWith('/*', i)) { i = skipBlock(body, i); continue; }
     if (body.startsWith('#[', i)) {
       const end = skipBracket(body, i + 1);
-      const p = cfgOf(body.slice(i, end));
-      if (p) pending.push(p);
+      pending.push(...cfgOf(body.slice(i, end)));
       i = end;
       continue;
     }

@@ -113,6 +113,8 @@ const MUST_COUNT = [
   'all(debug_assertions, not(test))',
   'false',
   'all(false, unix)',
+  'not(true)',
+  'doc',
 ];
 const MUST_NOT_COUNT = [
   'not(debug_assertions)',
@@ -170,6 +172,17 @@ const commented = moduleDeclarations(
 for (const m of ['a', 'b', 'c', 'd']) {
   assert.deepEqual(commented.get(m), ['debug_assertions'], `a comment between the gate and \`mod ${m}\` keeps the gate`);
 }
+// `cfg_attr` applies its `cfg` only when its condition holds, and a nested block comment is one comment.
+const more = moduleDeclarations(
+  '#[cfg_attr(not(debug_assertions), cfg(false))]\npub mod e;\n' +
+    '#[cfg_attr(feature = "metal", cfg(false))]\npub mod g;\n' +
+    '#[cfg_attr(test, allow(dead_code))]\npub mod h;\n' +
+    '#[cfg(debug_assertions)]\n/* a /* nested */ comment */\npub mod f;\n'
+);
+assert.equal(absentFromEveryShippedBuild(more.get('e')), true, 'cfg_attr(not(debug_assertions), cfg(false)) is out of every release');
+assert.equal(absentFromEveryShippedBuild(more.get('g')), false, 'cfg_attr(feature = "metal", cfg(false)) ships without the feature');
+assert.deepEqual(more.get('h'), [], 'a cfg_attr that applies no cfg gates nothing');
+assert.deepEqual(more.get('f'), ['debug_assertions'], 'a nested block comment keeps the gate above it');
 assert.deepEqual(
   handlerEntries('\n  #[cfg(debug_assertions)]\n  // why it is gated\n  a::one,\n'),
   [{ path: 'a::one', cfgs: ['debug_assertions'] }],
