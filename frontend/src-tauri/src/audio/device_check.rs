@@ -14,6 +14,7 @@
 
 use crate::audio::devices::{list_audio_devices, AudioDevice, DeviceType};
 use crate::audio::recording_commands::is_recording_now;
+use crate::audio::recording_state::DeviceType as Channel;
 use crate::audio::{AudioChunk, RecordingManager};
 use crate::transcribe_engine::TRANSCRIBE_ENGINE;
 use log::{info, warn};
@@ -82,13 +83,14 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
     }
     .map_err(|e| format!("Could not open {device_name}: {e}"))?;
 
-    // Collect for a fixed window. The pipeline hands over 16 kHz mono, which is what the decoder
-    // wants, so nothing is resampled here.
+    // Collect one side for a fixed window. The channel is 16 kHz, which is what the decoder wants,
+    // so nothing is resampled here; see `take_side` for why only one side is kept.
+    let side = if system { Channel::System } else { Channel::Microphone };
     let mut samples: Vec<f32> = Vec::new();
     let deadline = Instant::now() + LISTEN;
     while Instant::now() < deadline {
         match tokio::time::timeout(deadline - Instant::now(), capture.recv()).await {
-            Ok(Some(chunk)) => samples.extend_from_slice(chunk_samples(&chunk)),
+            Ok(Some(chunk)) => take_side(&mut samples, &chunk, &side),
             Ok(None) => break,
             Err(_) => break,
         }
@@ -121,7 +123,105 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
     })
 }
 
-/// The mixed mono samples a chunk carries.
-fn chunk_samples(chunk: &AudioChunk) -> &[f32] {
-    &chunk.data
+/// Keep a chunk only if it belongs to the side being checked.
+///
+/// The transcription channel carries **both** sides of every window, as two chunks tagged by
+/// `device_type`, and the side a check did not open arrives as a zero window (`pipeline.rs`,
+/// `forward_mixed`). This used to append every chunk, under a comment calling the channel "mixed
+/// mono", which had been false since #30. So the decoder heard 50 ms of speech, then 50 ms of
+/// zeros, over and over: 195 198 samples for a six-second window, measured 2026-10-24 (#168).
+fn take_side(samples: &mut Vec<f32>, chunk: &AudioChunk, side: &Channel) {
+    if &chunk.device_type == side {
+        samples.extend_from_slice(&chunk.data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::pipeline::transcription_chunks_for_test;
+
+    /// One constant per side, so a sample says which side it came from by its value alone.
+    const MIC: f32 = 0.25;
+    const SYS: f32 = 0.5;
+    const WINDOW: usize = 1600;
+
+    fn collect(chunks: &[AudioChunk], side: Channel) -> Vec<f32> {
+        let mut samples = Vec::new();
+        for chunk in chunks {
+            take_side(&mut samples, chunk, &side);
+        }
+        samples
+    }
+
+    // `tokio::test`: the pipeline's metrics batcher spawns onto a reactor.
+    #[tokio::test]
+    async fn a_microphone_check_hears_the_microphone_and_nothing_else() {
+        // What a microphone check receives: the system side was never opened, so the mixer fills it
+        // with a zero window, and the pipeline sends that window as a chunk of its own.
+        let chunks = transcription_chunks_for_test(&[
+            (&[MIC; WINDOW], &[0.0; WINDOW]),
+            (&[MIC; WINDOW], &[0.0; WINDOW]),
+            (&[MIC; WINDOW], &[0.0; WINDOW]),
+        ]);
+        // The sentinel: both sides really are on the channel, so the assertion below is about
+        // which ones were kept, not about a fixture that only ever held one.
+        assert_eq!(chunks.len(), 6, "three windows, two sides each");
+
+        let heard = collect(&chunks, Channel::Microphone);
+        assert_eq!(
+            heard,
+            vec![MIC; 3 * WINDOW],
+            "the decoder must get the microphone's samples alone, in order. {} of {} samples were \
+             zeros from the side this check never opened",
+            heard.iter().filter(|&&s| s == 0.0).count(),
+            heard.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_system_check_hears_the_system_side_and_nothing_else() {
+        let chunks = transcription_chunks_for_test(&[
+            (&[0.0; WINDOW], &[SYS; WINDOW]),
+            (&[0.0; WINDOW], &[SYS; WINDOW]),
+        ]);
+        assert_eq!(chunks.len(), 4);
+        assert_eq!(collect(&chunks, Channel::System), vec![SYS; 2 * WINDOW]);
+    }
+
+    #[tokio::test]
+    async fn each_side_is_kept_whole_when_both_carry_sound() {
+        // The check never opens both, but the channel is shared with recording, where both carry
+        // sound. Taking every other chunk would pass the two tests above for one side and not this.
+        let chunks = transcription_chunks_for_test(&[
+            (&[MIC; WINDOW], &[SYS; WINDOW]),
+            (&[MIC; WINDOW], &[SYS; WINDOW]),
+        ]);
+        assert_eq!(collect(&chunks, Channel::Microphone), vec![MIC; 2 * WINDOW]);
+        assert_eq!(collect(&chunks, Channel::System), vec![SYS; 2 * WINDOW]);
+    }
+
+    #[tokio::test]
+    async fn a_silent_device_stays_one_side_long() {
+        // Silence is still decided on one side's samples: the length is what the `Device check on`
+        // log line reports, and the gate reads that line.
+        let chunks = transcription_chunks_for_test(&[
+            (&[0.0; WINDOW], &[0.0; WINDOW]),
+            (&[0.0; WINDOW], &[0.0; WINDOW]),
+        ]);
+        let heard = collect(&chunks, Channel::Microphone);
+        assert_eq!(heard.len(), 2 * WINDOW);
+        assert!(heard.iter().all(|&s| s == 0.0));
+    }
+
+    #[tokio::test]
+    async fn a_short_tail_keeps_its_own_length() {
+        // The pipeline's flush forwards whatever is left of each side (`pipeline.rs`, the tail
+        // `forward_mixed`), and the two need not be the same length.
+        let chunks = transcription_chunks_for_test(&[
+            (&[MIC; WINDOW], &[0.0; WINDOW]),
+            (&[MIC; 400], &[0.0; 1200]),
+        ]);
+        assert_eq!(collect(&chunks, Channel::Microphone), vec![MIC; WINDOW + 400]);
+    }
 }

@@ -1360,6 +1360,24 @@ impl Default for AudioPipelineManager {
     }
 }
 
+/// What the transcription channel carries for a run of `(microphone, system)` windows, produced by
+/// the pipeline's own `forward_mixed`. For tests outside this file that consume that channel
+/// (`device_check`), so their fixture is packaged exactly as a real run packages it rather than
+/// hand-built. Needs a Tokio runtime, as `pipeline_for_test` does.
+#[cfg(test)]
+pub(crate) fn transcription_chunks_for_test(windows: &[(&[f32], &[f32])]) -> Vec<AudioChunk> {
+    let (mut pipeline, mut transcription, _recording) = tests::pipeline_for_test();
+    let mut dead = false;
+    for (mic, sys) in windows {
+        pipeline.forward_mixed(mic, sys, &mut dead);
+    }
+    let mut out = Vec::new();
+    while let Ok(chunk) = transcription.try_recv() {
+        out.push(chunk);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1440,7 +1458,7 @@ mod tests {
     /// A pipeline wired to two channels, so `forward_mixed` can be driven
     /// directly. Everything else it needs is inert here: nothing reads the
     /// receiver and no device is opened.
-    fn pipeline_for_test() -> (
+    pub(super) fn pipeline_for_test() -> (
         AudioPipeline,
         mpsc::UnboundedReceiver<AudioChunk>,
         mpsc::UnboundedReceiver<AudioChunk>,
