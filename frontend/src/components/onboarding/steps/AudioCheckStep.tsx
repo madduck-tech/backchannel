@@ -127,11 +127,20 @@ export function AudioCheckStep() {
                     await invoke('transcribe_load_model', { modelName: selectedTranscribeModel });
                 }
                 set({ status: 'listening' });
-                const [result] = await Promise.all([
+                // `allSettled`, not `all`: a tone that fails must not end this function while the
+                // device is still listening, or the guard lets a second check start beside the first.
+                const [capture, tone] = await Promise.allSettled([
                     invoke<CheckResult>('check_capture_device', { name, system }),
                     alongside ? alongside() : Promise.resolve(),
                 ]);
-                set({ status: 'done', result });
+                if (capture.status === 'rejected') throw capture.reason;
+                if (tone.status === 'rejected') {
+                    // The device result would read "nothing arrived, pick another", which blames a
+                    // device that was never given anything to hear.
+                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${String(tone.reason)}` });
+                    return;
+                }
+                set({ status: 'done', result: capture.value });
             } catch (error) {
                 set({ status: 'error', error: String(error) });
             } finally {
@@ -148,18 +157,33 @@ export function AudioCheckStep() {
      * Web Audio rather than cpal: the Rust side has no playback path at all
      * (`grep -rn build_output_stream src-tauri/src` is empty), and a tone needs none.
      */
-    const playTone = useCallback(async () => {
+    /**
+     * The tone's audio context, made **inside the click**, before anything is awaited. A webview may
+     * start audio only from a user gesture, and the tone now plays after the model has loaded, which
+     * is no longer inside the gesture (#168). `null` where there is no Web Audio at all.
+     */
+    const openToneContext = (): AudioContext | Error | null => {
         const AudioCtx =
             window.AudioContext ??
             (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (typeof AudioCtx !== 'function') return null;
+        try {
+            return new AudioCtx();
+        } catch (error) {
+            return error instanceof Error ? error : new Error(String(error));
+        }
+    };
+
+    const playTone = useCallback(async (ctx: AudioContext | Error | null) => {
+        if (ctx instanceof Error) throw ctx;
         // Guarded rather than assumed. Without it the whole check dies where Web Audio is absent,
         // and the listening half -- which is the half that proves anything -- would never run.
-        if (typeof AudioCtx !== 'function') {
+        if (!ctx) {
             console.warn('[AudioCheckStep] No Web Audio here; listening without playing a tone.');
             await new Promise((r) => setTimeout(r, 2500));
             return;
         }
-        const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') await ctx.resume();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.frequency.value = 440;
@@ -202,7 +226,11 @@ export function AudioCheckStep() {
                     state={sysState}
                     action="Play a tone and listen"
                     busy={checking}
-                    onCheck={() => check(speakers, true, setSysState, playTone)}
+                    onCheck={() => {
+                        if (busy.current || !speakers) return;
+                        const ctx = openToneContext();
+                        void check(speakers, true, setSysState, () => playTone(ctx));
+                    }}
                 />
 
                 <div className="flex items-center gap-3">

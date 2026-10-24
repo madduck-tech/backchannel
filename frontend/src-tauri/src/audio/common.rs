@@ -3,7 +3,7 @@ use anyhow::Result;
 use log::{debug, info};
 use once_cell::sync::Lazy;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -50,7 +50,7 @@ pub(crate) async fn engine_idle_elapsed() -> Duration {
 fn batch_in_progress() -> bool {
     crate::audio::import::is_import_in_progress()
         || crate::audio::retranscription::is_retranscription_in_progress()
-        || DEVICE_CHECK_IN_PROGRESS.load(Ordering::SeqCst)
+        || DEVICE_CHECKS_RUNNING.load(Ordering::SeqCst) > 0
 }
 
 /// The first-run audio check decodes with the engine, and the unloader used to know nothing of it.
@@ -60,21 +60,28 @@ fn batch_in_progress() -> bool {
 /// could drop the weights between the load and the decode, and the press answered `No model loaded`
 /// (#168, found by the gate's adversary). The check holds this guard for as long as it uses the
 /// engine, and the unloader counts it as a batch job, including in its re-check under the lock.
-static DEVICE_CHECK_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+///
+/// A count, not a flag: with a flag, the first of two overlapping checks cleared it on return while
+/// the second still decoded (found by the gate's adversary in round 2).
+static DEVICE_CHECKS_RUNNING: AtomicUsize = AtomicUsize::new(0);
 
 /// Held by `check_capture_device` while it uses the engine; releasing it resets the idle clock.
+///
+/// `#[must_use]`, so `take();` on its own is a warning, and under `-D warnings` an error: a guard
+/// dropped where it is taken holds nothing.
+#[must_use = "the engine is held only while this value is alive; bind it to a named variable"]
 pub(crate) struct DeviceCheckHoldsEngine;
 
 impl DeviceCheckHoldsEngine {
     pub(crate) fn take() -> Self {
-        DEVICE_CHECK_IN_PROGRESS.store(true, Ordering::SeqCst);
+        DEVICE_CHECKS_RUNNING.fetch_add(1, Ordering::SeqCst);
         DeviceCheckHoldsEngine
     }
 }
 
 impl Drop for DeviceCheckHoldsEngine {
     fn drop(&mut self) {
-        DEVICE_CHECK_IN_PROGRESS.store(false, Ordering::SeqCst);
+        DEVICE_CHECKS_RUNNING.fetch_sub(1, Ordering::SeqCst);
         // The model was just used, so the five minutes start now rather than from the last screen.
         if let Ok(mut last) = ENGINE_LAST_USE.try_lock() {
             *last = Instant::now();
@@ -591,7 +598,14 @@ mod tests {
             "a running device check must stop the unloader, or the press answers `No model loaded`"
         );
 
+        // Two overlapping checks: the first one ending must not release the engine from the second.
+        let second = DeviceCheckHoldsEngine::take();
         drop(held);
+        assert!(
+            !should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN),
+            "one check ending must not free the engine while another still decodes"
+        );
+        drop(second);
         let fresh = engine_idle_elapsed().await;
         assert!(fresh < Duration::from_secs(1), "releasing the check resets the clock: {fresh:?}");
         assert!(!should_unload_idle(false, batch_in_progress(), fresh, FIVE_MIN));

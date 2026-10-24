@@ -33,7 +33,7 @@ const DEVICES = [
 const CHOSEN = 'gigaam-v3-e2e-rnnt-q8';
 const DEFAULT_MODEL = 'parakeet-tdt-0.6b-v3-q8';
 
-async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck } = {}) {
+async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails } = {}) {
   const calls = [];
   // One timeline for IPC and the tone, so an ordering between them can be asserted.
   const events = [];
@@ -87,6 +87,10 @@ async function render({ result, fail, failComplete = false, loaded = null, failL
   // skipped by the component's own guard — the guard is asserted separately by not installing this.
   const played = [];
   window.AudioContext = class {
+    constructor() {
+      events.push('ctx');
+      if (toneFails) throw new Error('NotSupportedError: no audio output');
+    }
     createOscillator() {
       return {
         frequency: {},
@@ -293,6 +297,46 @@ const click = async (el) => {
   );
 }
 
+{
+  // A tone that cannot play must not release the guard while the device still listens (found by
+  // the gate's adversary in round 2: `Promise.all` rejected at once and both buttons came back).
+  let release;
+  const holdCheck = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ loaded: CHOSEN, holdCheck, toneFails: true });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  assert.equal(
+    byText(container, 'Check by speaking').disabled,
+    true,
+    'while the device is still listening, the other row stays shut even though the tone already failed'
+  );
+  await act(async () => {
+    byText(container, 'Check by speaking').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  assert.equal(calls.filter((c) => c.cmd === 'check_capture_device').length, 1, 'and no second check starts beside the first');
+  await act(async () => { release(); await holdCheck; });
+  assert.match(
+    container.textContent,
+    /The tone could not play/,
+    'the outcome names the tone, not the device: "nothing arrived, pick another" would blame a device given nothing to hear'
+  );
+}
+{
+  // The tone's context is made in the click, before any await: a webview may start audio only from
+  // a user gesture, and the tone now plays after the model has loaded.
+  const { container, events } = await render({ loaded: CHOSEN });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  assert.ok(
+    events.indexOf('ctx') >= 0 && events.indexOf('ctx') < events.indexOf('transcribe_get_current_model'),
+    `the audio context must exist before the first await of the press: ${events.join(' > ')}`
+  );
+  await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+}
+
 // --- 5: the step is offered, not mandatory -------------------------------------------------------
 {
   const { container } = await render();
@@ -338,13 +382,23 @@ const click = async (el) => {
   );
   // The idle unloader must leave the model alone while the check uses it (#168). The guard's
   // behaviour is unit-tested beside the unloader (`a_device_check_keeps_the_model_loaded_while_it_runs`);
-  // what that test cannot see is whether the command takes it, so the wiring is read here.
-  const holds = command.indexOf('DeviceCheckHoldsEngine::take()');
+  // what that test cannot see is whether the command takes it **and keeps it**, so the wiring is read
+  // here, from code with its comments removed. Round 2's version matched a substring, and `let _ =`,
+  // `drop(...)` and a commented-out line all passed it (the gate's adversary).
+  const code = (text) => text.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  const body = code(command).slice(code(command).indexOf('pub async fn check_capture_device'));
+  const bound = /let\s+(_[a-z][a-z_]*)\s*=\s*crate::audio::common::DeviceCheckHoldsEngine::take\(\);/.exec(body);
   assert.ok(
-    holds >= 0 && holds < command.indexOf('.transcribe_batch('),
-    'the check must hold the engine before it decodes, or a tick after five idle minutes drops the model it just loaded'
+    bound && bound.index < body.indexOf('.transcribe_batch('),
+    'the check must take the engine guard into a **named** binding before it decodes. `let _ =` and a bare ' +
+      'call drop it on the spot, and a tick after five idle minutes then drops the model it just loaded'
   );
-  const loadCommand = fs.readFileSync(path.join(root, 'src-tauri/src/transcribe_engine/commands.rs'), 'utf8');
+  assert.ok(
+    !new RegExp(`drop\\(\\s*${bound[1]}\\s*\\)`).test(body.slice(0, body.indexOf('.transcribe_batch('))),
+    'and must not drop it before the decode'
+  );
+  assert.match(body, /side_checked\(system\)/, 'the side read follows the row that was pressed, not a constant');
+  const loadCommand = code(fs.readFileSync(path.join(root, 'src-tauri/src/transcribe_engine/commands.rs'), 'utf8'));
   const load = loadCommand.slice(loadCommand.indexOf('pub async fn transcribe_load_model'));
   assert.ok(
     load.slice(0, load.indexOf('#[command]')).includes('touch_engine_idle()'),
