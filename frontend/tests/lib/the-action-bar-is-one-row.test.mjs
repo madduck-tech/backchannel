@@ -47,26 +47,36 @@ const component = code(fs.readFileSync(COMPONENT, 'utf8'));
 const classN = [...component.matchAll(/@\[(\d+)px\]\/bar:/g)].map((m) => Number(m[1]));
 const N = classN[0];
 check(13, classN.length > 0 && classN.every((n) => n === N), `the bar's breakpoint classes disagree: ${classN.join(', ')}`);
-const localImports = [...component.matchAll(/from\s+'((?:\.|@\/)[^']+)'/g)].map((m) => m[1]);
+// Local imports, in either quote style. One that does not resolve fails the check rather than being
+// skipped: a constant in a module this cannot read is a constant it would otherwise miss.
+const localImports = [...component.matchAll(/from\s+['"]((?:\.|@\/)[^'"]+)['"]/g)].map((m) => m[1]);
 const sources = [['MeetingActionBar.tsx', component]];
 for (const spec of localImports) {
   const base = spec.startsWith('@/') ? path.join(root, 'src', spec.slice(2)) : path.resolve(path.dirname(COMPONENT), spec);
   const file = [`${base}.tsx`, `${base}.ts`, path.join(base, 'index.tsx'), path.join(base, 'index.ts')].find((f) => fs.existsSync(f));
+  check(13, Boolean(file), `the import ${spec} does not resolve, so its source cannot be read for a copy of ${N}`);
   if (file) sources.push([path.relative(root, file), code(fs.readFileSync(file, 'utf8'))]);
 }
+/** Every numeric literal's value, in any form JavaScript accepts: `665`, `665.0`, `0x299`, `6_65`. */
+const numbers = (text) =>
+  [...text.matchAll(/(?<![\w.])(0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)(?![\w])/g)].map((m) => ({
+    at: m.index, value: Number(m[1].replace(/_/g, '')),
+  }));
 for (const [name, text] of sources) {
-  const strays = [...text.matchAll(new RegExp(`\\b${N}\\b`, 'g'))].filter(
-    (m) => !text.slice(Math.max(0, m.index - 2), m.index + String(N).length + 9).startsWith(`@[${N}px]/bar`)
-  );
-  check(13, strays.length === 0, `${name} holds ${strays.length} copy(ies) of ${N} outside the @[${N}px]/bar classes`);
-  check(
-    13,
-    !/(clientWidth|offsetWidth|contentRect\.width|getBoundingClientRect\(\)\.width)\s*[<>]=?\s*[1-9]/.test(text),
-    `${name} compares a width with a number: the close must follow the trigger's box, not a copy of N`
-  );
+  const strays = numbers(text).filter((n) => n.value === N && !text.slice(Math.max(0, n.at - 2), n.at + 9).startsWith(`@[`));
+  check(13, strays.length === 0, `${name} holds ${strays.length} literal(s) equal to ${N} outside the @[${N}px]/bar classes`);
+  // A width read may be compared with nothing but zero. That one rule holds every way of keeping a
+  // copy of N in JavaScript: a constant equal to it, one it is derived from (`NATURAL + 32`), or a
+  // name compared with the wrapper's width (the gate's adversary, round 1: six bypasses of the first
+  // version of this check, one of which left the whole test green).
+  for (const m of text.matchAll(/(clientWidth|offsetWidth|scrollWidth|innerWidth|contentRect\.width|getBoundingClientRect\(\)\.width|borderBoxSize|contentBoxSize)/g)) {
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 12);
+    check(13, /^\s*===\s*0\b/.test(after), `${name} reads ${m[0]} and does something other than compare it with 0: \`${m[0]}${after}\``);
+  }
 }
-check(13, /new ResizeObserver\(/.test(component) && /observer\.observe\(el\)/.test(component) && /const el = trigger\.current/.test(component),
-  'the menu close must observe the `•••` trigger itself');
+// The close observes the trigger itself, exactly: not an element reached from it.
+check(13, /const el = trigger\.current;/.test(component) && /observer\.observe\(el\);/.test(component),
+  'the menu close must observe the `•••` trigger itself (`const el = trigger.current;`)');
 
 // --- the story's host is the page's host ------------------------------------------------------------
 const pageHost = /<div className="([^"]+)">\s*<MeetingActionBar/.exec(fs.readFileSync(PAGE, 'utf8'))?.[1];

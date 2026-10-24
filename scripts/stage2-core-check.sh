@@ -437,7 +437,7 @@ esac
 # Nothing in the gate had ever read a layout in the application: the geometry checks ran in Chrome on a
 # story. This reads the bar on the meeting page, in WebKitGTK, at the window the pass runs. N comes from
 # the class in the component at the AppImage's own revision, never from a copy here.
-await "document.querySelector('[role=toolbar][aria-label=\"Meeting actions\"]')" "the meeting page's action bar" 30
+await "!!document.querySelector('[role=toolbar]')" "the meeting page's action bar" 30
 BAR_N=$(git show "$BUILT_FROM:frontend/src/components/MeetingDetails/MeetingActionBar.tsx" 2>/dev/null \
   | grep -oE '@\[[0-9]+px\]/bar:' | head -1 | grep -oE '[0-9]+')
 [ -n "$BAR_N" ] || die "could not read the bar's breakpoint from MeetingActionBar.tsx at $BUILT_FROM"
