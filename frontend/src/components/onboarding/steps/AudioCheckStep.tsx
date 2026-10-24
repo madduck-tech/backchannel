@@ -32,10 +32,15 @@ import { cn } from '@/lib/utils';
 
 type Device = { name: string; device_type: 'Input' | 'Output' };
 type CheckResult = { device: string; heard_audio: boolean; text: string };
-type State = { status: 'idle' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
+/**
+ * `loading` is its own state rather than a silent wait inside `listening`: a model can take seconds
+ * to reach memory, and a button reading *Listening…* while nothing listens is the same lie as a level
+ * meter that moves for a silent device (#168).
+ */
+type State = { status: 'idle' | 'loading' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
 
 export function AudioCheckStep() {
-    const { goNext, completeOnboarding } = useOnboarding();
+    const { goNext, completeOnboarding, selectedTranscribeModel } = useOnboarding();
     const [isMac, setIsMac] = useState(false);
     /** One press, one completion. Without it a second click starts a second `completeOnboarding`. */
     const [finishing, setFinishing] = useState(false);
@@ -90,15 +95,29 @@ export function AudioCheckStep() {
     const check = useCallback(
         async (name: string, system: boolean, set: (s: State) => void) => {
             if (!name) return;
-            set({ status: 'listening' });
             try {
+                // Words need a model in memory, and nothing puts one there during first run: the
+                // only preload is the call detector's (`call_detector.rs:225`), on a meeting
+                // application launching. So every press used to answer `Could not transcribe what
+                // <device> heard: No model loaded` (#168). Both sides decode: the tone is heard
+                // audio too.
+                //
+                // **The model chosen two screens earlier, by name.** Not the readiness path
+                // (`transcribe_validate_model_ready`): it resolves the model from
+                // `transcript_settings`, which first run writes only in `completeOnboarding`, so here
+                // it would load `DEFAULT_TRANSCRIBE_MODEL` for someone who chose another.
+                if ((await invoke<string | null>('transcribe_get_current_model')) !== selectedTranscribeModel) {
+                    set({ status: 'loading' });
+                    await invoke('transcribe_load_model', { modelName: selectedTranscribeModel });
+                }
+                set({ status: 'listening' });
                 const result = await invoke<CheckResult>('check_capture_device', { name, system });
                 set({ status: 'done', result });
             } catch (error) {
                 set({ status: 'error', error: String(error) });
             }
         },
-        []
+        [selectedTranscribeModel]
     );
 
     /**
@@ -222,9 +241,10 @@ function Row({
                     size="sm"
                     variant="outline"
                     onClick={onCheck}
-                    disabled={!value || state.status === 'listening'}
+                    disabled={!value || state.status === 'listening' || state.status === 'loading'}
                 >
-                    {state.status === 'listening' ? 'Listening…' : action}
+                    {state.status === 'loading' ? 'Loading the model…'
+                        : state.status === 'listening' ? 'Listening…' : action}
                 </Button>
                 <Outcome state={state} />
             </div>

@@ -28,13 +28,22 @@ const DEVICES = [
   { name: 'Speakers Monitor', device_type: 'Output' },
 ];
 
-async function render({ result, fail, failComplete = false } = {}) {
+// Not the default: a check that loads `DEFAULT_TRANSCRIBE_MODEL` for someone who chose another passes
+// every assertion that takes the default (#168).
+const CHOSEN = 'gigaam-v3-e2e-rnnt-q8';
+const DEFAULT_MODEL = 'parakeet-tdt-0.6b-v3-q8';
+
+async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad } = {}) {
   const calls = [];
   const seen = { completed: 0, next: 0 };
+  // What `TranscribeEngine` holds. Nothing during first run: no load path runs before this screen,
+  // and `check_capture_device` decodes with whatever is there (#168).
+  let inMemory = loaded;
   const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
     ...boundaryStubs().modules,
     '@/contexts/OnboardingContext': {
       useOnboarding: () => ({
+        selectedTranscribeModel: CHOSEN,
         goNext: () => { seen.next += 1; },
         completeOnboarding: async () => {
           seen.completed += 1;
@@ -52,8 +61,17 @@ async function render({ result, fail, failComplete = false } = {}) {
       invoke: async (cmd, args) => {
         calls.push({ cmd, args });
         if (cmd === 'get_audio_devices') return DEVICES;
+        if (cmd === 'transcribe_get_current_model') return inMemory;
+        if (cmd === 'transcribe_load_model') {
+          if (holdLoad) await holdLoad;
+          if (failLoad) throw new Error(failLoad);
+          inMemory = args.modelName;
+          return null;
+        }
         if (cmd === 'check_capture_device') {
           if (fail) throw new Error(fail);
+          // The engine's answer when nothing is in memory, which is what every press got (#168).
+          if (!inMemory) throw new Error(`Could not transcribe what ${args.name} heard: No model loaded`);
           return result ?? { device: args.name, heard_audio: true, text: 'testing one two' };
         }
         return null;
@@ -163,6 +181,61 @@ const click = async (el) => {
     /A recording is in progress/,
     "and the backend's own refusal must reach the user verbatim, not become a generic failure"
   );
+}
+
+// --- 4b: words need a model in memory, and it is the one the person chose (#168) ------------------
+{
+  // Nothing in memory: the chosen model is loaded by name, before the device is opened.
+  const { container, calls } = await render();
+  await click(byText(container, 'Check by speaking'));
+  const order = calls.map((c) => c.cmd).filter((c) => c === 'transcribe_load_model' || c === 'check_capture_device');
+  assert.deepEqual(order, ['transcribe_load_model', 'check_capture_device'], 'a model must be in memory before the check decodes');
+  assert.equal(
+    calls.find((c) => c.cmd === 'transcribe_load_model').args.modelName,
+    CHOSEN,
+    'and it must be the model chosen two screens earlier, by name. The readiness path resolves it from ' +
+      '`transcript_settings`, which first run writes only at the end, so it would load the default'
+  );
+  assert.match(container.textContent, /testing one two/);
+}
+{
+  // The default in memory, another chosen: the chosen one replaces it.
+  const { calls } = await (async () => {
+    const r = await render({ loaded: DEFAULT_MODEL });
+    await click(byText(r.container, 'Check by speaking'));
+    return r;
+  })();
+  assert.equal(calls.find((c) => c.cmd === 'transcribe_load_model')?.args.modelName, CHOSEN, 'a different model in memory is replaced');
+}
+{
+  // Already the chosen one: nothing is loaded twice.
+  const { container, calls } = await render({ loaded: CHOSEN });
+  await click(byText(container, 'Check by speaking'));
+  assert.ok(!calls.some((c) => c.cmd === 'transcribe_load_model'), 'the model already in memory is not loaded again');
+  assert.match(container.textContent, /testing one two/);
+}
+{
+  // While it loads, the button says so. *Listening…* while nothing listens is the moving-bar lie.
+  let release;
+  const holdLoad = new Promise((r) => { release = r; });
+  const { container, calls } = await render({ holdLoad });
+  const press = act(async () => {
+    byText(container, 'Check by speaking').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await press;
+  const busy = byText(container, 'Loading the model');
+  assert.ok(busy, `the button must read "Loading the model…" while the model reaches memory: ${buttons(container).map((b) => b.textContent).join(' / ')}`);
+  assert.equal(busy.disabled, true, 'and must not take a second press');
+  assert.ok(!calls.some((c) => c.cmd === 'check_capture_device'), 'and no device is opened before the model is ready');
+  await act(async () => { release(); await holdLoad; });
+}
+{
+  // A load that fails is the outcome, verbatim, and the device is never opened.
+  const { container, calls } = await render({ failLoad: "Model file not found: gigaam-v3-e2e-rnnt-Q8_0.gguf" });
+  await click(byText(container, 'Check by speaking'));
+  assert.match(container.textContent, /Model file not found/, 'a failed load must say what failed');
+  assert.ok(!calls.some((c) => c.cmd === 'check_capture_device'), 'and must not go on to open the device');
+  assert.equal(byText(container, 'Check by speaking').disabled, false, 'and the button comes back');
 }
 
 // --- 5: the step is offered, not mandatory -------------------------------------------------------
