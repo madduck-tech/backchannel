@@ -183,7 +183,10 @@ export function AudioCheckStep() {
             await new Promise((r) => setTimeout(r, 2500));
             return;
         }
-        if (ctx.state === 'suspended') await ctx.resume();
+        // Not awaited. A context the webview will not start leaves `resume()` pending forever, and
+        // awaiting it held both rows shut until a reload (the gate's adversary, round 3). Made in the
+        // click, the context normally runs; if it does not, the tone is silent and the device says so.
+        if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.frequency.value = 440;
@@ -229,7 +232,13 @@ export function AudioCheckStep() {
                     onCheck={() => {
                         if (busy.current || !speakers) return;
                         const ctx = openToneContext();
-                        void check(speakers, true, setSysState, () => playTone(ctx));
+                        // Closed on every path, not only after a tone that played: a load that fails
+                        // never reaches the tone, and each open context holds an output stream.
+                        void check(speakers, true, setSysState, () => playTone(ctx)).finally(() => {
+                            if (ctx && !(ctx instanceof Error) && ctx.state !== 'closed') {
+                                void ctx.close().catch(() => undefined);
+                            }
+                        });
                     }}
                 />
 

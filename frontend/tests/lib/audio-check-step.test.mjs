@@ -33,7 +33,7 @@ const DEVICES = [
 const CHOSEN = 'gigaam-v3-e2e-rnnt-q8';
 const DEFAULT_MODEL = 'parakeet-tdt-0.6b-v3-q8';
 
-async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails } = {}) {
+async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails, suspended } = {}) {
   const calls = [];
   // One timeline for IPC and the tone, so an ordering between them can be asserted.
   const events = [];
@@ -90,7 +90,10 @@ async function render({ result, fail, failComplete = false, loaded = null, failL
     constructor() {
       events.push('ctx');
       if (toneFails) throw new Error('NotSupportedError: no audio output');
+      // A context the webview will not start: `resume()` stays pending, as the spec allows.
+      this.state = suspended ? 'suspended' : 'running';
     }
+    resume() { return new Promise(() => {}); }
     createOscillator() {
       return {
         frequency: {},
@@ -103,7 +106,7 @@ async function render({ result, fail, failComplete = false, loaded = null, failL
       return { gain: {}, connect: () => this.destination };
     }
     get destination() { return {}; }
-    async close() {}
+    async close() { this.state = 'closed'; events.push('close'); }
   };
 
   const container = document.createElement('div');
@@ -337,6 +340,33 @@ const click = async (el) => {
   await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
 }
 
+{
+  // A context that never starts must not hold the screen (round 3: an awaited `resume()` left both
+  // rows disabled until a reload).
+  const { container, calls } = await render({ loaded: CHOSEN, suspended: true });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2700)); });
+  assert.ok(calls.some((c) => c.cmd === 'check_capture_device' && c.args.system), 'the device was checked');
+  assert.equal(byText(container, 'Play a tone and listen')?.disabled, false, 'and the row comes back, whatever the context did');
+  assert.equal(byText(container, 'Check by speaking').disabled, false, 'and so does the other one');
+}
+{
+  // Every context made in a click is closed, including when the tone never plays: three presses whose
+  // model load fails leaked three in round 3.
+  const { container, events } = await render({ failLoad: 'Failed to load model: not downloaded' });
+  for (let k = 0; k < 3; k++) {
+    await act(async () => {
+      byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
+  const made = events.filter((e) => e === 'ctx').length;
+  assert.equal(made, 3, 'the sentinel: three presses made three contexts');
+  assert.equal(events.filter((e) => e === 'close').length, made, `each one is closed: ${events.join(' > ')}`);
+}
+
 // --- 5: the step is offered, not mandatory -------------------------------------------------------
 {
   const { container } = await render();
@@ -385,19 +415,28 @@ const click = async (el) => {
   // what that test cannot see is whether the command takes it **and keeps it**, so the wiring is read
   // here, from code with its comments removed. Round 2's version matched a substring, and `let _ =`,
   // `drop(...)` and a commented-out line all passed it (the gate's adversary).
-  const code = (text) => text.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-  const body = code(command).slice(code(command).indexOf('pub async fn check_capture_device'));
+  // Block comments first, then line comments: round 3's version stripped only `//`, and a
+  // `/* … */` around the guard line passed it.
+  const code = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  // The command's own body: from its signature to the first closing brace at column 0.
+  const fromCommand = code(command).slice(code(command).indexOf('pub async fn check_capture_device'));
+  const body = fromCommand.slice(0, fromCommand.indexOf('\n}\n') + 2);
   const bound = /let\s+(_[a-z][a-z_]*)\s*=\s*crate::audio::common::DeviceCheckHoldsEngine::take\(\);/.exec(body);
   assert.ok(
     bound && bound.index < body.indexOf('.transcribe_batch('),
     'the check must take the engine guard into a **named** binding before it decodes. `let _ =` and a bare ' +
       'call drop it on the spot, and a tick after five idle minutes then drops the model it just loaded'
   );
+  // Any later mention of the binding before the decode is a way to end it early: `drop(g)`,
+  // `std::mem::forget(g)` (which also leaks the count), or a move into an inner scope.
+  const before = body.slice(bound.index + bound[0].length, body.indexOf('.transcribe_batch('));
   assert.ok(
-    !new RegExp(`drop\\(\\s*${bound[1]}\\s*\\)`).test(body.slice(0, body.indexOf('.transcribe_batch('))),
-    'and must not drop it before the decode'
+    !new RegExp(`\\b${bound[1]}\\b`).test(before),
+    `and must not touch it again before the decode: \`${bound[1]}\` is used in between`
   );
-  assert.match(body, /side_checked\(system\)/, 'the side read follows the row that was pressed, not a constant');
+  const sides = body.match(/side_checked\([^)]*\)/g) ?? [];
+  assert.deepEqual(sides, ['side_checked(system)'], 'the side read follows the row that was pressed, not a constant');
   const loadCommand = code(fs.readFileSync(path.join(root, 'src-tauri/src/transcribe_engine/commands.rs'), 'utf8'));
   const load = loadCommand.slice(loadCommand.indexOf('pub async fn transcribe_load_model'));
   assert.ok(

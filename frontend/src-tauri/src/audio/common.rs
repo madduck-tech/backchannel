@@ -69,13 +69,18 @@ static DEVICE_CHECKS_RUNNING: AtomicUsize = AtomicUsize::new(0);
 ///
 /// `#[must_use]`, so `take();` on its own is a warning, and under `-D warnings` an error: a guard
 /// dropped where it is taken holds nothing.
+///
+/// The private field means only `take()` can make one: a value built any other way would decrement a
+/// count it never incremented, and an underflowed count reads as "running" forever.
 #[must_use = "the engine is held only while this value is alive; bind it to a named variable"]
-pub(crate) struct DeviceCheckHoldsEngine;
+pub(crate) struct DeviceCheckHoldsEngine {
+    _only_take_makes_one: (),
+}
 
 impl DeviceCheckHoldsEngine {
     pub(crate) fn take() -> Self {
         DEVICE_CHECKS_RUNNING.fetch_add(1, Ordering::SeqCst);
-        DeviceCheckHoldsEngine
+        DeviceCheckHoldsEngine { _only_take_makes_one: () }
     }
 }
 
