@@ -21,10 +21,16 @@
 // to reach: its errors go towards *ships*. For a stray `debug_assertions` or `test` gate that is the
 // safe side, because fixing those atoms false is enough to falsify a conjunction they sit in.
 
-/** Fixed atoms: false in every artifact a person runs. */
+/**
+ * Fixed atoms: `debug_assertions` and `test` are false in every artifact a person runs, and `true` /
+ * `false` are literals rustc accepts (`#[cfg(false)]` removes the item). Left free, `false` read as
+ * "ships somewhere", and a product command under `#[cfg(false)]` passed the census.
+ */
 const FIXED = new Map([
   ['debug_assertions', false],
   ['test', false],
+  ['true', true],
+  ['false', false],
 ]);
 
 /**
@@ -164,6 +170,14 @@ export function moduleDeclarations(source) {
     const t = line.trim();
     const lead = line.length - line.trimStart().length;
     if (t === '' || t.startsWith('//')) { i = lineEnd + 1; continue; }
+    // A block comment, doc or plain, sits between an attribute and its item without breaking the
+    // pairing. Read as an item, it reset the pending gates and the module read as ungated.
+    if (t.startsWith('/*')) {
+      const close = source.indexOf('*/', i + lead);
+      if (close < 0) throw new Error('unterminated block comment');
+      i = close + 2;
+      continue;
+    }
     if (t.startsWith('#[')) {
       const end = skipBracket(source, i + lead + 1);
       const p = cfgOf(source.slice(i + lead, end));

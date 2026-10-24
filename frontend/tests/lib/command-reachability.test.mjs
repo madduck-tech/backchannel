@@ -111,6 +111,8 @@ const MUST_COUNT = [
   'all(debug_assertions, target_os = "linux")',
   'any(debug_assertions, test)',
   'all(debug_assertions, not(test))',
+  'false',
+  'all(false, unix)',
 ];
 const MUST_NOT_COUNT = [
   'not(debug_assertions)',
@@ -120,6 +122,8 @@ const MUST_NOT_COUNT = [
   'target_os = "macos"',
   'unix',
   'feature = "metal"',
+  'true',
+  'any(false, unix)',
 ];
 for (const p of MUST_COUNT) {
   assert.equal(absentFromEveryShippedBuild([p]), true, `cfg(${p}) is false in every shipped build`);
@@ -155,6 +159,22 @@ assert.deepEqual(
   'an attribute over several lines is read whole (the sidecar.rs:141 shape)'
 );
 assert.equal(decls.has('after_string'), false, 'a `#[` inside a line of code opens no attribute');
+// Comments between a gate and its item. Each shape keeps the gate, and each was shown to be dropped
+// by a reader that treated it as an item (found by the gate's adversary on #167).
+const commented = moduleDeclarations(
+  '#[cfg(debug_assertions)]\n// a line comment\npub mod a;\n' +
+    '#[cfg(debug_assertions)]\n/// a doc line\npub(crate) mod b;\n' +
+    '#[cfg(debug_assertions)]\n/** a block doc\n    comment */\npub mod c;\n' +
+    '#[cfg(debug_assertions)] pub mod d;\n'
+);
+for (const m of ['a', 'b', 'c', 'd']) {
+  assert.deepEqual(commented.get(m), ['debug_assertions'], `a comment between the gate and \`mod ${m}\` keeps the gate`);
+}
+assert.deepEqual(
+  handlerEntries('\n  #[cfg(debug_assertions)]\n  // why it is gated\n  a::one,\n'),
+  [{ path: 'a::one', cfgs: ['debug_assertions'] }],
+  'and a comment between a gate and its handler entry keeps it too'
+);
 assert.deepEqual(
   handlerEntries(
     '\n  a::one,\n  // a comment, with a comma\n  #[cfg(any(target_os = "macos", windows))]\n  b::two,\n' +
