@@ -26,7 +26,8 @@ const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 
 const ORACLE = fs.readFileSync(path.join(repo, 'scripts', 'lib', 'audio-check-outcome.js'), 'utf8');
 // A function body, as WebDriver runs it.
-const read = () => JSON.parse(new Function(ORACLE)());
+// A function body, as WebDriver runs it; the argument is the row's picker label.
+const read = (row) => JSON.parse(new Function(ORACLE)(row));
 
 async function render({ text, heard = true, fail } = {}) {
   const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
@@ -103,6 +104,19 @@ async function press(container) {
   const c = await render({ text: 'you you you, You.' });
   await press(c);
   assert.equal(read().sampleWords, 1, 'one word repeated is one sample word');
+}
+
+// --- the system row, read by its own label --------------------------------------------------------
+{
+  const c = await render({ heard: true, text: '' });
+  const b = [...c.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Play a tone and listen');
+  await act(async () => { b.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+  const sys = read('The other side is heard through');
+  assert.equal(sys.found, true, 'the oracle finds the system row by its picker label');
+  assert.equal(sys.button, 'Play a tone and listen');
+  assert.equal(sys.kind, 'NO_WORDS', 'a tone that arrived reads as audio without words');
+  assert.equal(read('Microphone').kind, 'NONE', 'and the microphone row, never pressed, is still empty');
 }
 
 // --- only the command's own answers are its answers ------------------------------------------------

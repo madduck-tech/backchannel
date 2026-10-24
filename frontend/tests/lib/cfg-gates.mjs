@@ -120,6 +120,8 @@ function skipBracket(s, i) {
   let depth = 0;
   for (let k = i; k < s.length; k++) {
     if (s[k] === '"') { k++; while (k < s.length && s[k] !== '"') { if (s[k] === '\\') k++; k++; } continue; }
+    // A comment inside an attribute is not part of it: `#[cfg(x /* ] */)]` closes at the last `]`.
+    if (s[k] === '/' && s[k + 1] === '*') { k = skipBlock(s, k) - 1; continue; }
     if (s[k] === '[') depth++;
     else if (s[k] === ']' && --depth === 0) return k + 1;
   }
@@ -150,15 +152,18 @@ function splitTop(text) {
  * adversary, round 2). Any other attribute gates nothing.
  */
 function cfgOf(attr) {
-  const cfg = /^#!?\[\s*cfg\s*\(([\s\S]*)\)\s*\]$/.exec(attr);
+  const inner = /^#!?\[([\s\S]*)\]$/.exec(attr);
+  return inner ? gatesOf(inner[1].replace(/\/\*[\s\S]*?\*\//g, ' ').trim()) : [];
+}
+
+/** The gates of one attribute's contents. `cfg_attr` nests, so its applied items are read the same way. */
+function gatesOf(content) {
+  const cfg = /^cfg\s*\(([\s\S]*)\)$/.exec(content);
   if (cfg) return [cfg[1].trim()];
-  const cfgAttr = /^#!?\[\s*cfg_attr\s*\(([\s\S]*)\)\s*\]$/.exec(attr);
+  const cfgAttr = /^cfg_attr\s*\(([\s\S]*)\)$/.exec(content);
   if (!cfgAttr) return [];
   const [when, ...applied] = splitTop(cfgAttr[1]);
-  return applied
-    .map((a) => /^cfg\s*\(([\s\S]*)\)$/.exec(a))
-    .filter(Boolean)
-    .map((m) => `any(not(${when}), ${m[1].trim()})`);
+  return applied.flatMap(gatesOf).map((gate) => `any(not(${when}), ${gate})`);
 }
 
 /** Skip a block comment starting at `s[i] === '/'`, nested as Rust nests them; the index after it. */

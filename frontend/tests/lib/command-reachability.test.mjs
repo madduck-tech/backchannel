@@ -183,6 +183,12 @@ assert.equal(absentFromEveryShippedBuild(more.get('e')), true, 'cfg_attr(not(deb
 assert.equal(absentFromEveryShippedBuild(more.get('g')), false, 'cfg_attr(feature = "metal", cfg(false)) ships without the feature');
 assert.deepEqual(more.get('h'), [], 'a cfg_attr that applies no cfg gates nothing');
 assert.deepEqual(more.get('f'), ['debug_assertions'], 'a nested block comment keeps the gate above it');
+const edges = moduleDeclarations(
+  '#[cfg_attr(not(debug_assertions), cfg_attr(not(test), cfg(false)))]\npub mod nested;\n' +
+    '#[cfg(debug_assertions /* ] */)]\npub mod commented;\n'
+);
+assert.equal(absentFromEveryShippedBuild(edges.get('nested')), true, 'a cfg_attr inside a cfg_attr is read the same way');
+assert.deepEqual(edges.get('commented'), ['debug_assertions'], 'a `]` inside a comment does not end the attribute');
 assert.deepEqual(
   handlerEntries('\n  #[cfg(debug_assertions)]\n  // why it is gated\n  a::one,\n'),
   [{ path: 'a::one', cfgs: ['debug_assertions'] }],

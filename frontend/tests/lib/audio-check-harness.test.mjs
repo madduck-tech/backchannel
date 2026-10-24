@@ -79,20 +79,20 @@ echo "reached the end"
 {
   const r = run('audio_check_press', { reads: [wd(row()), null] });
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /die: harness: after the click the driver no longer reads the microphone row/, r.out);
+  assert.match(r.out, /die: harness: after the click the driver no longer reads the 'Microphone' row/, r.out);
 }
 
 // A driver error after the click is not "the press arrived".
 {
   const r = run('audio_check_press', { reads: [wd(row()), wd({ error: 'no such window' })] });
-  assert.match(r.out, /die: harness: after the click the driver no longer reads the microphone row/, `a driver error must be named as the harness's: ${r.out}`);
+  assert.match(r.out, /die: harness: after the click the driver no longer reads the 'Microphone' row/, `a driver error must be named as the harness's: ${r.out}`);
   assert.doesNotMatch(r.out, /never answered/, 'and must not be blamed on the product');
 }
 
 // The same in the second wait: the press arrived, and then the driver went away.
 {
   const r = run('audio_check_press', { reads: [wd(row()), wd(row({ button: 'Listening…' })), wd({ error: 'no such window' })] });
-  assert.match(r.out, /die: harness: while waiting for an outcome the driver stopped reading the microphone row/, r.out);
+  assert.match(r.out, /die: harness: while waiting for an outcome the driver stopped reading the 'Microphone' row/, r.out);
   assert.doesNotMatch(r.out, /never answered/, 'a driver lost mid-check is not the product failing to answer');
 }
 

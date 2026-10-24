@@ -8,12 +8,13 @@
 
 AUDIO_CHECK_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The microphone row's verdict, as the JSON `audio-check-outcome.js` returns. The script is sent as
-# it is on disk, so the gate and the oracle's own test read the screen with one definition.
+# A row's verdict, as the JSON `audio-check-outcome.js` returns. The script is sent as it is on disk,
+# so the gate and the oracle's own test read the screen with one definition. `$1` is the row's picker
+# label, `Microphone` unless said otherwise.
 audio_check_read() {
   local body resp
-  body=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
-    "$AUDIO_CHECK_LIB/audio-check-outcome.js")
+  body=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": [sys.argv[2]]}))' \
+    "$AUDIO_CHECK_LIB/audio-check-outcome.js" "${1:-Microphone}")
   # A failed request must not end a `set -euo pipefail` pass in silence. This function runs inside
   # `v=$(audio_check_read)`, which does not inherit errexit, so what matters is its exit status: the
   # last pipeline below always succeeds, and a failed request becomes `found: false`, which the
@@ -51,43 +52,43 @@ audio_check_field() { python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get
 #      the control idle again. A single wait satisfied by `Listening…` would judge a screen that had
 #      not answered yet.
 audio_check_press() {
-  local v el i
-  v=$(audio_check_read)
-  [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: the audio check's microphone row is not on screen ($v)"
-  [ "$(audio_check_field "$v" button)" = "Check by speaking" ] \
+  local row="${1:-Microphone}" action="${2:-Check by speaking}" v el i
+  v=$(audio_check_read "$row")
+  [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: the audio check's '$row' row is not on screen ($v)"
+  [ "$(audio_check_field "$v" button)" = "$action" ] \
     || die "harness: the microphone control reads '$(audio_check_field "$v" button)' before anything was pressed"
   [ "$(audio_check_field "$v" disabled)" = "False" ] \
-    || die "harness: 'Check by speaking' is disabled, so the picker holds no device ('$(audio_check_field "$v" device)'). A press here would return success and do nothing"
+    || die "harness: '$action' is disabled, so the picker holds no device ('$(audio_check_field "$v" device)'). A press here would return success and do nothing"
   [ -z "$(audio_check_field "$v" outcome)" ] || die "harness: an outcome is on screen before the press: $(audio_check_field "$v" outcome)"
-  say "the microphone picker holds '$(audio_check_field "$v" device)', and Check by speaking is enabled"
+  say "the '$row' picker holds '$(audio_check_field "$v" device)', and $action is enabled"
 
-  el=$(find_el '{"using":"xpath","value":"//button[normalize-space()=\"Check by speaking\"]"}')
-  [ -n "$el" ] || die "harness: no element for 'Check by speaking'"
-  click "$el" "Check by speaking"
+  el=$(find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$action\\\"]\"}")
+  [ -n "$el" ] || die "harness: no element for '$action'"
+  click "$el" "$action"
 
   for i in $(seq 1 30); do
-    v=$(audio_check_read)
+    v=$(audio_check_read "$row")
     # A row that vanished is the driver or the page failing, not the control answering. Without
     # this, a missing `button` field read as "the label left Check by speaking" and the pass blamed
     # the product two minutes later.
-    [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: after the click the driver no longer reads the microphone row ($v)"
-    { [ "$(audio_check_field "$v" button)" != "Check by speaking" ] || [ -n "$(audio_check_field "$v" outcome)" ]; } && break
+    [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: after the click the driver no longer reads the '$row' row ($v)"
+    { [ "$(audio_check_field "$v" button)" != "$action" ] || [ -n "$(audio_check_field "$v" outcome)" ]; } && break
     sleep 0.5
   done
-  { [ "$(audio_check_field "$v" button)" != "Check by speaking" ] || [ -n "$(audio_check_field "$v" outcome)" ]; } \
-    || die "the press did not arrive: 15s later the control still reads 'Check by speaking' and nothing rendered"
+  { [ "$(audio_check_field "$v" button)" != "$action" ] || [ -n "$(audio_check_field "$v" outcome)" ]; } \
+    || die "the press did not arrive: 15s later the control still reads '$action' and nothing rendered"
   say "the press arrived: the control reads '$(audio_check_field "$v" button)'"
 
   for i in $(seq 1 240); do
-    v=$(audio_check_read)
-    [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: while waiting for an outcome the driver stopped reading the microphone row ($v)"
-    [ -n "$(audio_check_field "$v" outcome)" ] && [ "$(audio_check_field "$v" button)" = "Check by speaking" ] && break
+    v=$(audio_check_read "$row")
+    [ "$(audio_check_field "$v" found)" = "True" ] || die "harness: while waiting for an outcome the driver stopped reading the '$row' row ($v)"
+    [ -n "$(audio_check_field "$v" outcome)" ] && [ "$(audio_check_field "$v" button)" = "$action" ] && break
     sleep 0.5
   done
   [ -n "$(audio_check_field "$v" outcome)" ] \
     || die "the audio check never answered: after 120s the control reads '$(audio_check_field "$v" button)' and no outcome rendered"
   AUDIO_CHECK=$v
-  say "the microphone check answered ($(audio_check_field "$v" kind)): $(audio_check_shown "$v")"
+  say "the '$row' check answered ($(audio_check_field "$v" kind)): $(audio_check_shown "$v")"
 }
 
 # Fail unless the outcome is one the command's body produces (#167): a rendered result, or an error

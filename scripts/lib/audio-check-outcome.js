@@ -29,7 +29,12 @@ var BODY_ERRORS = [
   'Could not open',
   'Could not transcribe what',
 ];
-var trigger = document.querySelector('button[aria-label="Microphone"]');
+// Which row: its picker's `aria-label`, passed as the script's first argument. The microphone row by
+// default; the system row is `The other side is heard through`.
+var label = (typeof arguments !== 'undefined' && arguments[0]) || 'Microphone';
+var trigger = Array.prototype.find.call(document.querySelectorAll('button[aria-label]'), function (b) {
+  return b.getAttribute('aria-label') === label;
+});
 var row = trigger && trigger.parentElement;
 var actions = row && row.lastElementChild;
 var button = actions && actions.querySelector('button');
