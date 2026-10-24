@@ -433,6 +433,10 @@ const click = async (el) => {
   );
   // Any later mention of the binding before the decode is a way to end it early: `drop(g)`,
   // `std::mem::forget(g)` (which also leaks the count), or a move into an inner scope.
+  // Nor gated: `#[cfg(debug_assertions)]` above the take compiles cleanly and leaves release builds
+  // with no guard at all, #167's own mistake one level down (the gate's adversary, round 5).
+  const above = body.slice(0, bound.index).trimEnd().split('\n').pop().trim();
+  assert.ok(!above.startsWith('#['), `the take must not sit under an attribute: \`${above}\` gates it out of some builds`);
   const before = body.slice(bound.index + bound[0].length, body.indexOf('.transcribe_batch('));
   assert.ok(
     !new RegExp(`\\b${bound[1]}\\b`).test(before),
