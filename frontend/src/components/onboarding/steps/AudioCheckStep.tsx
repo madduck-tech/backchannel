@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import {
@@ -92,9 +92,25 @@ export function AudioCheckStep() {
             .catch((error) => console.error('[AudioCheckStep] Could not list devices:', error));
     }, []);
 
+    /**
+     * One check at a time, across both rows: they share one engine. Two quick presses used to open
+     * the device twice, and pressing the other row while a model loaded started a second load of the
+     * same model (#168). The ref stops the second press within the same tick; the state disables both
+     * buttons once React renders.
+     */
+    const busy = useRef(false);
+    const [checking, setChecking] = useState(false);
+
+    /**
+     * `alongside` runs once the device is being opened: the system row's tone. It used to start
+     * before this function had loaded the model, so a load longer than the 2.5 s tone left the
+     * device listening to silence (#168).
+     */
     const check = useCallback(
-        async (name: string, system: boolean, set: (s: State) => void) => {
-            if (!name) return;
+        async (name: string, system: boolean, set: (s: State) => void, alongside?: () => Promise<void>) => {
+            if (!name || busy.current) return;
+            busy.current = true;
+            setChecking(true);
             try {
                 // Words need a model in memory, and nothing puts one there during first run: the
                 // only preload is the call detector's (`call_detector.rs:225`), on a meeting
@@ -111,10 +127,16 @@ export function AudioCheckStep() {
                     await invoke('transcribe_load_model', { modelName: selectedTranscribeModel });
                 }
                 set({ status: 'listening' });
-                const result = await invoke<CheckResult>('check_capture_device', { name, system });
+                const [result] = await Promise.all([
+                    invoke<CheckResult>('check_capture_device', { name, system }),
+                    alongside ? alongside() : Promise.resolve(),
+                ]);
                 set({ status: 'done', result });
             } catch (error) {
                 set({ status: 'error', error: String(error) });
+            } finally {
+                busy.current = false;
+                setChecking(false);
             }
         },
         [selectedTranscribeModel]
@@ -167,6 +189,7 @@ export function AudioCheckStep() {
                     onChange={setMic}
                     state={micState}
                     action="Check by speaking"
+                    busy={checking}
                     onCheck={() => check(mic, false, setMicState)}
                 />
 
@@ -178,11 +201,8 @@ export function AudioCheckStep() {
                     onChange={setSpeakers}
                     state={sysState}
                     action="Play a tone and listen"
-                    onCheck={async () => {
-                        const checking = check(speakers, true, setSysState);
-                        await playTone();
-                        await checking;
-                    }}
+                    busy={checking}
+                    onCheck={() => check(speakers, true, setSysState, playTone)}
                 />
 
                 <div className="flex items-center gap-3">
@@ -209,6 +229,7 @@ function Row({
     onChange,
     state,
     action,
+    busy,
     onCheck,
 }: {
     label: string;
@@ -218,6 +239,8 @@ function Row({
     onChange: (v: string) => void;
     state: State;
     action: string;
+    /** A check is running on either row; they share one engine. */
+    busy: boolean;
     onCheck: () => void;
 }) {
     return (
@@ -241,7 +264,7 @@ function Row({
                     size="sm"
                     variant="outline"
                     onClick={onCheck}
-                    disabled={!value || state.status === 'listening' || state.status === 'loading'}
+                    disabled={!value || busy || state.status === 'listening' || state.status === 'loading'}
                 >
                     {state.status === 'loading' ? 'Loading the model…'
                         : state.status === 'listening' ? 'Listening…' : action}

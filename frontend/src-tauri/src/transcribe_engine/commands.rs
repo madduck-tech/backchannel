@@ -114,6 +114,10 @@ pub async fn transcribe_load_model<R: Runtime>(
 
     match &result {
         Ok(()) => {
+            // A model just loaded is a model wanted now. Without this the idle clock still read from
+            // the last screen, and the next tick could drop what the first-run audio check had just
+            // loaded for itself (#168).
+            crate::audio::common::touch_engine_idle().await;
             let _ = app_handle.emit(
                 "model-loading-completed",
                 serde_json::json!({ "modelName": model_name }),

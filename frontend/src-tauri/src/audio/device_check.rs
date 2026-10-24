@@ -60,6 +60,10 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
         );
     }
 
+    // Held until this function returns: the idle unloader leaves the model alone while it is set,
+    // and resets its clock when it is released.
+    let _holds_engine = crate::audio::common::DeviceCheckHoldsEngine::take();
+
     let engine = {
         let guard = TRANSCRIBE_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().cloned()
@@ -85,7 +89,7 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
 
     // Collect one side for a fixed window. The channel is 16 kHz, which is what the decoder wants,
     // so nothing is resampled here; see `take_side` for why only one side is kept.
-    let side = if system { Channel::System } else { Channel::Microphone };
+    let side = side_checked(system);
     let mut samples: Vec<f32> = Vec::new();
     let deadline = Instant::now() + LISTEN;
     while Instant::now() < deadline {
@@ -121,6 +125,13 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
         heard_audio: true,
         text: result.text.trim().to_string(),
     })
+}
+
+/// Which side of the transcription channel a check reads. A function of its own because nothing else
+/// holds the mapping: the unit tests below pass a side to `take_side` themselves, so a check that
+/// always read the microphone would pass them and report every system device as silent.
+fn side_checked(system: bool) -> Channel {
+    if system { Channel::System } else { Channel::Microphone }
 }
 
 /// Keep a chunk only if it belongs to the side being checked.
@@ -212,6 +223,12 @@ mod tests {
         let heard = collect(&chunks, Channel::Microphone);
         assert_eq!(heard.len(), 2 * WINDOW);
         assert!(heard.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn the_system_row_reads_the_system_side() {
+        assert_eq!(side_checked(true), Channel::System);
+        assert_eq!(side_checked(false), Channel::Microphone);
     }
 
     #[tokio::test]

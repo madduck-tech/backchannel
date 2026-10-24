@@ -3,6 +3,7 @@ use anyhow::Result;
 use log::{debug, info};
 use once_cell::sync::Lazy;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -45,10 +46,40 @@ pub(crate) async fn engine_idle_elapsed() -> Duration {
     ENGINE_LAST_USE.lock().await.elapsed()
 }
 
-/// Is a batch job (import or retranscription) holding the engine right now?
+/// Is a batch job (import, retranscription, or the first-run audio check) holding the engine?
 fn batch_in_progress() -> bool {
     crate::audio::import::is_import_in_progress()
         || crate::audio::retranscription::is_retranscription_in_progress()
+        || DEVICE_CHECK_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+/// The first-run audio check decodes with the engine, and the unloader used to know nothing of it.
+///
+/// It loads the model the person chose and then listens for six seconds before decoding. Neither
+/// the load nor the check reset the idle clock, so after five minutes on the earlier screens a tick
+/// could drop the weights between the load and the decode, and the press answered `No model loaded`
+/// (#168, found by the gate's adversary). The check holds this guard for as long as it uses the
+/// engine, and the unloader counts it as a batch job, including in its re-check under the lock.
+static DEVICE_CHECK_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Held by `check_capture_device` while it uses the engine; releasing it resets the idle clock.
+pub(crate) struct DeviceCheckHoldsEngine;
+
+impl DeviceCheckHoldsEngine {
+    pub(crate) fn take() -> Self {
+        DEVICE_CHECK_IN_PROGRESS.store(true, Ordering::SeqCst);
+        DeviceCheckHoldsEngine
+    }
+}
+
+impl Drop for DeviceCheckHoldsEngine {
+    fn drop(&mut self) {
+        DEVICE_CHECK_IN_PROGRESS.store(false, Ordering::SeqCst);
+        // The model was just used, so the five minutes start now rather than from the last screen.
+        if let Ok(mut last) = ENGINE_LAST_USE.try_lock() {
+            *last = Instant::now();
+        }
+    }
 }
 
 /// The decision one tick of the idle unloader makes, as a pure function so the
@@ -527,8 +558,13 @@ mod tests {
 
     /// Any use of the engine has to reset the clock, or a long meeting followed
     /// by a short pause would look idle enough to unload.
+    /// The idle clock is one static; the tests that move it take turns, or a parallel run lets one
+    /// read the other's value.
+    static IDLE_CLOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+
     #[tokio::test]
     async fn touch_engine_idle_pushes_the_deadline_out() {
+        let _turn = IDLE_CLOCK.lock().await;
         *ENGINE_LAST_USE.lock().await = Instant::now() - Duration::from_secs(3600);
         let stale = engine_idle_elapsed().await;
         assert!(should_unload_idle(false, false, stale, FIVE_MIN));
@@ -538,6 +574,27 @@ mod tests {
         let fresh = engine_idle_elapsed().await;
         assert!(fresh < Duration::from_secs(1), "{fresh:?}");
         assert!(!should_unload_idle(false, false, fresh, FIVE_MIN));
+    }
+
+    /// The audio check holds the engine like a batch job: no tick may unload while it listens or
+    /// decodes, however long the person spent on the earlier screens (#168).
+    #[tokio::test]
+    async fn a_device_check_keeps_the_model_loaded_while_it_runs() {
+        let _turn = IDLE_CLOCK.lock().await;
+        *ENGINE_LAST_USE.lock().await = Instant::now() - Duration::from_secs(3600);
+        let stale = engine_idle_elapsed().await;
+        assert!(should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN), "the sentinel: idle enough to unload");
+
+        let held = DeviceCheckHoldsEngine::take();
+        assert!(
+            !should_unload_idle(false, batch_in_progress(), stale, FIVE_MIN),
+            "a running device check must stop the unloader, or the press answers `No model loaded`"
+        );
+
+        drop(held);
+        let fresh = engine_idle_elapsed().await;
+        assert!(fresh < Duration::from_secs(1), "releasing the check resets the clock: {fresh:?}");
+        assert!(!should_unload_idle(false, batch_in_progress(), fresh, FIVE_MIN));
     }
 
     #[test]
