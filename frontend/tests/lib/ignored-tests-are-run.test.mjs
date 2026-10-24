@@ -216,6 +216,9 @@ assert.deepEqual(
 // has hit — so a test hidden behind one would be missed; recorded rather than closed.
 const HELPERS = new Set([
   'lib/reachability-shared.mjs',
+  // The `cfg` evaluator the command census uses (#167). Its fixtures live in
+  // `command-reachability.test.mjs`, beside the census they hold.
+  'lib/cfg-gates.mjs',
   'lib/render-tsx.mjs',
   'lib/dom-harness.mjs',
   'lib/tauri-stubs.mjs',
