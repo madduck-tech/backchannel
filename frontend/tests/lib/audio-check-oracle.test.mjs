@@ -98,6 +98,12 @@ async function press(container) {
   await press(c);
   assert.equal(read().sampleWords, 7, 'and a real decode is counted by distinct words, ignoring case and punctuation');
 }
+{
+  // Distinct, not occurrences: a decoder stuck on one word must not reach three.
+  const c = await render({ text: 'you you you, You.' });
+  await press(c);
+  assert.equal(read().sampleWords, 1, 'one word repeated is one sample word');
+}
 
 // --- only the command's own answers are its answers ------------------------------------------------
 const kindFor = async (opts) => {

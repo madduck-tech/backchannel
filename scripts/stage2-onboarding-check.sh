@@ -463,7 +463,9 @@ await "document.body.innerText.includes('Check your audio')" "the audio check, w
 # `stage2-core-check.sh`'s assertion, which has a microphone speaking a known sentence (#168).
 #
 # The two #167 assertions are collected before either fails, so one run against a build that has
-# both defects reports both rather than the first.
+# both defects reports both rather than the first. The decoded words are not logged: with no harness
+# the picker's first input is the machine's real microphone.
+AUDIO_CHECK_REDACT=1
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
 audio_check_press
 FAILED_167=""
