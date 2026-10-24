@@ -11,11 +11,13 @@
 //     of* the sink, and it is the sentinel that makes an empty sink mean something.
 //   - **Ours, not every WebKit's.** Every WebKitGTK program runs a `WebKitWebProcess`; a node counts
 //     only when its `application.process.id` descends from the pass's driver. Here the root is this
-//     process, so `OURS` is its own pid and pid 1 is anybody else.
+//     process and `OURS` is a child it spawns, so the walk up `/proc` is what decides, as it is for
+//     WebKitWebProcess and cpal under the driver (with `OURS` equal to the root, the walk never ran:
+//     the adversary's round 2). Pid 1 is anybody else.
 //   - **`pw-dump` can print two arrays** when the graph changes while it reads (one sample in 39 across
 //     the first press). The second is an update, and `info: null` removes an object.
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,7 +28,9 @@ const TOOL = path.join(repo, 'scripts', 'lib', 'tone-graph.py');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tone-graph-'));
 
 const SINK = 50;
-const OURS = process.pid;
+const ROOT = process.pid;
+const descendant = spawn('sleep', ['120'], { stdio: 'ignore' });
+const OURS = descendant.pid;
 const OTHER = 1;
 const node = (id, props) => ({ id, type: 'PipeWire:Interface:Node', info: { props } });
 const client = (id, props) => ({ id, type: 'PipeWire:Interface:Client', info: { props } });
@@ -64,7 +68,7 @@ sys.stdout.write(g if isinstance(g, str) else json.dumps(g))
   // fewer samples in a fixed time, and a case would then pass without its second graph being seen.
   const child = spawnSync('python3', ['-I', '-c', `
 import os, signal, subprocess, sys, time
-p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${OURS}', ${JSON.stringify(out)}])
+p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}])
 served = lambda: int(open(${JSON.stringify(counter)}).read()) if os.path.exists(${JSON.stringify(counter)}) else 0
 deadline = time.monotonic() + 30
 while served() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
@@ -98,6 +102,7 @@ for (const [name, graphs, code, line] of cases) {
   const got = judge(name.replace(/\W+/g, '-'), graphs);
   if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
 }
+descendant.kill();
 fs.rmSync(dir, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 // Sanity: the tool is the one the pass runs.

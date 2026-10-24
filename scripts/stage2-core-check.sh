@@ -79,7 +79,8 @@ cleanup() {
   sleep 1
   [ -n "$DRIVER_PID" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null
   [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
-  type tone_sink_destroy >/dev/null 2>&1 && tone_sink_destroy >/dev/null 2>&1
+  # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
+  type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
   elif [ -n "$PROFILE" ]; then printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
@@ -317,12 +318,13 @@ python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH
 GRAPH_PID=$!
 tone_sink_make_default
 audio_check_press "The other side is heard through" "Play a tone and listen"
-tone_sink_restore || die "the default output could not be put back; run 'bash scripts/lib/tone-sink.sh restore'"
 kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
 
 # What Web Audio does here, after the press so the tone was the web process's first context: the
 # context's states and what `resume()` did. It is a check, not only a record: a context that does not
-# reach `running` here means the tone above did not play either, whatever the row said.
+# reach `running` here means the tone above did not play either, whatever the row said. It runs after
+# the sampler stops, so its own link cannot stand in for the tone's. It runs before the restore, so
+# its silent stream opens in the null sink, not in the person's headset.
 PROBE=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/web-audio-probe.js \
   | curl -s -m 20 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
   | python3 -c 'import json,sys
@@ -330,6 +332,7 @@ try: v = json.load(sys.stdin).get("value")
 except Exception: v = None
 print(v if isinstance(v, str) else "the probe did not answer: " + repr(v)[:200])')
 say "Web Audio in this build: $PROBE"
+tone_sink_restore || die "the default output could not be put back; run 'bash scripts/lib/tone-sink.sh restore'"
 
 # Every judgement is made before any of them fails the pass, so a red run shows all of them.
 TONE_FAILS=()
