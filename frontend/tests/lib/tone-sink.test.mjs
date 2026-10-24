@@ -8,7 +8,10 @@
 //
 // The shims keep the graph in a JSON file: the configured and effective default, and the nodes. A write
 // to the configured default moves the effective one too, as WirePlumber does, unless `ignoreWrites` is
-// set, which is a write that does not take effect.
+// set, which is a write that does not take effect. Round 3 found that a shim that never fails a read and
+// never splits a dump cannot see a check that fails open, so it can now do both: `failReads` (every
+// read exits 1), `failReadsOnceMoved` (reads fail once the configured default is the tone sink), and
+// `splitDump` (`pw-dump` prints the graph, then a second, empty array, as measured once in 39 samples).
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -35,6 +38,8 @@ ${body}
 `, { mode: 0o755 });
 shim('pw-metadata', `
 key = a[3]
+if len(a) < 5 and (st.get('failReads') or (st.get('failReadsOnceMoved') and 'backchannel_tone_sink' in str(st.get('configured')))):
+    sys.exit(1)
 if len(a) >= 5:
     if key == 'default.configured.audio.sink' and not st.get('ignoreWrites'):
         st['configured'] = a[4]; st['effective'] = a[4]; save()
@@ -42,7 +47,9 @@ if len(a) >= 5:
 v = st.get('configured' if key == 'default.configured.audio.sink' else 'effective')
 if v: print(f"update: id:0 key:'{key}' value:'{v}' type:'Spa:String:JSON'")
 `);
-shim('pw-dump', `print(json.dumps([{'id': n['id'], 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': n['name']}}} for n in st['nodes']]))`);
+shim('pw-dump', `
+print(json.dumps([{'id': n['id'], 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': n['name']}}} for n in st['nodes']]))
+if st.get('splitDump'): print('[]')`);
 shim('pw-cli', `
 if a[0] == 'create-node':
     st['next'] = st.get('next', 100) + 1
@@ -55,6 +62,7 @@ elif a[0] == 'destroy':
 const work = path.join(root, 'repo');
 fs.mkdirSync(path.join(work, 'scripts', 'lib'), { recursive: true });
 fs.copyFileSync(SOURCE, path.join(work, 'scripts', 'lib', 'tone-sink.sh'));
+fs.copyFileSync(path.join(repo, 'scripts', 'lib', 'tone-graph.py'), path.join(work, 'scripts', 'lib', 'tone-graph.py'));
 const git = (...args) => spawnSync('git', ['-C', work, ...args], { encoding: 'utf8' });
 git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '.'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x');
 const STATE_FILE = path.join(work, '.git', 'backchannel-tone-sink', 'original-default-sink');
@@ -147,11 +155,53 @@ check('7 a stale node is refused and kept', r.status === 1 && /already in the gr
 const loose = path.join(root, 'loose');
 fs.mkdirSync(loose);
 fs.copyFileSync(SOURCE, path.join(loose, 'tone-sink.sh'));
+fs.copyFileSync(path.join(repo, 'scripts', 'lib', 'tone-graph.py'), path.join(loose, 'tone-graph.py'));
 graph({ configured: HEADSET, effective: HEADSET });
 r = pass('tone_sink_create; tone_sink_make_default; echo WENT-ON', path.join(loose, 'tone-sink.sh'), loose);
 check('8 no git dir, no change', r.status === 1 && /could not find the repository's git dir/.test(r.stderr) && now().configured === HEADSET && now().nodes.length === 0,
   `exit ${r.status}, configured ${now().configured}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 
+const flip = (patch) => fs.writeFileSync(statePath, JSON.stringify({ ...now(), ...patch }));
+
+// 9. A read that fails is not "the person chose another output": restore keeps the record and the node.
+graph({ configured: HEADSET, effective: HEADSET });
+pass('tone_sink_create; tone_sink_make_default; kill -KILL $$');
+flip({ failReads: true });
+r = restore();
+check('9a restore with PipeWire unreadable changes nothing', r.status === 1 && fs.existsSync(STATE_FILE) && now().nodes.length === 1 && now().configured === TONE,
+  `exit ${r.status}, file ${fs.existsSync(STATE_FILE)}, nodes ${JSON.stringify(now().nodes)}, configured ${now().configured}: ${r.stdout}${r.stderr}`);
+flip({ failReads: false });
+r = restore();
+check('9b and once it answers, restore puts the headset back', r.status === 0 && now().configured === HEADSET && !fs.existsSync(STATE_FILE),
+  `exit ${r.status}, configured ${now().configured}: ${r.stdout}${r.stderr}`);
+
+// 10. Reads that fail mid-press: the pass dies, and its trap keeps the record and the node.
+graph({ configured: HEADSET, effective: HEADSET, failReadsOnceMoved: true });
+r = pass('tone_sink_create; tone_sink_make_default; echo WENT-ON');
+check('10a a press whose reads fail keeps what restore needs', r.status === 1 && !/WENT-ON/.test(r.stdout) && fs.existsSync(STATE_FILE) && now().nodes.length === 1,
+  `exit ${r.status}, file ${fs.existsSync(STATE_FILE)}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+flip({ failReadsOnceMoved: false });
+r = restore();
+check('10b which then repairs it', r.status === 0 && now().configured === HEADSET && now().nodes.length === 0, `exit ${r.status}, configured ${now().configured}: ${r.stdout}${r.stderr}`);
+
+// 11. A split dump does not hide a stale node, from a run or from restore.
+graph({ configured: HEADSET, effective: HEADSET, nodes: [{ id: 9, name: 'backchannel_tone_sink' }], splitDump: true });
+r = pass('tone_sink_create; echo WENT-ON');
+check('11a a split dump still shows the stale node', r.status === 1 && /already in the graph \(node 9\)/.test(r.stderr) && !/WENT-ON/.test(r.stdout) && now().nodes.length === 1,
+  `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+r = restore();
+check('11b and restore clears it', r.status === 0 && now().nodes.length === 0 && /no tone sink in the graph/.test(r.stdout), `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+
+// 12. A graph that cannot be read at all is not an empty one.
+graph({ configured: HEADSET, effective: HEADSET });
+fs.writeFileSync(path.join(bin, 'pw-dump.real'), fs.readFileSync(path.join(bin, 'pw-dump')));
+fs.writeFileSync(path.join(bin, 'pw-dump'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+r = pass('tone_sink_create; echo WENT-ON');
+check('12a an unreadable graph refuses the run', r.status === 1 && /could not read the graph/.test(r.stderr) && now().nodes.length === 0, `exit ${r.status}: ${r.stdout}${r.stderr}`);
+r = restore();
+check('12b and restore reports it rather than "no tone sink"', r.status === 1 && /could not read the graph/.test(r.stderr), `exit ${r.status}: ${r.stdout}${r.stderr}`);
+fs.writeFileSync(path.join(bin, 'pw-dump'), fs.readFileSync(path.join(bin, 'pw-dump.real')), { mode: 0o755 });
+
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - tone sink: a whole press puts everything back; a killed press is refused by the next run, whose trap touches nothing; restore repairs it, leaves an output the person chose since, fails when its write does not land or nothing records the original, finds the state from any directory or worktree, and changes nothing without a git dir');
+console.log('ok - tone sink: a whole press puts everything back; a killed press is refused by the next run, whose trap touches nothing; restore repairs it, leaves an output the person chose since, fails when its write does not land or nothing records the original, finds the state from any directory or worktree, changes nothing without a git dir, and takes no failed read or split dump for an answer');

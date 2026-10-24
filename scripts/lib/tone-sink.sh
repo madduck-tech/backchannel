@@ -18,6 +18,11 @@
 #     had chosen since, without a word, and destroyed nodes it had not made.
 #   - `restore` exited 0 when its write had not taken effect.
 #
+# Round 3 found two checks that failed open: a configured default that could not be read counted as
+# "the person chose another output", which dropped the only record of the original; and a `pw-dump`
+# that printed two arrays read as "no stale node". Both now fail closed: what cannot be read is never
+# taken as an answer.
+#
 # So:
 #
 #   - the original default is written to `$TONE_STATE_DIR` before the move, and removed only once the
@@ -40,9 +45,11 @@ TONE_STATE_DIR="${TONE_GIT_DIR:+$TONE_GIT_DIR/backchannel-tone-sink}"
 TONE_SINK_ID=""          # the node this run made, if it made one
 TONE_SINK_DEFAULTED=""   # set once this run has moved the default
 
+# Exits non-zero when PipeWire could not be asked, which is not the same answer as "unset".
 tone_sink_configured() {
-  pw-metadata -n default 0 default.configured.audio.sink 2>/dev/null \
-    | sed -n "s/.*key:'default.configured.audio.sink' value:'\(.*\)' type:.*/\1/p" | tail -1
+  local out
+  out=$(pw-metadata -n default 0 default.configured.audio.sink 2>/dev/null) || return 1
+  printf '%s\n' "$out" | sed -n "s/.*key:'default.configured.audio.sink' value:'\(.*\)' type:.*/\1/p" | tail -1
 }
 
 tone_sink_effective() {
@@ -52,15 +59,10 @@ tone_sink_effective() {
 
 tone_sink_names_it() { case "$1" in *"\"$TONE_SINK_NAME\""*) return 0 ;; *) return 1 ;; esac; }
 
-# The ids of every node with the sink's name, one per line.
+# The ids of every node with the sink's name, one per line. Exits non-zero when the graph could not be
+# read, so no caller takes a failed read for an empty graph.
 tone_sink_nodes() {
-  pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == sys.argv[1]:
-        print(o["id"])
-' "$TONE_SINK_NAME"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/tone-graph.py" nodes "$TONE_SINK_NAME"
 }
 
 tone_sink_create() {
@@ -68,17 +70,25 @@ tone_sink_create() {
   [ -n "$TONE_STATE_DIR" ] || die "harness: could not find the repository's git dir; refusing to change the default output without a place to keep it"
   [ -e "$TONE_STATE_DIR/original-default-sink" ] \
     && die "harness: a tone press was interrupted and the default output was never put back ($TONE_STATE_DIR); run 'bash scripts/lib/tone-sink.sh restore' first"
-  stale=$(tone_sink_nodes | tr '\n' ' ')
+  stale=$(tone_sink_nodes) || die "harness: could not read the graph, so a stale tone sink cannot be ruled out"
+  stale=$(printf '%s' "$stale" | tr '\n' ' ')
   [ -z "$stale" ] || die "harness: a tone sink is already in the graph (node ${stale% }); run 'bash scripts/lib/tone-sink.sh restore' first, rather than make a second node with the same name"
-  tone_sink_names_it "$(tone_sink_configured)" \
+  local configured
+  configured=$(tone_sink_configured) || die "harness: could not read the configured default output; refusing to change it"
+  tone_sink_names_it "$configured" \
     && die "harness: the configured default output is already the tone sink; run 'bash scripts/lib/tone-sink.sh restore' first"
   pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$TONE_SINK_NAME node.description=\"Backchannel tone sink\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }" >/dev/null \
     || die "harness: could not create the tone sink"
-  local n
+  local n ids
   for n in $(seq 1 25); do
-    # No node of this name existed a moment ago, so the one there now is this run's.
-    TONE_SINK_ID=$(tone_sink_nodes | head -1)
-    [ -n "$TONE_SINK_ID" ] && return 0
+    # No node of this name existed a moment ago, so a single one there now is this run's. Two means
+    # something else made one meanwhile, and neither can be called ours.
+    ids=$(tone_sink_nodes) || { sleep 0.2; continue; }
+    case "$(printf '%s\n' "$ids" | grep -c .)" in
+      0) ;;
+      1) TONE_SINK_ID=$ids; return 0 ;;
+      *) die "harness: more than one tone sink appeared (nodes $(printf '%s' "$ids" | tr '\n' ' ')); refusing to guess which is this run's" ;;
+    esac
     sleep 0.2
   done
   die "harness: the tone sink never appeared in the graph"
@@ -86,8 +96,8 @@ tone_sink_create() {
 
 tone_sink_make_default() {
   local orig
-  orig=$(tone_sink_configured)
-  [ -n "$orig" ] || die "harness: could not read the configured default output; refusing to change it"
+  orig=$(tone_sink_configured) || die "harness: could not read the configured default output; refusing to change it"
+  [ -n "$orig" ] || die "harness: the configured default output is unset; refusing to change it, since there would be nothing to put back"
   tone_sink_names_it "$orig" && die "harness: the configured default output is already the tone sink; refusing to record it as the original"
   mkdir -p "$TONE_STATE_DIR"
   printf '%s\n' "$orig" > "$TONE_STATE_DIR/original-default-sink"
@@ -103,12 +113,16 @@ tone_sink_make_default() {
 }
 
 # Puts the original default back from the file. Writes only while the configured default still names
-# the tone sink: if it names something else, the person chose that since, and the file is dropped
-# instead. Returns non-zero, and keeps the file, when the write did not take effect.
+# the tone sink: if it names another output, the person chose that since, and the file is dropped
+# instead. A read that fails, or reads nothing, cannot tell those apart, so it changes nothing and
+# keeps the file. Returns non-zero, and keeps the file, whenever the original is not known to be back.
 tone_sink_put_back() {
   local orig now n
   orig=$(cat "$TONE_STATE_DIR/original-default-sink")
-  now=$(tone_sink_configured)
+  if ! now=$(tone_sink_configured) || [ -z "$now" ]; then
+    say "the configured default output could not be read or is unset; nothing was changed, and the original ($orig) is kept in $TONE_STATE_DIR"
+    return 1
+  fi
   if ! tone_sink_names_it "$now"; then
     rm -f "$TONE_STATE_DIR/original-default-sink"; rmdir "$TONE_STATE_DIR" 2>/dev/null
     say "the default output is ${now:-unset}, not the tone sink, so it is left alone (the original was $orig)"
@@ -116,7 +130,7 @@ tone_sink_put_back() {
   fi
   pw-metadata -n default 0 default.configured.audio.sink "$orig" >/dev/null
   for n in $(seq 1 25); do
-    if [ "$(tone_sink_configured)" = "$orig" ]; then
+    if [ "$(tone_sink_configured 2>/dev/null)" = "$orig" ]; then
       rm -f "$TONE_STATE_DIR/original-default-sink"; rmdir "$TONE_STATE_DIR" 2>/dev/null
       say "the default output is back to $orig"
       return 0
@@ -134,9 +148,10 @@ tone_sink_restore() {
   TONE_SINK_DEFAULTED=""
 }
 
-# The EXIT trap's half: this run's move and this run's node, nothing else. The node stays when the
-# default could not be put back, so the person is not left with a configured default that names
-# nothing; the next run refuses and points at `restore`.
+# The EXIT trap's half: this run's move and the node this run is known to have made, nothing else. The
+# node stays when the default could not be put back, so the person is not left with a configured
+# default that names nothing; the next run refuses and points at `restore`. A run stopped before its
+# node's id was read also leaves the node, for the same `restore` to clear.
 tone_sink_destroy() {
   tone_sink_restore || return 1
   [ -n "$TONE_SINK_ID" ] && pw-cli destroy "$TONE_SINK_ID" >/dev/null 2>&1
@@ -153,11 +168,15 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       [ -n "$TONE_STATE_DIR" ] || die "could not find the repository's git dir"
       if [ -e "$TONE_STATE_DIR/original-default-sink" ]; then
         tone_sink_put_back || die "the default output was not put back; nothing was destroyed"
-      elif tone_sink_names_it "$(tone_sink_configured)"; then
-        die "the configured default output is the tone sink and nothing records what it was before; choose your output in the sound settings, then run this again"
+      else
+        configured=$(tone_sink_configured) || die "could not read the configured default output; nothing was changed"
+        tone_sink_names_it "$configured" \
+          && die "the configured default output is the tone sink and nothing records what it was before; choose your output in the sound settings, then run this again"
       fi
-      for id in $(tone_sink_nodes); do pw-cli destroy "$id" >/dev/null 2>&1; done
-      [ -z "$(tone_sink_nodes)" ] || die "a tone sink is still in the graph"
+      ids=$(tone_sink_nodes) || die "could not read the graph; nothing was destroyed"
+      for id in $ids; do pw-cli destroy "$id" >/dev/null 2>&1; done
+      remaining=$(tone_sink_nodes) || die "could not read the graph after destroying ${ids:-nothing}"
+      [ -z "$remaining" ] || die "a tone sink is still in the graph (node $remaining)"
       say "no tone sink in the graph"
       ;;
     *) die "usage: bash scripts/lib/tone-sink.sh restore" ;;

@@ -9,6 +9,8 @@ the positive sentinel: without it an empty sink means only that nobody was looki
 
     tone-graph.py watch <sink-id> <root-pid> <out.jsonl>   samples `pw-dump` every 250 ms until SIGTERM
     tone-graph.py judge <out.jsonl>                        one line, then exits 0 (the tone, alone) or 1
+    tone-graph.py nodes <node-name>                        the ids of every node with that name; exits 1
+                                                           when the graph could not be read
 
 **Ours, not merely WebKit's.** Every WebKitGTK program on the machine runs a `WebKitWebProcess`, so the
 binary alone would let Epiphany's audio pass as the tone (#173's adversary). A node counts as the
@@ -172,5 +174,15 @@ if __name__ == '__main__':
         watch(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
     elif len(sys.argv) == 3 and sys.argv[1] == 'judge':
         sys.exit(judge(sys.argv[2]))
+    elif len(sys.argv) == 3 and sys.argv[1] == 'nodes':
+        # `tone-sink.sh`'s guard against a stale node. One `json.load` raised on a split dump, printed
+        # nothing, and the guard read that as "no stale node" (#173's adversary, round 3).
+        try:
+            graph = dump()
+        except Exception as e:
+            sys.exit(f'tone-graph: could not read the graph: {e}')
+        for o in graph.values():
+            if props(o).get('node.name') == sys.argv[2]:
+                print(o['id'])
     else:
         sys.exit(__doc__)
