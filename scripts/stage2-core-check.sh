@@ -310,7 +310,19 @@ click "$SOPT" "the tone sink's monitor"
 await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].find(b=>b.getAttribute('aria-label')==='The other side is heard through');return !!t&&t.textContent.indexOf('Backchannel tone sink')>=0;})()" \
       "the system picker to show the tone sink's monitor" 10
 
-# What Web Audio does here, before the row is pressed: the context's states and what `resume()` did.
+GRAPH="$PROFILE/tone-graph.jsonl"
+# The driver's pid is the root of the application's process tree: a link counts as the tone only
+# from a WebKitWebProcess under it, not from any WebKitGTK program on the machine.
+python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH" &
+GRAPH_PID=$!
+tone_sink_make_default
+audio_check_press "The other side is heard through" "Play a tone and listen"
+tone_sink_restore || die "the default output could not be put back; run 'bash scripts/lib/tone-sink.sh restore'"
+kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
+
+# What Web Audio does here, after the press so the tone was the web process's first context: the
+# context's states and what `resume()` did. It is a check, not only a record: a context that does not
+# reach `running` here means the tone above did not play either, whatever the row said.
 PROBE=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/web-audio-probe.js \
   | curl -s -m 20 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
   | python3 -c 'import json,sys
@@ -319,27 +331,25 @@ except Exception: v = None
 print(v if isinstance(v, str) else "the probe did not answer: " + repr(v)[:200])')
 say "Web Audio in this build: $PROBE"
 
-GRAPH="$PROFILE/tone-graph.jsonl"
-python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$GRAPH" &
-GRAPH_PID=$!
-tone_sink_make_default
-audio_check_press "The other side is heard through" "Play a tone and listen"
-tone_sink_restore
-kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
-# Every judgement is made before any of them fails the pass, so a red run shows all three.
+# Every judgement is made before any of them fails the pass, so a red run shows all of them.
 TONE_FAILS=()
 case "$(audio_check_field "$AUDIO_CHECK" kind)" in
   NO_WORDS|HEARD) ;;
   *) TONE_FAILS+=("the row: '$(audio_check_field "$AUDIO_CHECK" outcome)'") ;;
 esac
-SYS_LINE=$(grep -oE "Device check on [^:]+: [0-9]+ samples, audio=(true|false)" "$LOG" | tail -1)
+# Pinned to the tone sink's monitor: the microphone row's line says audio=true too.
+SYS_LINE=$(grep -oE "Device check on Monitor of Backchannel tone sink: [0-9]+ samples, audio=(true|false)" "$LOG" | tail -1)
 SYS_SAMPLES=$(printf '%s' "$SYS_LINE" | grep -oE '[0-9]+ samples' | grep -oE '[0-9]+')
-say "the system check: ${SYS_LINE:-no line in the log} (one side: $LO..$HI)"
+say "the system check: ${SYS_LINE:-no line in the log for the monitor of the tone sink} (one side: $LO..$HI)"
 [ -n "$SYS_SAMPLES" ] && [ "$SYS_SAMPLES" -ge "$LO" ] && [ "$SYS_SAMPLES" -le "$HI" ] \
   || TONE_FAILS+=("${SYS_SAMPLES:-no} samples for a ${LISTEN_S}s window; one side is $LO..$HI")
 case "$SYS_LINE" in *audio=true) ;; *) TONE_FAILS+=("the application heard no audio: '${SYS_LINE:-no line}'") ;; esac
 VERDICT=$(python3 -I scripts/lib/tone-graph.py judge "$GRAPH") || TONE_FAILS+=("the graph: $VERDICT")
 say "the tone sink, across the press: $VERDICT"
+printf '%s' "$PROBE" | python3 -c 'import json,sys
+v = json.loads(sys.stdin.read())
+sys.exit(0 if v.get("final") == "running" and v.get("resume") == "resolved" else 1)' 2>/dev/null \
+  || TONE_FAILS+=("Web Audio did not start: $PROBE")
 [ ${#TONE_FAILS[@]} -eq 0 ] || die "the tone did not play into the default output and reach its monitor: $(printf '%s | ' "${TONE_FAILS[@]}")"
 
 FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
