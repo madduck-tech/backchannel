@@ -339,6 +339,38 @@ if [ "$MODE" = present ]; then
   exit 0
 fi
 
+# --- keeps: Continue waits for the chosen file, not for the one already here (#170) -------------
+#
+# With another model on disk, the download screen used to enable Continue at once, say "Everything you
+# chose is on this device." and call the chosen row "Already here from an earlier install", for a
+# file still on its way. "Is SOME model on disk" set the flag. So, from the moment the screen is up,
+# the button is read and then the chosen file is measured, as often as the driver answers. A sample is
+# *in flight* when the file is absent or under 90% of its final size after the read; no file exists
+# until the HTTP response arrives (`engine.rs:418-420`). Every in-flight sample must read disabled.
+# An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
+if [ "$MODE" = keeps ]; then
+  # False on the summariser screen, which has no download rows.
+  await "document.querySelector('section[aria-label=\"$CHOSEN_ID\"]') !== null" "the download screen's row for $CHOSEN_ID" 30
+  FINAL_BYTES=35466912   # moonshine-tiny-Q8_0.gguf, the cached file's size
+  N=0; INFLIGHT=0; INFLIGHT_DISABLED=0; INFLIGHT_ENABLED=0; OTHER=0
+  while [ "$N" -lt 3000 ]; do
+    D=$(js '"return (() => { const b = document.querySelector(\"footer button\"); return b ? String(b.disabled) : \"no button\"; })()"')
+    SZ=$(stat -c %s "$APPDATA/models/$CHOSEN_FILE" 2>/dev/null || echo absent)
+    N=$((N + 1))
+    if [ "$SZ" != absent ] && [ "$SZ" -ge $((FINAL_BYTES * 9 / 10)) ]; then break; fi
+    INFLIGHT=$((INFLIGHT + 1))
+    case "$D" in
+      true) INFLIGHT_DISABLED=$((INFLIGHT_DISABLED + 1)) ;;
+      false) INFLIGHT_ENABLED=$((INFLIGHT_ENABLED + 1)); say "in flight at ${SZ} bytes and Continue reads enabled" ;;
+      *) OTHER=$((OTHER + 1)) ;;
+    esac
+  done
+  say "while $CHOSEN_ID was in flight: $INFLIGHT samples of $N, $INFLIGHT_DISABLED disabled, $INFLIGHT_ENABLED enabled, $OTHER unread"
+  [ "$INFLIGHT" -gt 0 ] || die "unobserved: no sample caught $CHOSEN_ID in flight, so this run says nothing about Continue during the download"
+  [ "$INFLIGHT_DISABLED" -gt 0 ] || die "no in-flight sample read the button as disabled ($INFLIGHT in flight, $OTHER unread)"
+  [ "$INFLIGHT_ENABLED" -eq 0 ] || die "Continue was enabled while $CHOSEN_ID was still on its way, because another model was on disk (#170)"
+fi
+
 # --- the oracle: what reached the disk ------------------------------------------------------------
 #
 # Polled from the filesystem, not read off the screen. A progress bar is a claim by the same code
