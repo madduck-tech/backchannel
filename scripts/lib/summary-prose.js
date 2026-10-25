@@ -7,11 +7,15 @@
 //
 // Prose is the text of the editor's blocks, without:
 //   - headings;
-//   - blocks whose whole text is bold. The template's section titles are bold paragraphs, in whatever
-//     language the summary was written: the `unscored` mode's summary is translated, titles included,
-//     so a list of English titles let four Russian ones through as prose (#171's gate, round 2);
-//   - a block's text a second time. "None noted in this section", in whatever language, repeats once
-//     per empty section, and prose does not.
+//   - bold text. The template's section titles are bold, in whatever language the summary was
+//     written: the `unscored` mode's summary is translated, titles included, so a list of English
+//     titles let four Russian ones through as prose (#171's gate, round 2). A title is often in the
+//     same block as the line under it, since the model writes `**Key Decisions**` and the next line
+//     with no blank line between, and BlockNote parses that as one paragraph; so the bold text is
+//     taken out of each block, not each all-bold block out of the summary. A block with nothing left
+//     is a title;
+//   - what is left of a block a second time. "None noted in this section", in whatever language,
+//     repeats once per empty section, and prose does not.
 //
 // Characters are counted as the string's length without whitespace, not bytes: `wc -c` counted a
 // Cyrillic letter twice.
@@ -24,11 +28,11 @@ var titles = 0;
 var repeats = 0;
 blocks.forEach(function (b) {
   if (b.getAttribute('data-content-type') === 'heading') return;
-  var t = (b.textContent || '').trim();
-  if (!t) return;
-  var bold = Array.prototype.slice.call(b.querySelectorAll('strong, b'))
-    .map(function (e) { return e.textContent; }).join('').trim();
-  if (bold === t) { titles++; return; }
+  if (!(b.textContent || '').trim()) return;
+  var copy = b.cloneNode(true);
+  Array.prototype.slice.call(copy.querySelectorAll('strong, b')).forEach(function (e) { e.remove(); });
+  var t = (copy.textContent || '').trim();
+  if (!t) { titles++; return; }
   if (seen[t]) { repeats++; return; }
   seen[t] = true;
   out.push(t);

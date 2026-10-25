@@ -7,7 +7,9 @@
 // file ends in a top-level `return`.
 //
 // Counted: list blocks (`checkListItem`, `bulletListItem`, `numberedListItem`, BlockNote 0.53) after the
-// `Action Items` title and before the next title, a paragraph whose whole text is bold. Only top-level
+// `Action Items` title and before the next title. A title is a heading, or a paragraph that opens with
+// bold text: the model often writes `**Discussion Highlights**` and the next line with no blank line
+// between, and BlockNote parses the two as one paragraph. Only top-level
 // ones: BlockNote renders a nested line as a block of its own, where the counter reads it as part of
 // the item above (#171's gate, round 2).
 //
@@ -24,10 +26,11 @@ blocks.forEach(function (b) {
   var type = b.getAttribute('data-content-type');
   var t = (b.textContent || '').trim();
   var list = /^(checkListItem|bulletListItem|numberedListItem)$/.test(type);
-  var bold = Array.prototype.slice.call(b.querySelectorAll('strong, b'))
-    .map(function (e) { return e.textContent; }).join('').trim();
-  if (!list && (type === 'heading' || (t && bold === t))) {
-    inside = t.replace(/:$/, '') === 'Action Items';
+  var lead = b.querySelector('strong, b');
+  var title = type === 'heading' ? t
+    : (lead && t.indexOf(lead.textContent.trim()) === 0 && lead.textContent.trim()) || '';
+  if (!list && title) {
+    inside = title.replace(/:$/, '') === 'Action Items';
     return;
   }
   if (!inside || !list) return;

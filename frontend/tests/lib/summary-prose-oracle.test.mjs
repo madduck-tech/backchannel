@@ -43,6 +43,16 @@ let p = prose();
 check('English titles and placeholders alone stay under the bar', p.chars < BAR, `${p.chars} characters: '${p.prose}'`);
 check('precondition: the four titles were found as titles', p.titles === 4, `${p.titles} titles`);
 
+// What the gate's `scores` draw wrote: each title and the line under it with no blank line between,
+// which BlockNote parses as one paragraph per section.
+const merged = (titles, line) => `# A meeting\n\n${titles.map((t) => `**${t}**\n${line}`).join('\n\n')}\n`;
+render(merged(EN_TITLES, 'None noted in this section.'));
+p = prose();
+check('a title merged with its placeholder is no prose', p.chars < BAR, `${p.chars} characters: '${p.prose}'`);
+render(merged(RU_TITLES, 'В этом разделе ничего не отмечено.'));
+p = prose();
+check('a translated title merged with its placeholder is no prose', p.chars < BAR, `${p.chars} characters: '${p.prose}'`);
+
 render(doc(RU_TITLES, RU_TITLES.map(() => 'В этом разделе ничего не отмечено.')));
 p = prose();
 check('translated titles and placeholders alone stay under the bar (unscored)', p.chars < BAR, `${p.chars} characters: '${p.prose}'`);
@@ -71,6 +81,9 @@ render(sections('1. Look at the venue\n2. Send the budget'));
 check('numbered items are items', items().items === 2, JSON.stringify(items()));
 render(sections('None noted in this section.'));
 check('no items, and the Discussion bullet after the next title is not one', items().items === 0, JSON.stringify(items()));
+// The next title with its first line in the same paragraph still ends the section.
+render(`# A meeting\n\n**Action Items**\n\n- [ ] Send the budget\n\n**Discussion Highlights**\nThe venue came up.\n\n- A point about the venue.\n`);
+check('a title merged with its first line still ends the section', items().items === 1, JSON.stringify(items()));
 // What the `scores` draw wrote in #171's gate: the empty-section line as a checklist item.
 render(sections('- [ ] **None noted in this section.**'));
 i = items();
