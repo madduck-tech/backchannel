@@ -96,7 +96,7 @@ const AGENTS: Agent[] = [
 /** The prototype's `caption`, word for word. */
 const agentCaption = (a: Agent) =>
     a.isolated
-        ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It can change nothing here, but it can read files on this machine.`
+        ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It runs with its tools off.`
         : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
 
 /** Found and logged in: the only state that can be chosen. Unknown login (`null`) counts as usable. */
@@ -121,7 +121,12 @@ export function SummariserStep() {
     /** `null` while the backend is still looking (it asks the login shell for its PATH). */
     const [statuses, setStatuses] = useState<AgentStatus[] | null>(null);
 
+    // Asked only once the agent option is open (or already chosen, on a resumed first run): looking
+    // runs the person's login shell and both CLIs' login checks, which nobody who never opens the
+    // option should pay for (#212 round 2).
+    const wantStatus = agentOpen || AGENTS.some((a) => a.id === summaryProvider);
     useEffect(() => {
+        if (!wantStatus) return;
         let alive = true;
         invoke<AgentStatus[]>('agent_cli_status')
             .then((s) => alive && setStatuses(s ?? []))
@@ -132,7 +137,7 @@ export function SummariserStep() {
         return () => {
             alive = false;
         };
-    }, []);
+    }, [wantStatus]);
 
     const chosen = OPTIONS.find((o) => o.id === summaryProvider) ?? null;
     const chosenAgent = AGENTS.find((a) => a.id === summaryProvider) ?? null;
@@ -228,7 +233,7 @@ export function SummariserStep() {
         <>
             <b className="font-medium text-ink">{chosenAgent.name}</b>:{' '}
             {chosenAgent.isolated
-                ? `transcripts go to ${chosenAgent.vendor}, with ${chosenAgent.name}'s default model.`
+                ? `transcripts go to ${chosenAgent.vendor}.`
                 : `transcripts go to the provider ${chosenAgent.name} is set up for.`}
         </>
     ) : agentOpen ? (

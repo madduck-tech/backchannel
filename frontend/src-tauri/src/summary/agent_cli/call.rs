@@ -1,8 +1,8 @@
 //! The command each agent CLI is run with, and running it. (#212)
 //!
 //! Every flag here is part of the safety the module comment describes, and each is pinned by a test
-//! that is red when it is removed. What the flags *do* is held by the real-CLI canary in
-//! `instrument`, which asks the model to read a file and write one, and checks neither happened.
+//! that is red when it is removed. What the flags *do* is held by the real-CLI instruments in
+//! `real.rs`, which ask each CLI to read, write, search and look, and check none of it happened.
 
 use super::{parse, AgentCli, AgentError};
 use std::ffi::{OsStr, OsString};
@@ -13,9 +13,48 @@ use tokio_util::sync::CancellationToken;
 /// One call's limit: the existing HTTP providers' timeout. The instrument records what a pass takes.
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Codex features that are on by default and reach past the shell, to the network or the screen
-/// (`codex features list`, measured 2026-10-25). Each is turned off for the one run.
-pub const CODEX_DISABLED_FEATURES: [&str; 5] = ["browser_use", "browser_use_external", "computer_use", "apps", "in_app_browser"];
+/// After the CLI exits, how long a process it left behind may keep its output open before what has
+/// arrived is read as the answer. A detached descendant holding stdout must not hold the summary.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether a Codex feature is left as it is: the ones about approvals, the sandbox and reaching the
+/// provider at all. Every other feature is turned off for the run (#212 round 2).
+///
+/// A list of what to turn off was tried first and was not enough, measured 2026-10-25: Codex has
+/// tools that leave no event in `--json` (`view_image`, a sub-agent spawn), a web search that is not
+/// a feature at all, and more each release. Turning off everything it lists means a tool added in a
+/// later version is off in that version too, and a feature the call turns out to need fails the
+/// summary loudly instead.
+fn codex_feature_kept(name: &str) -> bool {
+    name.starts_with("guardian")
+        || name.contains("approval")
+        || name.contains("sandbox")
+        || name.contains("proxy")
+        || matches!(name, "credential_masking" | "enable_request_compression" | "unbounded_connection_retries")
+}
+
+/// The features to turn off, read from `codex features list`: every row except removed and
+/// deprecated ones (Codex refuses an unknown name, and warns on a deprecated one) and the kept ones.
+/// `None` when the listing has no `shell_tool` row: a listing this cannot read is not a reason to
+/// run Codex with its tools on.
+pub fn codex_features_to_disable(listing: &str) -> Option<Vec<String>> {
+    let mut off = Vec::new();
+    let mut read_it = false;
+    for line in listing.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let (Some(name), Some(last)) = (cols.first(), cols.last()) else { continue };
+        if cols.len() < 3 || !matches!(*last, "true" | "false") || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            continue;
+        }
+        let stage = cols[1..cols.len() - 1].join(" ");
+        read_it |= *name == "shell_tool";
+        if stage == "removed" || stage == "deprecated" || codex_feature_kept(name) {
+            continue;
+        }
+        off.push(name.to_string());
+    }
+    read_it.then_some(off)
+}
 
 /// `claude -p` with every tool off, no MCP server, no customisation, no session, and structured
 /// output. The system prompt is a file: one argument is capped at 131 071 bytes on Linux.
@@ -28,17 +67,27 @@ pub fn claude_args(system_prompt_file: &Path) -> Vec<OsString> {
     a
 }
 
-/// `codex exec` with the person's config ignored, a read-only sandbox, no session, structured
-/// output, the network and screen features off, the system prompt as `developer_instructions`, and
-/// the prompt read from stdin (`-`).
-pub fn codex_args(system_prompt: &str) -> Vec<OsString> {
-    let mut a: Vec<OsString> = ["exec", "--ignore-user-config", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json"]
+/// `codex exec` with the person's config and rules ignored, a read-only sandbox, no session,
+/// structured output, `disabled` features off, web search off, no project instructions looked for
+/// above the working directory, no skills, the system prompt as `developer_instructions`, and the
+/// prompt read from stdin (`-`).
+///
+/// Measured 2026-10-25, each without its flag: web search ran a live query (`web_search` is a
+/// setting, not a feature); an `AGENTS.md` beside a `.git` in a parent directory, which on Linux can
+/// be the shared `/tmp`, was followed (`project_root_markers`); the person's skills were listed to
+/// the model (`skills.*`).
+pub fn codex_args(system_prompt: &str, disabled: &[String]) -> Vec<OsString> {
+    let mut a: Vec<OsString> = ["exec", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json"]
         .iter()
         .map(OsString::from)
         .collect();
-    for f in CODEX_DISABLED_FEATURES {
+    for f in disabled {
         a.push("--disable".into());
         a.push(f.into());
+    }
+    for c in ["web_search=\"disabled\"", "project_root_markers=[]", "skills.include_instructions=false", "skills.bundled.enabled=false"] {
+        a.push("-c".into());
+        a.push(c.into());
     }
     a.push("-c".into());
     a.push(format!("developer_instructions={}", toml_basic_string(system_prompt)).into());
@@ -104,15 +153,15 @@ pub async fn run(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let spawn_err = |e: std::io::Error| AgentError::Spawn { cli, message: e.to_string() };
     // The working directory stays empty; the system prompt lives in a directory of its own.
-    let work = tempfile::Builder::new().prefix("bc-agent-").tempdir().map_err(spawn_err)?;
-    let prompt_dir = tempfile::Builder::new().prefix("bc-agent-prompt-").tempdir().map_err(spawn_err)?;
+    let work = work_dir().map_err(spawn_err)?;
+    let prompt_dir = work_dir().map_err(spawn_err)?;
     let args = match cli {
         AgentCli::ClaudeCode => {
             let file = prompt_dir.path().join("system.txt");
             std::fs::write(&file, system_prompt).map_err(spawn_err)?;
             claude_args(&file)
         }
-        AgentCli::Codex => codex_args(system_prompt),
+        AgentCli::Codex => codex_args(system_prompt, &codex_features(binary, child_path).await?),
     };
     let mut cmd = tokio::process::Command::new(binary);
     cmd.args(&args)
@@ -134,31 +183,46 @@ pub async fn run(
         let _ = stdin.write_all(prompt.as_bytes()).await;
         // Dropping it closes stdin, so a CLI that asks for more input reads end-of-file.
     });
-    let mut stdout = child.stdout.take().expect("stdout was piped");
-    let mut stderr = child.stderr.take().expect("stderr was piped");
-    let out = tokio::spawn(async move {
-        let mut b = Vec::new();
-        let _ = stdout.read_to_end(&mut b).await;
-        b
-    });
-    let err = tokio::spawn(async move {
-        let mut b = Vec::new();
-        let _ = stderr.read_to_end(&mut b).await;
-        b
-    });
+    // Read into buffers the reader tasks share, so what has arrived can be taken without waiting for
+    // an end-of-file a detached descendant may never send.
+    let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    fn reader(mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static, buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        })
+    }
+    let out = reader(child.stdout.take().expect("stdout was piped"), out_buf.clone());
+    let err = reader(child.stderr.take().expect("stderr was piped"), err_buf.clone());
 
     let never = CancellationToken::new();
     let cancel = cancel.unwrap_or(&never);
+    let deadline = tokio::time::Instant::now() + timeout;
     let status = tokio::select! {
         s = child.wait() => s.map_err(spawn_err)?,
-        _ = cancel.cancelled() => { kill_group(pid); let _ = child.wait().await; return Err(AgentError::Cancelled); }
-        _ = tokio::time::sleep(timeout) => { kill_group(pid); let _ = child.wait().await; return Err(AgentError::TimedOut { cli, secs: timeout.as_secs() }); }
+        _ = cancel.cancelled() => { stop(&mut child, pid).await; return Err(AgentError::Cancelled); }
+        _ = tokio::time::sleep_until(deadline) => { stop(&mut child, pid).await; return Err(AgentError::TimedOut { cli, secs: timeout.as_secs() }); }
     };
     // The CLI has exited; anything it left behind in its group goes with it.
     kill_group(pid);
-    let _ = writer.await;
-    let stdout = String::from_utf8_lossy(&out.await.unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&err.await.unwrap_or_default()).into_owned();
+    let drained = async {
+        let _ = out.await;
+        let _ = err.await;
+    };
+    tokio::select! {
+        _ = drained => {}
+        _ = cancel.cancelled() => return Err(AgentError::Cancelled),
+        _ = tokio::time::sleep(DRAIN_GRACE) => log::warn!("{} exited but something it started still holds its output; reading what arrived", cli.display_name()),
+    }
+    writer.abort();
+    let stdout = String::from_utf8_lossy(&out_buf.lock().unwrap()).into_owned();
+    let stderr = String::from_utf8_lossy(&err_buf.lock().unwrap()).into_owned();
 
     let parsed = match cli {
         AgentCli::ClaudeCode => parse::claude(&stdout),
@@ -190,7 +254,7 @@ pub async fn logged_in(cli: AgentCli, binary: &Path, child_path: &OsStr) -> Opti
         AgentCli::ClaudeCode => &["auth", "status"],
         AgentCli::Codex => &["login", "status"],
     };
-    let work = tempfile::Builder::new().prefix("bc-agent-").tempdir().ok()?;
+    let work = work_dir().ok()?;
     let mut cmd = tokio::process::Command::new(binary);
     cmd.args(args)
         .current_dir(work.path())
@@ -219,6 +283,46 @@ pub fn read_login(cli: AgentCli, stdout: &str, stderr: &str) -> Option<bool> {
     }
 }
 
+/// Which features this Codex has, asked of it with the call's own environment, and which of them
+/// go off. A Codex that cannot say is not run.
+pub(crate) async fn codex_features(binary: &Path, child_path: &OsStr) -> Result<Vec<String>, AgentError> {
+    let cli = AgentCli::Codex;
+    let work = work_dir().map_err(|e| AgentError::Spawn { cli, message: e.to_string() })?;
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.args(["features", "list"])
+        .current_dir(work.path())
+        .env_clear()
+        .envs(environment(std::env::vars_os(), child_path))
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .map_err(|_| AgentError::TimedOut { cli, secs: 10 })?
+        .map_err(|e| AgentError::Spawn { cli, message: e.to_string() })?;
+    codex_features_to_disable(&String::from_utf8_lossy(&out.stdout)).ok_or(AgentError::Failed {
+        cli,
+        message: "it did not say which features it has, so it was not run with them on".into(),
+    })
+}
+
+/// An empty directory for one run, under this user's cache rather than the shared temporary
+/// directory: Codex looks for project instructions in the directories above its own, and on Linux
+/// the one above a temporary directory is `/tmp`, which every local user can write to.
+fn work_dir() -> std::io::Result<tempfile::TempDir> {
+    let base = dirs::cache_dir().map(|c| c.join("backchannel").join("agent-runs"));
+    match base {
+        Some(b) if std::fs::create_dir_all(&b).is_ok() => tempfile::Builder::new().prefix("bc-agent-").tempdir_in(b),
+        _ => tempfile::Builder::new().prefix("bc-agent-").tempdir(),
+    }
+}
+
+/// Stop the CLI on a timeout or a cancel: its group on Unix, its tree on Windows, then reap it.
+async fn stop(child: &mut tokio::process::Child, pid: Option<u32>) {
+    let _ = child.start_kill();
+    kill_group(pid);
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+}
+
 fn kill_group(pid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pid) = pid {
@@ -227,7 +331,12 @@ fn kill_group(pid: Option<u32>) {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     }
-    #[cfg(not(unix))]
+    // UNVERIFIED on Windows: the tree, since a CLI started through node has children of its own.
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = pid;
 }
 
@@ -258,16 +367,43 @@ mod tests {
     }
 
     #[test]
-    fn codex_is_run_isolated_read_only_and_without_its_network_features() {
-        let a: Vec<String> = codex_args("Write a summary.").iter().map(|s| s.to_string_lossy().into_owned()).collect();
+    fn codex_is_run_isolated_read_only_and_with_its_features_off() {
+        let a: Vec<String> = codex_args("Write a summary.", &["shell_tool".into(), "view_image".into()]).iter().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(
             a,
             [
-                "exec", "--ignore-user-config", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json",
-                "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "computer_use", "--disable", "apps",
-                "--disable", "in_app_browser", "-c", "developer_instructions=\"Write a summary.\"", "-",
+                "exec", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json",
+                "--disable", "shell_tool", "--disable", "view_image",
+                "-c", "web_search=\"disabled\"", "-c", "project_root_markers=[]", "-c", "skills.include_instructions=false",
+                "-c", "skills.bundled.enabled=false", "-c", "developer_instructions=\"Write a summary.\"", "-",
             ]
         );
+    }
+
+    /// Codex 0.163.0's own listing (`tests/fixtures/agent_cli/codex-features.txt`, recorded 2026-10-25).
+    #[test]
+    fn every_codex_feature_goes_off_except_removed_deprecated_and_kept_ones() {
+        let listing = fixture("codex-features.txt");
+        let off = codex_features_to_disable(&listing).expect("the listing is read");
+        for tool in ["shell_tool", "unified_exec", "view_image", "image_generation", "multi_agent", "memories", "plugins", "hooks", "code_mode_host", "browser_use", "computer_use", "apps", "in_app_browser", "skill_search"] {
+            assert!(off.iter().any(|f| f == tool), "{tool} is left on");
+        }
+        // Off whether or not it is on by default: the listing reflects the person's config, and the run ignores it.
+        assert!(off.iter().any(|f| f == "multi_agent_v2"), "a feature the listing shows as off is left alone");
+        for kept in ["guardian_approval", "write_stdin_approval", "system_proxy_fallback", "network_proxy", "windows_sandbox_service", "enable_request_compression"] {
+            assert!(!off.iter().any(|f| f == kept), "{kept} is turned off");
+        }
+        for not_passed in ["sqlite", "steer", "collaboration_modes", "web_search_cached", "use_legacy_landlock"] {
+            assert!(!off.iter().any(|f| f == not_passed), "{not_passed}, removed or deprecated, is passed and Codex would refuse or warn");
+        }
+        assert_eq!(off.len(), listing.lines().filter(|l| { let c: Vec<&str> = l.split_whitespace().collect(); c.len() >= 3 && !l.contains(" removed ") && !l.contains(" deprecated ") && !codex_feature_kept(c[0]) }).count());
+    }
+
+    #[test]
+    fn a_listing_without_the_shell_row_is_not_read() {
+        assert_eq!(codex_features_to_disable(""), None);
+        assert_eq!(codex_features_to_disable("view_image  stable  true\n"), None);
+        assert_eq!(codex_features_to_disable("shell_tool  stable  true\n"), Some(vec!["shell_tool".to_string()]));
     }
 
     /// The instructions survive TOML parsing unchanged, whatever a template holds.
@@ -312,6 +448,44 @@ mod tests {
         script
     }
 
+    /// A fake Codex: `features list` prints the recorded listing, anything else is a run.
+    #[cfg(unix)]
+    fn fake_codex(dir: &Path, record: &Path, listing: &str) -> PathBuf {
+        let listing_file = dir.join("features.txt");
+        std::fs::write(&listing_file, listing).unwrap();
+        let run = fake_cli(dir, record, &fixture("codex-summary.jsonl"), 0, "");
+        let script = dir.join("fakecodex");
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = features ]; then cat {}; exit 0; fi\nexec {} \"$@\"\n", listing_file.display(), run.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_is_run_with_the_features_it_listed_turned_off() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let cli = fake_codex(t.path(), &rec, &fixture("codex-features.txt"));
+        let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "the transcript", None, TIMEOUT).await;
+        assert_eq!(got, Ok("hello".to_string()));
+        let args: Vec<String> = recorded(&rec, "args").lines().map(String::from).collect();
+        let off: Vec<&str> = args.windows(2).filter(|w| w[0] == "--disable").map(|w| w[1].as_str()).collect();
+        assert_eq!(off, codex_features_to_disable(&fixture("codex-features.txt")).unwrap(), "the run did not turn off what the listing named");
+        assert!(off.contains(&"shell_tool") && off.contains(&"view_image"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_codex_that_cannot_list_its_features_is_not_run() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let cli = fake_codex(t.path(), &rec, "error: unrecognized subcommand 'features'\n");
+        let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert!(matches!(got, Err(AgentError::Failed { .. })), "{got:?}");
+        assert_eq!(recorded(&rec, "args"), "", "it was run anyway");
+    }
+
     #[cfg(unix)]
     fn recorded(record: &Path, what: &str) -> String {
         std::fs::read_to_string(format!("{}.{what}", record.display())).unwrap_or_default()
@@ -346,8 +520,8 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let rec = t.path().join("rec");
         let cli = fake_cli(t.path(), &rec, "", 1, "echo 'Error: not logged in' >&2");
-        let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
-        assert_eq!(got, Err(AgentError::Failed { cli: AgentCli::Codex, message: "Error: not logged in".into() }));
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert_eq!(got, Err(AgentError::Failed { cli: AgentCli::ClaudeCode, message: "Error: not logged in".into() }));
     }
 
     #[cfg(unix)]
@@ -370,8 +544,8 @@ mod tests {
         let marker = t.path().join("still-running");
         let cli = fake_cli(t.path(), &rec, "", 0, &format!("(sleep 3; touch {}) & sleep 30", marker.display()));
         let started = std::time::Instant::now();
-        let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, Duration::from_millis(500)).await;
-        assert_eq!(got, Err(AgentError::TimedOut { cli: AgentCli::Codex, secs: 0 }));
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, Duration::from_millis(500)).await;
+        assert_eq!(got, Err(AgentError::TimedOut { cli: AgentCli::ClaudeCode, secs: 0 }));
         assert!(started.elapsed() < Duration::from_secs(3), "took {:?}", started.elapsed());
         tokio::time::sleep(Duration::from_secs(4)).await;
         assert!(!marker.exists(), "a process the CLI started outlived the kill");
@@ -393,5 +567,49 @@ mod tests {
         let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", Some(&token), TIMEOUT).await;
         assert_eq!(got, Err(AgentError::Cancelled));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The adversary's case (#212 round 2): the CLI answers and exits, and a process it detached
+    /// into a session of its own keeps stdout open. The answer is what arrived, within the grace.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_detached_process_holding_the_output_does_not_hold_the_summary() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let cli = fake_cli(t.path(), &rec, &fixture("claude-summary.jsonl"), 0, "setsid sleep 20 &");
+        let started = std::time::Instant::now();
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert_eq!(got, Ok("hello".to_string()));
+        assert!(started.elapsed() < Duration::from_secs(6), "took {:?}", started.elapsed());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancel_after_the_cli_exits_still_ends_the_wait() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let cli = fake_cli(t.path(), &rec, "", 0, "setsid sleep 20 &");
+        // Cancelled after the CLI has exited and while its detached child still holds the output:
+        // a token cancelled before the run lets the first wait take it, which is not this case
+        // (measured: that version stayed green with the drain's cancel removed).
+        let token = CancellationToken::new();
+        let t2 = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            t2.cancel();
+        });
+        let started = std::time::Instant::now();
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", Some(&token), TIMEOUT).await;
+        assert_eq!(got, Err(AgentError::Cancelled));
+        assert!(started.elapsed() < Duration::from_millis(1500), "the cancel waited for the drain's grace: {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_run_does_not_sit_in_the_shared_temporary_directory() {
+        let d = work_dir().unwrap();
+        if let Some(cache) = dirs::cache_dir() {
+            assert!(d.path().starts_with(cache.join("backchannel").join("agent-runs")), "{}", d.path().display());
+        }
+        assert!(!d.path().starts_with(std::env::temp_dir()) || dirs::cache_dir().is_none(), "{}", d.path().display());
     }
 }

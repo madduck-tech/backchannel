@@ -5,11 +5,13 @@
 //!
 //! - **Claude Code** runs with every tool off (`--tools ""`), no MCP server, and in `--safe-mode`
 //!   (no CLAUDE.md, skills, plugins or hooks), keeping no session.
-//! - **Codex** runs with the person's config ignored, a read-only sandbox, no session, and its
-//!   browser, computer-use and apps features off. Its shell can still read files, and the screen says
-//!   so: no flag removes the shell.
-//! - **Both** run in a fresh, empty working directory with a listed environment, and **any tool
-//!   event in what comes back fails the summary**: with tools off, a tool event means one ran.
+//! - **Codex** runs with the person's config, rules and skills ignored, a read-only sandbox, no
+//!   session, web search off, no project instructions looked for above its directory, and every
+//!   feature it lists turned off, so a tool a later release adds is off too (ADR 0028).
+//! - **Both** run in a fresh, empty working directory under the user's cache with a listed
+//!   environment, and **any tool event in what comes back fails the summary**: with tools off, a
+//!   tool event means one ran. That is the second line: Codex has tools that leave no event, which is
+//!   why the first line is turning them off.
 //!
 //! `discovery` finds the binaries the way Orca does (the login shell's `PATH`), `call` builds and
 //! runs the command, `parse` turns each CLI's event stream into the summary or an error.

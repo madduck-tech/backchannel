@@ -474,9 +474,13 @@ if [ "$MODE" = agents ] || [ "$MODE" = agents-absent ]; then
     if [ -z "$FOUND" ]; then EXPECT="not found"
     else
       case "$ID" in
-        claude-code) IN=$(HOME="$PROFILE/home" PATH="$APP_PATH" timeout 30 "$FOUND" auth status </dev/null 2>/dev/null | python3 -c 'import json,sys
+        # Captured first: a logged-out `claude auth status` exits non-zero, and under `pipefail` a
+        # pipeline's `|| echo unknown` then appended a second answer to the first (measured: the
+        # oracle read "out\nunknown" and failed a run in which the application was right).
+        claude-code) OUT=$(HOME="$PROFILE/home" PATH="$APP_PATH" timeout 30 "$FOUND" auth status </dev/null 2>/dev/null || true)
+               IN=$(printf '%s' "$OUT" | python3 -c 'import json,sys
 try: print("in" if json.load(sys.stdin).get("loggedIn") else "out")
-except Exception: print("unknown")' || echo unknown) ;;
+except Exception: print("unknown")') ;;
         codex) OUT=$(HOME="$PROFILE/home" PATH="$APP_PATH" timeout 30 "$FOUND" login status </dev/null 2>&1 || true)
                case "$OUT" in *"Not logged in"*) IN=out ;; *"Logged in"*) IN=in ;; *) IN=unknown ;; esac ;;
       esac

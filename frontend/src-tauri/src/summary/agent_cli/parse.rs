@@ -4,10 +4,9 @@
 //! `--output-format stream-json --verbose`, Codex's `--json`. Measured on 2026-10-25 with one real
 //! call each; the scrubbed streams are `tests/fixtures/agent_cli/*-summary.jsonl`.
 //!
-//! **A tool event fails the summary rather than being stripped.** Both calls forbid tools (Codex
-//! keeps a read-only shell it cannot be talked out of), so a tool event in the stream means a tool
-//! ran on the transcript's say-so, and nothing it wrote can be trusted. A line that is not JSON is
-//! ignored: the CLIs print warnings to stdout now and then.
+//! **A tool event fails the summary rather than being stripped.** Both calls turn tools off, so a
+//! tool event in the stream means a tool ran on the transcript's say-so, and nothing it wrote can be
+//! trusted. A line that is not JSON is ignored: the CLIs print warnings to stdout now and then.
 
 use super::{AgentCli, AgentError};
 use serde_json::Value;
@@ -21,15 +20,20 @@ fn events(stdout: &str) -> impl Iterator<Item = Value> + '_ {
 pub fn claude(stdout: &str) -> Result<String, AgentError> {
     let cli = AgentCli::ClaudeCode;
     let mut result: Option<Result<String, AgentError>> = None;
+    let mut started_bare = false;
     for e in events(stdout) {
         match e["type"].as_str() {
             Some("system") if e["subtype"] == "init" => {
                 // Independent of what the model chose to do: the session itself must hold no tool.
+                // Read closed: a list that is missing or not a list is not an empty one (#212 round 2).
                 for list in ["tools", "mcp_servers"] {
-                    if e[list].as_array().is_some_and(|a| !a.is_empty()) {
-                        return Err(AgentError::ToolUsed { cli, what: format!("the session started with {list} {}", e[list]) });
+                    match e[list].as_array() {
+                        Some(a) if a.is_empty() => {}
+                        Some(_) => return Err(AgentError::ToolUsed { cli, what: format!("the session started with {list} {}", e[list]) }),
+                        None => return Err(AgentError::Failed { cli, message: format!("its start-up event did not list its {list}, so the summary was not trusted") }),
                     }
                 }
+                started_bare = true;
             }
             Some("assistant") => {
                 for item in e["message"]["content"].as_array().into_iter().flatten() {
@@ -55,7 +59,13 @@ pub fn claude(stdout: &str) -> Result<String, AgentError> {
             _ => {}
         }
     }
-    result.unwrap_or(Err(AgentError::Empty(cli)))
+    // An answer is trusted only from a session that said it had no tools. Nothing printed, or an
+    // error, is reported as itself: masking it would hide a lost login behind this check.
+    match result {
+        Some(Ok(_)) if !started_bare => Err(AgentError::Failed { cli, message: "it gave no start-up event saying it had no tools, so the summary was not trusted".into() }),
+        Some(r) => r,
+        None => Err(AgentError::Empty(cli)),
+    }
 }
 
 /// Codex's stream: `thread.started`, `turn.started`, `item.*` events (`agent_message` is the answer;
@@ -75,8 +85,10 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
                         }
                     }
                 }
-                // Its private reasoning is not a tool.
+                // Its private reasoning is not a tool, and an `error` item is a notice Codex prints
+                // about its own setup: with code mode's host off it says so on every run.
                 Some("reasoning") => {}
+                Some("error") => log::warn!("Codex: {}", e["item"]["message"].as_str().unwrap_or("")),
                 Some(other) => return Err(AgentError::ToolUsed { cli, what: other.to_string() }),
                 None => {}
             },
@@ -155,8 +167,30 @@ mod tests {
     fn no_result_or_an_empty_one_is_empty() {
         let s: String = fixture("claude-summary.jsonl").lines().filter(|l| !l.contains("\"type\":\"result\"")).collect::<Vec<_>>().join("\n");
         assert_eq!(claude(&s), Err(AgentError::Empty(AgentCli::ClaudeCode)));
-        assert_eq!(claude(""), Err(AgentError::Empty(AgentCli::ClaudeCode)));
         assert_eq!(codex(""), Err(AgentError::Empty(AgentCli::Codex)));
+    }
+
+    /// The adversary's three shapes (#212 round 2): each returned the summary before.
+    #[test]
+    fn a_claude_stream_that_does_not_say_it_has_no_tools_is_not_trusted() {
+        let no_init: String = fixture("claude-summary.jsonl").lines().filter(|l| !l.contains("\"subtype\":\"init\"")).collect::<Vec<_>>().join("\n");
+        assert!(matches!(claude(&no_init), Err(AgentError::Failed { .. })), "{:?}", claude(&no_init));
+        let no_list = with("claude-summary.jsonl", "\"tools\":[]", "\"toolz\":[]");
+        assert!(matches!(claude(&no_list), Err(AgentError::Failed { .. })), "{:?}", claude(&no_list));
+        let an_object = with("claude-summary.jsonl", "\"mcp_servers\":[]", "\"mcp_servers\":{\"x\":{}}");
+        assert!(matches!(claude(&an_object), Err(AgentError::Failed { .. })), "{:?}", claude(&an_object));
+        // Nothing printed is still nothing printed, not a distrusted answer.
+        assert_eq!(claude(""), Err(AgentError::Empty(AgentCli::ClaudeCode)));
+    }
+
+    /// Codex 0.163.0 with code mode's host off prints this item first on every run (measured).
+    #[test]
+    fn codexs_setup_notice_is_not_a_tool() {
+        let s = format!(
+            "{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Code Mode is unavailable because code-mode host is disabled.\"}}}}\n{}",
+            fixture("codex-summary.jsonl")
+        );
+        assert_eq!(codex(&s), Ok("hello".to_string()));
     }
 
     #[test]

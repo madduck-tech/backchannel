@@ -260,7 +260,7 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
   const keyRow = p => `<div class="keyrow">${p.url ? `<label for="url">Server address</label><div class="well"><input id="url" type="url" data-url placeholder="https://" value="${esc(st.url)}"></div>` : ''}<label for="key">API key for ${p.name}</label><div class="well"><input id="key" type="password" data-key autocomplete="off" placeholder="Paste the key" value="${esc(st.key)}"></div></div>`;
 
   const caption = a => a.isolated
-    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It can change nothing here, but it can read files on this machine.`
+    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It runs with its tools off.`
     : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
   // Three states: found and logged in; found but not logged in; not found. Only the first can be chosen.
   const usable = a => !!a.found && a.loggedIn !== false;
@@ -289,7 +289,7 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
     } else {
       $('[data-keyslot]').innerHTML = '';
       const ag = curA();
-      $('[data-read]').innerHTML = !p ? 'Choose where the summary is written.' : (p.cli || p.agentGroup) ? (ag ? `<b>${ag.name}</b>: transcripts go to the provider ${ag.name} is set up for.` : 'Choose which agent writes the summary.') : p.local ? `<b>${p.name}</b>: nothing leaves this machine.` : ready() ? `<b>${p.name}</b>: transcripts go to ${p.dest}.` : `<b>${p.name}</b> needs an API key${V === 'C' ? '; the field is in the option above' : ''}.`;
+      $('[data-read]').innerHTML = !p ? 'Choose where the summary is written.' : (p.cli || p.agentGroup) ? (ag ? (ag.isolated ? `<b>${ag.name}</b>: transcripts go to ${ag.vendor}.` : `<b>${ag.name}</b>: transcripts go to the provider ${ag.name} is set up for.`) : 'Choose which agent writes the summary.') : p.local ? `<b>${p.name}</b>: nothing leaves this machine.` : ready() ? `<b>${p.name}</b>: transcripts go to ${p.dest}.` : `<b>${p.name}</b> needs an API key${V === 'C' ? '; the field is in the option above' : ''}.`;
     }
     $('[data-next]').disabled = !ready();
     if (focusKey) { const k = document.querySelector('[data-key]'); if (k) { k.focus({ preventScroll: V !== 'C' }); if (V === 'C') { const sc = $('.scroll'), o = document.querySelector('.opt.on'); if (sc && o) sc.scrollTop = Math.max(0, o.offsetTop - 12); } } }

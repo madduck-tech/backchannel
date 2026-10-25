@@ -81,8 +81,19 @@ fn is_executable(p: &Path) -> bool {
     }
 }
 
+/// The file name a binary has on disk. On Windows only a native `.exe` is looked for: an npm `.cmd`
+/// shim needs `cmd.exe` to run it, and the Codex call's arguments carry quotes and newlines that a
+/// batch file cannot be handed safely. UNVERIFIED on Windows.
+fn file_name(binary: &str) -> String {
+    if cfg!(windows) { format!("{binary}.exe") } else { binary.to_string() }
+}
+
+/// The first executable `binary` in `dirs`. A relative entry is skipped: it names a directory
+/// relative to wherever the call happens to run, which is an empty one made for it (#212 round 2,
+/// measured: `relbin:` in the login `PATH` was found and then could not be started).
 fn first_in(dirs: impl IntoIterator<Item = PathBuf>, binary: &str) -> Option<PathBuf> {
-    dirs.into_iter().map(|d| d.join(binary)).find(|p| is_executable(p))
+    let name = file_name(binary);
+    dirs.into_iter().filter(|d| d.is_absolute()).map(|d| d.join(&name)).find(|p| is_executable(p))
 }
 
 /// The first executable `binary`, in the order the module comment gives.
@@ -170,6 +181,22 @@ pub fn login_shell_path(_shell: &Path, _limit: Duration) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// The adversary's case (#212 round 2): `relbin:` in the login `PATH`, with an executable
+    /// `claude` in `relbin/` beside the current directory. It was found as `relbin/claude`, which the
+    /// call, run in an empty directory of its own, could not start.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_path_entry_is_not_searched() {
+        let rel = format!("bc-relbin-{}", std::process::id());
+        let dir = std::env::current_dir().unwrap().join(&rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        exe(&dir, "claude", true);
+        let world = World { home: PathBuf::from("/nonexistent-home"), login_path: Some(format!("{rel}:/nonexistent-bin")), process_path: None };
+        let found = find("claude", &world);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(found, None);
+    }
 
     fn exe(dir: &Path, name: &str, executable: bool) -> PathBuf {
         let p = dir.join(name);

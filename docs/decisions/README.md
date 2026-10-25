@@ -29,7 +29,7 @@
 | [0025](0025-the-engine-moves-with-its-weights-copied.md) | transcribe.cpp 0.4.1 is adopted with its weights copied, and with upstream's ITN default but one | accepted |
 | [0026](0026-a-capped-stream-is-decoded-in-segments.md) | A stream with a length cap is decoded in segments | accepted |
 | [0027](0027-a-live-path-that-falls-behind-is-warned-about-not-trimmed.md) | A live path that falls behind is warned about, never trimmed | accepted; supersedes the drop-cap wording of 0008 decision 3 |
-| [0028](0028-an-agent-cli-writes-a-summary-with-no-tools.md) | An agent CLI writes a summary with no tools, and a tool event discards it | accepted |
+| [0028](0028-an-agent-cli-writes-a-summary-with-no-tools.md) | An agent CLI writes a summary with its tools off, and a tool event discards it | accepted |
 
 ## Deferred questions
 

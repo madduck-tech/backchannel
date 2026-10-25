@@ -52,6 +52,13 @@ fn resolve_final_language_action(
 /// are chunked past their threshold. An agent CLI is chunked past its threshold too (#212): its
 /// threshold is the processor's 100 000-token fallback, and each chunk is one more CLI start against
 /// the person's quota, so it is chunked only when it must be.
+/// An agent CLI's failed chunk ends the summary rather than being left out of it (#212 round 2): a
+/// tool it used, a lost login or a usage cap is not something the rest of the meeting should be
+/// summarised around without saying so.
+pub(crate) fn a_failed_chunk_fails_the_summary(provider: &LLMProvider) -> bool {
+    provider.agent_cli().is_some()
+}
+
 pub(crate) fn single_pass(provider: &LLMProvider, total_tokens: usize, token_threshold: usize) -> bool {
     let chunks_when_long = matches!(provider, LLMProvider::Ollama | LLMProvider::BuiltInAI) || provider.agent_cli().is_some();
     !chunks_when_long || total_tokens < token_threshold
@@ -433,7 +440,7 @@ pub async fn generate_meeting_summary(
                     }
                     Err(e) => {
                         // Check if error is due to cancellation
-                        if e.contains("cancelled") {
+                        if e.contains("cancelled") || a_failed_chunk_fails_the_summary(provider) {
                             return Err(e);
                         }
                         error!("Failed processing chunk {}/{}: {}", i + 1, num_chunks, e);
@@ -1144,6 +1151,16 @@ mod single_pass_tests {
         for p in [LLMProvider::ClaudeCode, LLMProvider::Codex] {
             assert!(single_pass(&p, 99_999, 100_000), "{p:?} under the threshold");
             assert!(!single_pass(&p, 100_000, 100_000), "{p:?} at the threshold");
+        }
+    }
+
+    #[test]
+    fn only_an_agent_clis_failed_chunk_fails_the_summary() {
+        for p in [LLMProvider::ClaudeCode, LLMProvider::Codex] {
+            assert!(a_failed_chunk_fails_the_summary(&p), "{p:?}");
+        }
+        for p in [LLMProvider::Claude, LLMProvider::Ollama, LLMProvider::BuiltInAI, LLMProvider::OpenAI] {
+            assert!(!a_failed_chunk_fails_the_summary(&p), "{p:?} changed");
         }
     }
 

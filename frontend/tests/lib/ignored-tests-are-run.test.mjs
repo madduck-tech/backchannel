@@ -59,6 +59,17 @@ const NOT_RUN_BY_THE_GATE = new Map([
           'sends a transcript to Anthropic and OpenAI and spends the person\'s quota, so no gate or CI ' +
           'runner can hold it. Its output is pasted into #212\'s verdict. What the parser does with a tool ' +
           'event is asserted on the recorded streams there and in its neighbours' }],
+  ['frontend/src-tauri/src/summary/agent_cli/real.rs::claude_code_can_do_none_of_it',
+   { coveredBy: 'claude_is_run_with_every_tool_off_and_no_customisation',
+     why: 'an instrument against the real Claude Code: a login, a provider and the person\'s quota. It asks ' +
+          'the production call to read, write, search and follow a planted CLAUDE.md, each with a positive ' +
+          'control that does it with the tool on; output in #212\'s verdict. The argument vector it holds ' +
+          'is pinned there' }],
+  ['frontend/src-tauri/src/summary/agent_cli/real.rs::codex_can_do_none_of_it',
+   { coveredBy: 'codex_is_run_with_the_features_it_listed_turned_off',
+     why: 'the same against the real Codex: read, write, web search, an image and a planted AGENTS.md, each ' +
+          'with its positive control; output in #212\'s verdict. Which features go off is held there, on ' +
+          'the recorded listing' }],
   ['frontend/src-tauri/src/summary/agent_cli/real.rs::a_real_cli_writes_the_standard_summary',
    { coveredBy: 'claude_codes_recorded_stream_is_its_answer',
      why: 'the same: real CLIs, a real provider and the person\'s quota. It holds the template\'s ' +

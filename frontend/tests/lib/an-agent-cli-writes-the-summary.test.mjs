@@ -66,9 +66,13 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
   check('the heading counts eight', container.querySelector('[data-description]').textContent.startsWith('Eight choices.'), container.querySelector('[data-description]').textContent);
   const row = agentRow(container);
   check('the agent option is offered and names its CLIs', !!row && row.textContent.includes('claude · codex'), row?.textContent ?? 'none');
+  // The person's login shell is not run for someone who never opens the option (#212 round 2).
+  check('nothing is looked for before the option is opened', !invoked.some((c) => c.cmd === 'agent_cli_status'), JSON.stringify(invoked.map((c) => c.cmd)));
   check('its CLIs are inside it, not on the list', !cliRow(container, 'claude-code'), 'shown before it was opened');
 
   await click(row);
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  check('opening the option looks, once', invoked.filter((c) => c.cmd === 'agent_cli_status').length === 1, JSON.stringify(invoked.map((c) => c.cmd)));
   check('opened with no CLI chosen, Continue waits', continueOf(container).disabled === true, 'enabled');
   check('and the footer says what is missing', readout(container) === 'Choose which agent writes the summary.', readout(container));
   const claude = cliRow(container, 'claude-code');
@@ -76,7 +80,8 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
   check('a found CLI shows where', claude?.textContent.includes('Found: /home/u/.local/bin/claude'), claude?.textContent);
   check('Claude Code says where the transcript goes', claude?.textContent.includes('The transcript goes to the provider Claude Code is set up for, Anthropic by default.'), claude?.textContent);
   check('a logged-out CLI says so and how to fix it', codex?.textContent.includes('Found, but not logged in. Run codex once in a terminal to log in'), codex?.textContent);
-  check("Codex says its settings are not used and that it can read files", codex?.textContent.includes('your own Codex settings are not used') && codex?.textContent.includes('it can read files on this machine'), codex?.textContent);
+  // The product owner's copy after #212 round 2, when Codex was measured unable to read files.
+  check("Codex says its settings are not used and that its tools are off", codex?.textContent.includes('your own Codex settings are not used. It runs with its tools off.') && !codex?.textContent.includes('read files'), codex?.textContent);
   check('a logged-out CLI cannot be chosen', codex?.getAttribute('aria-disabled') === 'true', codex?.getAttribute('aria-disabled'));
 
   await click(codex);
@@ -92,6 +97,21 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
   check('the choice is saved as the provider, with no model and no key', save?.args?.provider === 'claude-code' && save?.args?.model === '' && save?.args?.apiKey === '', JSON.stringify(save?.args));
 }
 
+// --- Codex chosen: its readout names OpenAI, since its own settings are not used ---------------------
+{
+  const { container } = await render([
+    { id: 'claude-code', found: '/home/u/.local/bin/claude', loggedIn: true },
+    { id: 'codex', found: '/home/u/.local/bin/codex', loggedIn: true },
+  ]);
+  await click(agentRow(container));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  await click(cliRow(container, 'codex'));
+  // The product owner's copy (#212 round 2): the prototype's "the provider Codex is set up for" was
+  // untrue of a run that ignores Codex's settings.
+  check('Codex chosen: the footer names OpenAI', readout(container) === 'Codex: transcripts go to OpenAI.', readout(container));
+  check('and Continue is enabled', continueOf(container).disabled === false, 'disabled');
+}
+
 // --- neither found ------------------------------------------------------------------------------------
 {
   const { container } = await render([
@@ -99,6 +119,7 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
     { id: 'codex', found: null, loggedIn: null },
   ]);
   await click(agentRow(container));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
   for (const [id, cli] of [['claude-code', 'claude'], ['codex', 'codex']]) {
     const r = cliRow(container, id);
     check(`${cli} not found says so`, r?.textContent.includes(`Not found in your shell's PATH. Install ${cli}, then reopen this step.`), r?.textContent);
@@ -111,6 +132,7 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
 {
   const { container } = await render(null);
   await click(agentRow(container));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
   check('no answer is "not found", not "looking" for ever', cliRow(container, 'claude-code')?.textContent.includes('Not found in your shell'), cliRow(container, 'claude-code')?.textContent);
 }
 

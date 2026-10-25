@@ -246,7 +246,7 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
     { id: 'custom-openai', t: 'Custom server — transcripts are sent to the address you enter' },
     { h: 'AGENT CLIS ON THIS MACHINE' },
     { id: 'claude-code', t: 'Claude Code (local CLI) — uses your Claude Code login, transcripts go to the provider it is set up for (Anthropic by default)', cli: 'claude', found: '~/.local/bin/claude', app: 'Claude Code' },
-    { id: 'codex', t: "Codex (local CLI) — uses your Codex login, transcripts are sent to OpenAI with Codex's default model, your Codex settings are not used; it can read files on this machine", cli: 'codex', found: '~/.local/bin/codex', loggedIn: false, app: 'Codex' },
+    { id: 'codex', t: "Codex (local CLI) — uses your Codex login, transcripts are sent to OpenAI with Codex's default model, your Codex settings are not used; it runs with its tools off", cli: 'codex', found: '~/.local/bin/codex', loggedIn: false, app: 'Codex' },
   ];
   const st = { p: 'claude-code' };
   const $ = s => document.querySelector(s);
