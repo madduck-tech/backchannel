@@ -61,7 +61,11 @@ const words = (name: string) => ' ' + name.toLowerCase().split(/[^\p{L}]+/u).fil
 function namesLanguage(code: string, q: string): boolean {
   const b = base(code);
   if (b === q) return true;
-  if (q.length < 3) return false;
+  // Letters and spaces only. A query with a digit or punctuation is a model id's fragment, "0.6b" or
+  // "v3-": stripped to its letters it became ' b' or ' v', which a word of almost every name starts
+  // with, and "0.6" became ' ', which every name contains (#166's gate, round 3).
+  if (!/^[\p{L} ]+$/u.test(q)) return false;
+  if (q.replace(/ /g, '').length < 3) return false;
   const query = ' ' + q.split(/[^\p{L}]+/u).filter(Boolean).join(' ');
   return [languageName(b), englishName(b)].some((name) => words(name).includes(query));
 }
@@ -155,7 +159,7 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
   if (error) {
     return (
       <div className="rounded-md bg-danger-soft p-3 text-sm text-danger-ink">
-        Could not read the model catalogue: {error}. Choose one of the four models above.
+        Could not read the model catalogue: {error.replace(/\.$/, '')}. Choose one of the four models above.
       </div>
     );
   }

@@ -84,7 +84,11 @@ const { TranscriptionModelStep } = loadTsx('src/components/onboarding/steps/Tran
   '@/contexts/OnboardingContext': context,
   '../shared/ModelCatalogue': catalogueModule,
   '@/components/ui/tooltip': firstRunTooltip,
-  '../OnboardingContainer': { OnboardingContainer: ({ children }) => React.createElement('div', null, children) },
+  // With its footer, as the real container renders it (`OnboardingContainer.tsx:92-95`), so the
+  // whole-screen check below sees a control placed there too (#166's gate, round 3).
+  '../OnboardingContainer': {
+    OnboardingContainer: ({ children, footer }) => React.createElement('div', null, children, React.createElement('footer', null, footer)),
+  },
 });
 
 let ctx = null;
@@ -208,6 +212,11 @@ for (const [query, want, by] of [
   ['norwegian bokmål', ['kb-whisper-small-q8'], 'a name of two words'],
   ['bok', ['kb-whisper-small-q8'], 'the start of a second word'],
   ['norwegian', ['kb-whisper-small-q8', 'whisper-tiny-q8'], 'a name several codes share'],
+  // Fragments of model ids, with digits and punctuation: matched on ids only, never as a language.
+  ['0.6', ['parakeet-tdt-0.6b-v3-q8'], 'an id fragment of digits'],
+  ['v3-', ['gigaam-v3-ctc-q8', 'parakeet-tdt-0.6b-v3-q8'], 'an id fragment with punctuation'],
+  ['180m', ['canary-180m-flash-q8'], 'an id fragment of digits and a letter'],
+  ['es?', [], 'a short code with punctuation, which is no code'],
 ]) {
   await type(query);
   const got = shownIds().sort();
@@ -274,12 +283,15 @@ for (const [state, answer, expect, forbid] of [
     const box = document.createElement('div'); document.body.appendChild(box);
     await act(async () => { createRoot(box).render(React.createElement(ModelCatalogue, { selectedModel: '', onModelSelect: () => {} })); });
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    // The sentinel is read before typing, from the unfiltered list, so a search that finds nothing is
+    // reported as the search and not as the locale.
+    const before = [...box.querySelectorAll('[role="radio"]')].map((r) => r.textContent).find((t) => t.includes('gigaam-v3-ctc-q8')) ?? null;
     const field = box.querySelector('input[type="search"]');
     const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     await act(async () => { set.call(field, 'Russian'); field.dispatchEvent(new window.Event('input', { bubbles: true })); });
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     const rows = [...box.querySelectorAll('[role="radio"]')].map((r) => r.textContent);
-    console.log(JSON.stringify({ rows: rows.length, gigaam: rows.find((t) => t.includes('gigaam-v3-ctc-q8')) ?? null }));
+    console.log(JSON.stringify({ rows: rows.length, gigaam: before }));
     process.exit(0);
   `;
   const { spawnSync } = await import('node:child_process');
