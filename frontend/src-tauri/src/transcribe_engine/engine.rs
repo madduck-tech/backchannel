@@ -46,6 +46,10 @@ pub enum ModelStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub name: String,
+    /// The catalogue entry's family, such as "GigaAM". First run's search matches on it, and it
+    /// cannot be recovered from `name`: for 13 of the 22 families some id does not contain the
+    /// family's text (#166).
+    pub family: String,
     pub path: PathBuf,
     pub size_mb: u32,
     pub accuracy: String,
@@ -187,6 +191,7 @@ impl TranscribeEngine {
 
             models.push(ModelInfo {
                 name: name.to_string(),
+                family: entry.family.to_string(),
                 path,
                 size_mb,
                 accuracy: entry.accuracy.to_string(),
@@ -926,6 +931,22 @@ mod tests {
         let models = engine.discover_models().await.unwrap();
         let m = models.iter().find(|m| m.name == name).unwrap();
         assert!(matches!(m.status, ModelStatus::Available), "got {:?}", m.status);
+    }
+
+    /// First run's search matches a model's family, and the family reaches the frontend only through
+    /// this list (#166 condition 1g). Read from `discover_models`' own output, which is what
+    /// `transcribe_get_available_models` returns, so a story's stub cannot stand in for it.
+    #[tokio::test]
+    async fn every_discovered_model_carries_its_catalogue_family() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+        let models = engine.discover_models().await.unwrap();
+        assert_eq!(models.len(), TRANSCRIBE_MODEL_CATALOG.len());
+        for entry in TRANSCRIBE_MODEL_CATALOG {
+            let m = models.iter().find(|m| m.name == entry.name).unwrap();
+            assert!(!m.family.is_empty(), "{} carries no family", m.name);
+            assert_eq!(m.family, entry.family, "{} carries another entry's family", m.name);
+        }
     }
 
     #[test]

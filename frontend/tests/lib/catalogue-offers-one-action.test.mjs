@@ -23,7 +23,6 @@ const src = (p) => fs.readFileSync(path.join(here, '..', '..', p), 'utf8');
 
 const MANAGER = 'src/components/TranscriptionModelManager.tsx';
 const STEP = 'src/components/onboarding/steps/TranscriptionModelStep.tsx';
-const SETTINGS = 'src/components/TranscriptSettings.tsx';
 
 // --- what the catalogue renders -------------------------------------------------------------------
 const [card] = buildCards([MANAGER]);
@@ -58,23 +57,10 @@ assert.ok(
 
 // --- a row click in onboarding does not fetch, and Settings still can -------------------------------
 //
-// Declaration checks, in the shape `transcript-matches-the-prototype.test.mjs` uses, because
-// `renderOne` mounts with no props and the mode is a prop. The pair is what matters: the second
-// assertion is the one a naive fix fails, since `TranscriptSettings.tsx` mounts the same component and
-// has no Continue -- deleting the button outright would leave it unable to download a model at all.
-const manager = src(MANAGER);
-assert.match(
-  manager, /canDownload/,
-  'the catalogue offers the same actions everywhere; onboarding needs a mode that hides Download'
-);
-assert.match(
-  src(STEP), /canDownload=\{false\}/,
-  'the first-run screen does not turn the per-row Download off'
-);
-assert.ok(
-  !/canDownload=\{false\}/.test(src(SETTINGS)),
-  'Settings turned its own Download off. It has no Continue, so a person there could no longer\n' +
-    '  download a model at all — and the assertion above passes on exactly that regression.'
-);
+// Held by rendering now, in `every-catalogue-row-can-be-chosen.test.mjs` (#166). What stood here were
+// three declaration checks: the manager mentions `canDownload`, the step passes `canDownload={false}`,
+// and Settings does not. All three held while every first-run row rendered no control at all, because
+// `Use` needed a file on disk and `Download` was the thing switched off. First run now renders its own
+// rows, and the manager is Settings' alone, so the mode they described is gone.
 
-console.log('ok - the catalogue offers search and one action per row, and Settings keeps Download');
+console.log('ok - the catalogue offers search and none of the controls the product owner removed');

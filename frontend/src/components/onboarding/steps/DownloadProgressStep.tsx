@@ -68,7 +68,24 @@ export function DownloadProgressStep() {
     fetched: false,
   });
 
-  // The size shown beside the name. `null` for a model outside the recommended four -- there is no
+  // The size beside the name before the first progress event. The frontend carries the recommended
+  // four's sizes; every other model's is the catalogue's, read from the backend. Without it the 82
+  // others read "0 of 0 MB" until the HTTP response arrived (#166). A progress event's total, once
+  // one has come, is never overwritten.
+  useEffect(() => {
+    let live = true;
+    invoke<Array<{ name: string; size_mb: number }>>('transcribe_get_available_models')
+      .then((models) => {
+        const mb = models.find((m) => m.name === chosenRef.current)?.size_mb;
+        if (live && mb) setParakeetState((prev) => (prev.totalMb ? prev : { ...prev, totalMb: mb }));
+      })
+      .catch((error) => {
+        console.warn("[DownloadProgressStep] Could not read the chosen model's size:", error);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const parakeetDownloadStartedRef = useRef(false);
   const summaryDownloadStartedRef = useRef(false);
