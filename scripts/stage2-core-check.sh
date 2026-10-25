@@ -556,5 +556,52 @@ LEN=$(printf '%s' "$BODY" | tr -d ' ' | wc -c)
 [ "$LEN" -ge 120 ] || die "the summary panel is on screen but holds only $LEN characters of text: '$BODY'"
 say "a summary was written, $LEN characters: $(printf '%s' "$BODY" | cut -c1-200)"
 
+# --- what the summary's action items carry (#171) -------------------------------------------------
+#
+# `standard_meeting` ordered a due date on every action item, and the model wrote "(due: None)" for
+# what jfk.wav never dated. The recording states no date, so any due slot on an action item is a
+# value the meeting did not give. Read from the **stored markdown**, not the page's text, which loses
+# the list markers, and counted by `summary::due_slots` through its example, the function Stage 1
+# tests. One sampled draw: a red here is re-measured with the instrument, never rerun to green.
+# `unscored` cannot observe this (its transcript is Cyrillic and its summary may be Russian), and
+# `empty` writes no summary. Named defaults: the template is `standard_meeting`, and the same sample
+# plays on both channels, so the side instruction is appended.
+DUE_NOTE=""
+if [ "$MODE" = scores ]; then
+  MD=""
+  for _ in $(seq 1 30); do
+    MD=$(python3 -I -c '
+import json, sqlite3, sys
+try:
+    c = sqlite3.connect(sys.argv[1])
+    r = c.execute("select result from summary_processes where result is not null order by rowid desc limit 1").fetchone()
+    print((json.loads(r[0]).get("markdown") or "") if r else "")
+except Exception:
+    print("")' "$APPDATA/meeting_minutes.sqlite")
+    [ -n "$MD" ] && break
+    sleep 1
+  done
+  [ -n "$MD" ] || die "the stored summary has no markdown in summary_processes.result"
+  READING=$(printf '%s' "$MD" | (cd "$(dirname "$0")/../frontend/src-tauri" && cargo run -q --example due_slots -- no-date)) \
+    || die "the counter's example did not run over the stored summary"
+  say "the stored summary's action items, counted with no stated date: $READING"
+  field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$READING" "$1"; }
+  ITEMS=$(field items); HITS=$(field hits); CONCLUSIVE=$(field conclusive)
+  # The page's list blocks between the Action Items title and the next section's title, as a
+  # cross-check that the counter and the person see the same items. Block types read from
+  # BlockNote 0.53.0's `data-content-type`.
+  DOM_ITEMS=$(js '"return (() => { const titles = [\"Summary\", \"Key Decisions\", \"Action Items\", \"Discussion Highlights\"]; const blocks = [...document.querySelectorAll(\"[data-content-type]\")]; let inside = false, n = 0; for (const b of blocks) { const t = (b.textContent || \"\").trim(); const type = b.getAttribute(\"data-content-type\"); if (titles.includes(t) && !/ListItem$/.test(type)) { inside = (t === \"Action Items\"); continue; } if (inside && /^(checkListItem|bulletListItem|numberedListItem)$/.test(type)) n++; } return n; })()"')
+  say "the page shows $DOM_ITEMS list blocks under Action Items"
+  [ "$DOM_ITEMS" = "$ITEMS" ] || die "the counter read $ITEMS action items in the stored markdown and the page shows $DOM_ITEMS"
+  if [ "$CONCLUSIVE" != True ]; then
+    DUE_NOTE="; due slots inconclusive, the summary has no action items"
+    say "due slots: inconclusive -- the summary has no action items, so this draw says nothing about them"
+  else
+    [ "$HITS" = 0 ] || die "$HITS of $ITEMS action items carry a due slot the recording never stated: $(printf '%s' "$MD" | grep -iE '(due|deadline)[^:]*:' | head -3 | tr '\n' ' ')"
+    DUE_NOTE="; no action item carries a due slot"
+    say "due slots: none of $ITEMS action items carries one"
+  fi
+fi
+
 PASSED=1
-say "PASS ($MODE) - $MODEL_ID picked through first run, its transcript is on screen with no invented score, and a summary came out of it"
+say "PASS ($MODE) - $MODEL_ID picked through first run, its transcript is on screen with no invented score, and a summary came out of it$DUE_NOTE"

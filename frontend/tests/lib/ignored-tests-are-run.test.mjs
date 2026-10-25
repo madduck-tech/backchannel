@@ -45,6 +45,12 @@ const NOT_RUN_BY_THE_GATE = new Map([
    { blocker: 'needs about 8 GB of August exports, one per repository whose bytes changed (#169 ' +
               'condition 9); run by name and its output pasted into the verdict of the change that ' +
               'moves the engine' }],
+  ['frontend/src-tauri/src/summary/due_slots.rs::what_the_model_writes_into_a_due_slot',
+   { coveredBy: 'a_template_asks_only_for_what_the_meeting_states',
+     why: 'a counted instrument, not a gate check: it calls the built-in gemma4:e2b through its sidecar ' +
+          'for about 60 summaries, some 20 minutes, and its output is pasted into #171\'s verdict. What ' +
+          'the model is told is asserted there; what it writes is sampled, and is held after merge only ' +
+          'by that text, the counter and the Stage 2 single draw (#171 condition 3)' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
    { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
      why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +

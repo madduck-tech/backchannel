@@ -337,3 +337,121 @@ mod tests {
         assert!(!read_standup("**Today**\n\n- Send the budget\n").conclusive, "no stated date read: inconclusive");
     }
 }
+
+#[cfg(test)]
+mod instrument {
+    //! What the model writes, counted. (#171 condition 3)
+    //!
+    //! Each arm summarises one two-line transcript, in which one task states a date and one states
+    //! none, through `generate_meeting_summary` with the built-in `gemma4:e2b`, as the application
+    //! calls it. Runs continue until 10 are conclusive, 15 at most. The thresholds were registered on
+    //! #171 before any run, and nothing is rerun.
+    //!
+    //! Needs the summary model in `BC_SUMMARY_APP_DIR/models/summary` (default
+    //! `~/.cache/backchannel-core-models`), and the sidecar in `CONVERSATIONALY_LLAMA_HELPER` or where
+    //! the application finds it.
+    use super::*;
+    use crate::summary::llm_client::LLMProvider;
+    use crate::summary::processor::generate_meeting_summary;
+    use crate::summary::templates::Template;
+    use std::path::{Path, PathBuf};
+
+    const INPUT: &str = "[00:05] Others: Anna will send the budget by November 7.\n[00:12] Others: Someone should look at the venue.";
+    const MODEL: &str = "gemma4:e2b";
+
+    fn template(path: &Path) -> Template {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).expect("a template")
+    }
+
+    #[test]
+    #[ignore = "needs the built-in summary model and its sidecar; about 20 minutes; run by name, output pasted into #171's verdict"]
+    fn what_the_model_writes_into_a_due_slot() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let app_dir: PathBuf = std::env::var("BC_SUMMARY_APP_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+            Path::new(&std::env::var("HOME").unwrap()).join(".cache/backchannel-core-models")
+        });
+        let arms: Vec<(&str, PathBuf)> = vec![
+            ("new standard_meeting", manifest.join("templates/standard_meeting.json")),
+            ("new retrospective", manifest.join("templates/retrospective.json")),
+            ("old standard_meeting", manifest.join("tests/fixtures/templates-before-171/standard_meeting.json")),
+            ("old retrospective", manifest.join("tests/fixtures/templates-before-171/retrospective.json")),
+            ("daily_standup", manifest.join("templates/daily_standup.json")),
+        ];
+        let detected = crate::summary::language_detection::detect_summary_language(&[INPUT.to_string()]).language;
+        let threshold = crate::summary::summary_engine::models::get_model_by_name(MODEL).expect("the model").context_size.saturating_sub(300) as usize;
+        eprintln!("detected language: {detected:?}; token threshold: {threshold}");
+        let rt = tokio::runtime::Runtime::new().expect("a runtime");
+        let client = reqwest::Client::new();
+        let mut failures = Vec::new();
+        for (arm, path) in &arms {
+            let t = template(path);
+            let id = path.file_stem().unwrap().to_string_lossy().to_string();
+            let (mut conclusive, mut runs, mut hits, mut kept, mut years, mut blanks) = (0, 0, 0, 0, 0, 0);
+            let mut standup_invented: Vec<String> = Vec::new();
+            while conclusive < 10 && runs < 15 {
+                runs += 1;
+                let out = rt.block_on(generate_meeting_summary(
+                    &client, &LLMProvider::BuiltInAI, MODEL, "", INPUT, "", &id, &t, threshold,
+                    None, None, None, None, None, Some(&app_dir), None, None, detected.as_deref(), None,
+                ));
+                let markdown = match out {
+                    Ok((md, _, _)) => md,
+                    Err(e) => {
+                        eprintln!("{arm} run {runs}: the summary failed: {e}");
+                        continue;
+                    }
+                };
+                if *arm == "daily_standup" {
+                    let r = read_standup(&markdown);
+                    if r.conclusive {
+                        conclusive += 1;
+                        if !r.invented.is_empty() {
+                            hits += 1;
+                            standup_invented.extend(r.invented.clone());
+                        }
+                    }
+                    eprintln!("{arm} run {runs}: conclusive={} invented={:?}", r.conclusive, r.invented);
+                } else {
+                    let r = read(&markdown, Mode::Keyword);
+                    eprintln!("{arm} run {runs}: {r:?}");
+                    blanks += r.nonconforming_blanks;
+                    if r.conclusive {
+                        conclusive += 1;
+                        hits += usize::from(r.hits > 0);
+                        kept += usize::from(r.kept == Some(true));
+                        years += usize::from(r.invented_year);
+                    }
+                }
+                if runs <= 2 {
+                    eprintln!("--- {arm} run {runs} markdown ---\n{markdown}\n---");
+                }
+            }
+            let measured = runs - conclusive <= 5 && conclusive >= 10;
+            eprintln!(
+                "== {arm}: {conclusive} conclusive of {runs} runs; runs with a hit {hits}; dated item kept {kept}; invented years {years}; non-compliant blanks {blanks}{}{}",
+                if measured { "" } else { " — NOT MEASURED (more than 5 inconclusive)" },
+                if standup_invented.is_empty() { String::new() } else { format!("; dates invented: {standup_invented:?}") }
+            );
+            if !measured {
+                continue;
+            }
+            match *arm {
+                "new standard_meeting" | "new retrospective" => {
+                    if hits > 0 {
+                        failures.push(format!("{arm}: {hits} of {conclusive} runs put a due slot on the undated item"));
+                    }
+                    if kept < 8 {
+                        failures.push(format!("{arm}: the dated item kept its date in {kept} of {conclusive}, under 8"));
+                    }
+                }
+                "daily_standup" => {
+                    if hits > 0 {
+                        failures.push(format!("{arm}: {hits} of {conclusive} runs carried a date other than November 7 as stated: {standup_invented:?}"));
+                    }
+                }
+                _ => eprintln!("   (an old arm: {} — the instrument {} discriminate)", hits, if hits >= 4 { "does" } else { "does NOT" }),
+            }
+        }
+        assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+    }
+}
