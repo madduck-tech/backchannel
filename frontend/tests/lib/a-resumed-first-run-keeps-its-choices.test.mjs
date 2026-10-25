@@ -246,16 +246,23 @@ let fromStepTwo = null;
   await m.unmount();
 }
 
-// The list the restore checks against is the screen's list, in its order.
+// The list the restore checks against is the screen's list, in its order. Compared by import, not by
+// reading the source: a regex over `id: '…'` missed an option written with double quotes or a
+// constant, which then fell outside both lists while they still compared equal (#172's gate, round 2).
+// The screen's `id` is also typed by the list, so an option the list lacks does not type-check.
 {
   const t = tauriStubs({});
-  const { SUMMARISER_IDS } = loadTsx('src/contexts/OnboardingContext.tsx', { ...boundaryStubs().modules, '@tauri-apps/api/core': t.core, '@tauri-apps/api/event': t.event });
-  const src = fs.readFileSync(new URL('../../src/components/onboarding/steps/SummariserStep.tsx', import.meta.url), 'utf8');
-  const block = src.slice(src.indexOf('const OPTIONS'), src.indexOf('];', src.indexOf('const OPTIONS')));
-  const offered = [...block.matchAll(/\bid: '([^']+)'/g)].map((x) => x[1]);
-  check('precondition: the summariser screen\'s options were read', offered.length >= 5, `read ${JSON.stringify(offered)}`);
-  check('SUMMARISER_IDS equals the summariser screen\'s options', JSON.stringify([...SUMMARISER_IDS]) === JSON.stringify(offered),
-    `context ${JSON.stringify(SUMMARISER_IDS)}, screen ${JSON.stringify(offered)}`);
+  const modules = { ...boundaryStubs().modules, '@tauri-apps/api/core': t.core, '@tauri-apps/api/event': t.event };
+  const context = loadTsx('src/contexts/OnboardingContext.tsx', modules);
+  const { OFFERED_SUMMARISERS } = loadTsx('src/components/onboarding/steps/SummariserStep.tsx', {
+    ...modules,
+    '@/contexts/OnboardingContext': context,
+    '../OnboardingContainer': { OnboardingContainer: ({ children }) => children },
+  });
+  check('precondition: the summariser screen exports its options', Array.isArray(OFFERED_SUMMARISERS) && OFFERED_SUMMARISERS.length >= 5,
+    `read ${JSON.stringify(OFFERED_SUMMARISERS)}`);
+  check('SUMMARISER_IDS equals the summariser screen\'s options', JSON.stringify([...context.SUMMARISER_IDS]) === JSON.stringify(OFFERED_SUMMARISERS),
+    `context ${JSON.stringify(context.SUMMARISER_IDS)}, screen ${JSON.stringify(OFFERED_SUMMARISERS)}`);
 }
 
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);

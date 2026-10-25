@@ -273,6 +273,9 @@ if [ "$MODE" = resumes-gone ]; then
     sleep 0.5
   done
   [ -n "$FETCHED" ] || FAILS+=("no download of $DEFAULT_FILE was asked for")
+  # A guard with no control: an unknown id fails at the catalogue lookup (`engine.rs:351-352`) before
+  # the download line is written, and that line names a URL and a file, never an id. No build can
+  # write this, so it can never go red; the row and the download above are the conditions.
   grep -qE "Downloading model file .+$GONE_ID" "$LOG" && FAILS+=("a download of $GONE_ID was asked for")
   # The auto-save after the resume: false until it runs, since the seed named the dead model.
   SAVED=""
