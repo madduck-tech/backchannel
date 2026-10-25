@@ -251,12 +251,16 @@ await() {
 # --- resumes-gone: a saved model this build no longer has resumes on the default (#172's gate) ------
 if [ "$MODE" = resumes-gone ]; then
   DEFAULT_ID="parakeet-tdt-0.6b-v3-q8"; DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
-  # False on arrival: the download screen is step 3, and the application renders nothing of it until
-  # the resume has read the status.
-  await "document.querySelector('section[aria-label]') !== null" "the resume to reach the download screen" 60
+  # A download row is a `section` labelled with its model. So is the toaster's region, which Sonner
+  # labels "Notifications alt+T" and renders from the start: counting it made the first version of this
+  # wait true on arrival, and its row list name a model nobody chose. Rows are the other sections.
+  ROWS_JS='[...document.querySelectorAll(\"section[aria-label]\")].map(s=>s.getAttribute(\"aria-label\")).filter(l=>!l.startsWith(\"Notifications\"))'
+  # False on arrival: the download screen is step 3, and the application renders no row until the
+  # resume has read the status.
+  await "$ROWS_JS.length > 0" "the resume to reach the download screen" 60
   sleep 3
   FAILS=()
-  ROWS=$(js '"return JSON.stringify([...document.querySelectorAll(\"section[aria-label]\")].map(s=>s.getAttribute(\"aria-label\")))"')
+  ROWS=$(js "\"return JSON.stringify($ROWS_JS)\"")
   say "the download screen's rows: $ROWS"
   [ "$ROWS" = "[\"$DEFAULT_ID\"]" ] || FAILS+=("the rows are $ROWS, not the default's alone")
   [ "$(js '"return document.body.innerText.includes(\"Unknown model\")"')" = "True" ] && FAILS+=("the screen says Unknown model")
