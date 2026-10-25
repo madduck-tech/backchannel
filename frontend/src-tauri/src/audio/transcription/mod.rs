@@ -30,15 +30,38 @@ use transcribe_cpp::{Diarize, StreamOptions};
 
 pub use adapters::tauri_sink::{reset_speech_detected_flag, TranscriptPartial, TranscriptUpdate};
 
+/// How a loaded transcribe.cpp model is decoded live. (#200)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePath {
+    /// One stream for the whole meeting.
+    Stream,
+    /// Speech segmented by VAD, each segment decoded whole.
+    Segmented,
+}
+
+/// Choose the live path from what the loaded model reports about itself.
+///
+/// A model streams only when it streams natively **and** reports no cap on how long a stream may run
+/// (`max_audio_ms == 0`). moonshine_streaming streams, but one stream holds at most 81.9 s, re-decodes
+/// everything so far on every feed, and its committed text is best-effort upstream, so a meeting kept
+/// its first seconds (#200). Segmented, it decodes all of it. Read from GGUF metadata, so it cannot
+/// drift from what the model can do. `None`, a model whose capabilities could not be read, is
+/// segmented, the path that never needs them. Voxtral Realtime reports 0 with a 2.9 h wall (#204).
+pub fn live_path(capabilities: Option<&transcribe_cpp::Capabilities>) -> LivePath {
+    match capabilities {
+        Some(c) if c.supports_streaming && c.max_audio_ms == 0 => LivePath::Stream,
+        _ => LivePath::Segmented,
+    }
+}
+
 /// Start live transcription for a recording.
 ///
 /// Picking a backend goes provider first, then model capability:
 ///   - `builtin-ai` means an audio-capable LLM in the llama-helper sidecar,
 ///     which has no transcribe.cpp session at all — so it is checked first.
-///   - otherwise `Capabilities::supports_streaming` on the loaded model
-///     decides. That comes from GGUF metadata, so it cannot disagree with what
-///     the model can actually do; the catalog's `streaming` field only labels
-///     rows in the picker before download.
+///   - otherwise [`live_path`] decides, from the loaded model's GGUF metadata,
+///     so it cannot disagree with what the model can actually do; the catalog's
+///     `streaming` field only labels rows in the picker before download.
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
@@ -84,7 +107,7 @@ pub fn start_transcription_task<R: Runtime>(
 
         // A model loaded for transcription has the ASR role (`load_model` refuses one without), so
         // this reads its capabilities; were it ever to fail, the VAD + batch path is the safe one.
-        let streaming = session.model().capabilities().is_ok_and(|c| c.supports_streaming);
+        let streaming = live_path(session.model().capabilities().ok().as_ref()) == LivePath::Stream;
         let model_name = engine.get_current_model().await;
         let diarizes = model_name.as_deref().is_some_and(crate::config::model_diarizes);
         info!(
@@ -222,5 +245,41 @@ async fn run_builtin_audio_llm<R: Runtime>(
     .await;
     if let Err(e) = joined {
         error!("Transcription task panicked: {e}");
+    }
+}
+
+#[cfg(test)]
+mod live_path_tests {
+    use super::*;
+    use transcribe_cpp::{Capabilities, TimestampKind};
+
+    fn caps(supports_streaming: bool, max_audio_ms: i64) -> Capabilities {
+        Capabilities {
+            native_sample_rate: 16_000,
+            languages: vec!["en".into()],
+            translate_target_languages: vec![],
+            max_timestamp_kind: TimestampKind::None,
+            supports_language_detect: false,
+            supports_translate: false,
+            supports_streaming,
+            supports_spec_decode: false,
+            max_audio_ms,
+        }
+    }
+
+    #[test]
+    fn a_stream_with_no_cap_streams() {
+        assert_eq!(live_path(Some(&caps(true, 0))), LivePath::Stream, "nemotron's capabilities");
+    }
+
+    #[test]
+    fn a_stream_with_a_cap_is_segmented() {
+        assert_eq!(live_path(Some(&caps(true, 81_920))), LivePath::Segmented, "moonshine_streaming's capabilities (#200)");
+    }
+
+    #[test]
+    fn a_batch_model_is_segmented_and_so_is_an_unread_one() {
+        assert_eq!(live_path(Some(&caps(false, 0))), LivePath::Segmented);
+        assert_eq!(live_path(None), LivePath::Segmented);
     }
 }

@@ -50,13 +50,26 @@ pub const DEFAULT_TRANSCRIBE_MODEL: &str = "parakeet-tdt-0.6b-v3-q8";
 /// Models the picker marks "Recommended". Every catalog row is listed and
 /// selectable — this only decides which ones carry the label.
 ///
-/// The live entries are streaming-native — the exception is the default, which
-/// trades that for WER (see `DEFAULT_TRANSCRIBE_MODEL`). The import entries are
-/// batch-only and only worth their latency on a file.
+/// The live entries keep up with speech. Most stream; the ones in
+/// [`SEGMENTED_LIVE_RECOMMENDATIONS`] decode in VAD segments instead: the default,
+/// which trades streaming for WER (see `DEFAULT_TRANSCRIBE_MODEL`), and the
+/// moonshine_streaming rows, whose capped stream kept only a meeting's first
+/// seconds (#200). The import entries are batch-only and only worth their latency
+/// on a file.
 pub const RECOMMENDED_LIVE_MODELS: &[&str] = &[
     "parakeet-tdt-0.6b-v3-q8",
     "nemotron-3.5-asr-streaming-0.6b-q8",
     "nemotron-3.5-asr-streaming-0.6b-q4",
+    "moonshine-streaming-small-q8",
+    "moonshine-streaming-tiny-q8",
+    "moonshine-streaming-medium-q8",
+];
+
+/// The recommended live models that decode in VAD segments rather than a stream. Named, so a
+/// new batch row cannot pick up the "Recommended" label by accident (#200, which changed the
+/// assertion from "every recommended row streams").
+pub const SEGMENTED_LIVE_RECOMMENDATIONS: &[&str] = &[
+    "parakeet-tdt-0.6b-v3-q8",
     "moonshine-streaming-small-q8",
     "moonshine-streaming-tiny-q8",
     "moonshine-streaming-medium-q8",
@@ -96,12 +109,14 @@ pub struct TranscribeModel {
     /// The evaluation set `wer` was measured on; empty when `wer` is `None`.
     pub wer_set: &'static str,
     pub speed: &'static str,
-    /// Whether this variant can drive `Session::stream()`.
+    /// Whether the application streams this variant live, word by word.
     ///
-    /// Display only — it decides the "live-capable" tag in the picker before the
-    /// GGUF exists on disk. The decode path is chosen from
-    /// `Capabilities::supports_streaming` on the loaded model, which is read
-    /// from GGUF metadata and cannot drift.
+    /// Display only — it decides the live tag in the picker before the GGUF exists
+    /// on disk. The decode path is chosen by `audio::transcription::live_path` from
+    /// the loaded model's capabilities, which are read from GGUF metadata and
+    /// cannot drift. A model that streams but whose stream is capped
+    /// (moonshine_streaming) is false here, because it is decoded in segments
+    /// (#200).
     pub streaming: bool,
     /// The model's own `general.languages` GGUF metadata, harvested from the
     /// file header at generation time. Codes rather than prose, because the UI
@@ -121,48 +136,6 @@ pub struct TranscribeModel {
 /// Generated. Edit `scripts/gen_model_catalog.py` and re-run it, not this array.
 pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
     // BEGIN GENERATED — see scripts/gen_model_catalog.py
-    TranscribeModel {
-        name: "moonshine-streaming-medium-q8",
-        family: "Moonshine Streaming",
-        hf_repo: "moonshine-streaming-medium-gguf",
-        filename: "moonshine-streaming-medium-Q8_0.gguf",
-        size_mb: 282,
-        accuracy: "Good",
-        wer: Some(2.16),
-        wer_set: "LibriSpeech test-clean",
-        speed: "Very Fast",
-        streaming: true,
-        languages: &["en"],
-        description: "Moonshine Streaming",
-    },
-    TranscribeModel {
-        name: "moonshine-streaming-small-q8",
-        family: "Moonshine Streaming",
-        hf_repo: "moonshine-streaming-small-gguf",
-        filename: "moonshine-streaming-small-Q8_0.gguf",
-        size_mb: 189,
-        accuracy: "Good",
-        wer: Some(2.54),
-        wer_set: "LibriSpeech test-clean",
-        speed: "Very Fast",
-        streaming: true,
-        languages: &["en"],
-        description: "Moonshine Streaming",
-    },
-    TranscribeModel {
-        name: "moonshine-streaming-tiny-q8",
-        family: "Moonshine Streaming",
-        hf_repo: "moonshine-streaming-tiny-gguf",
-        filename: "moonshine-streaming-tiny-Q8_0.gguf",
-        size_mb: 48,
-        accuracy: "Decent",
-        wer: Some(4.52),
-        wer_set: "LibriSpeech test-clean",
-        speed: "Very Fast",
-        streaming: true,
-        languages: &["en"],
-        description: "Moonshine Streaming",
-    },
     TranscribeModel {
         name: "multitalker-parakeet-streaming-0.6b-v1-q4",
         family: "Multitalker Parakeet",
@@ -694,6 +667,48 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         description: "Moonshine",
+    },
+    TranscribeModel {
+        name: "moonshine-streaming-medium-q8",
+        family: "Moonshine Streaming",
+        hf_repo: "moonshine-streaming-medium-gguf",
+        filename: "moonshine-streaming-medium-Q8_0.gguf",
+        size_mb: 282,
+        accuracy: "Good",
+        wer: Some(2.16),
+        wer_set: "LibriSpeech test-clean",
+        speed: "Very Fast",
+        streaming: false,
+        languages: &["en"],
+        description: "Moonshine Streaming",
+    },
+    TranscribeModel {
+        name: "moonshine-streaming-small-q8",
+        family: "Moonshine Streaming",
+        hf_repo: "moonshine-streaming-small-gguf",
+        filename: "moonshine-streaming-small-Q8_0.gguf",
+        size_mb: 189,
+        accuracy: "Good",
+        wer: Some(2.54),
+        wer_set: "LibriSpeech test-clean",
+        speed: "Very Fast",
+        streaming: false,
+        languages: &["en"],
+        description: "Moonshine Streaming",
+    },
+    TranscribeModel {
+        name: "moonshine-streaming-tiny-q8",
+        family: "Moonshine Streaming",
+        hf_repo: "moonshine-streaming-tiny-gguf",
+        filename: "moonshine-streaming-tiny-Q8_0.gguf",
+        size_mb: 48,
+        accuracy: "Decent",
+        wer: Some(4.52),
+        wer_set: "LibriSpeech test-clean",
+        speed: "Very Fast",
+        streaming: false,
+        languages: &["en"],
+        description: "Moonshine Streaming",
     },
     TranscribeModel {
         name: "moonshine-tiny-q8",

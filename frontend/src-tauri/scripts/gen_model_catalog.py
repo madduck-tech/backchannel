@@ -46,10 +46,11 @@ EXCLUDED = {
 # ponytail: hand-maintained because the cards do not mark this reliably —
 # nemotron-3.5 and voxtral-realtime have no "## Streaming" section, and
 # parakeet-unified-en-0.6b is a unified streaming/offline model whose name says
-# nothing. Runtime dispatch reads Capabilities::supports_streaming from the GGUF
-# instead, so a stale entry here mislabels a row but cannot pick the wrong
-# decode path. Recheck against the family table in transcribe.cpp's README when
-# bumping the pinned rev.
+# nothing. These are the models that stream natively. Runtime dispatch reads
+# the GGUF's capabilities instead (`audio::transcription::live_path`), so a
+# stale entry here mislabels a row but cannot pick the wrong decode path.
+# Recheck against the family table in transcribe.cpp's README when bumping the
+# pinned rev.
 STREAMING = {
     "moonshine-streaming-tiny",
     "moonshine-streaming-small",
@@ -59,6 +60,18 @@ STREAMING = {
     "multitalker-parakeet-streaming-0.6b-v1",
     "parakeet-unified-en-0.6b",
     "voxtral-mini-4b-realtime-2602",
+}
+
+# Rows that stream natively but whose stream is capped (`max_audio_ms` 81 920 for
+# moonshine_streaming), so the application decodes them in VAD segments and the
+# `streaming` field, which labels how text arrives, is false for them (#200).
+# Their speed label still reads the native streaming above: a speed change was
+# nobody's decision. `live_path` reads the cap from the GGUF, and the drift
+# guard in `transcribe_engine::measurements` holds the two in agreement.
+CAPPED_STREAMS = {
+    "moonshine-streaming-tiny",
+    "moonshine-streaming-small",
+    "moonshine-streaming-medium",
 }
 
 # (variant prefix, display family, languages, accuracy when the card's Download
@@ -314,7 +327,8 @@ def entries_for(quants):
         return []
 
     family, _, fallback = family_of(slug)
-    streaming = slug in STREAMING
+    native = slug in STREAMING
+    streaming = native and slug not in CAPPED_STREAMS
     picked = [("q8", quants[Q8])]
     if size_mb > Q4_THRESHOLD_MB and Q4 in quants:
         picked.append(("q4", quants[Q4]))
@@ -334,7 +348,7 @@ def entries_for(quants):
                 "accuracy": accuracy_of(wer, fallback),
                 "wer": wer,
                 "wer_set": wer_set if wer is not None else "",
-                "speed": speed_of(size_mb, streaming),
+                "speed": speed_of(size_mb, native),
                 "streaming": streaming,
                 "languages": gguf_languages(repo, filename),
                 "description": f"{family}{note}",
