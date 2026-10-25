@@ -32,7 +32,9 @@ const holds = (what, cond, why) => {
   const inputs = (p.match(/<input/g) || []).length;
   assert.equal(inputs, 1, `the approved catalogue has ${inputs} inputs; this check assumes exactly one`);
 
-  const manager = impl('src/components/TranscriptionModelManager.tsx');
+  // First run's own catalogue since #166. This read `TranscriptionModelManager.tsx` while first run
+  // mounted it; that card is Settings' alone now, and the prototype describes first run.
+  const manager = impl('src/components/onboarding/shared/ModelCatalogue.tsx');
   holds(
     'the catalogue offers one text input, as the prototype does',
     (manager.match(/<input/g) || []).length === 1,

@@ -168,27 +168,32 @@ if ! printf '%s' "$(text)" | grep -q -- "$MODEL_ID"; then
   CAT=$(by_text "Browse every model")
   [ -n "$CAT" ] || die "$MODEL_ID is not among the recommended options and there is no 'Browse every model' button"
   click "$CAT" "the catalogue button"
-  await "document.querySelector('input[type=search], input[placeholder*=Search i]') !== null" "the catalogue's search field" 20
+  # False before the click: the catalogue is not on screen until it is asked for.
+  await "document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]').length > 1" "the catalogue's rows" 20
   FIELD=$(find_el '{"using":"css selector","value":"input[type=search]"}')
-  [ -n "$FIELD" ] || FIELD=$(find_el '{"using":"css selector","value":"input[placeholder*=Search i]"}')
   [ -n "$FIELD" ] || die "the catalogue has no search field to narrow it with"
-  # The catalogue lists display names (`gigaam-v3-ctc (Q8)`), not catalogue ids, so the query is the
-  # family part of the id. Searching for the whole id returns "no models match" — measured.
-  QUERY="${MODEL_ID%-q[0-9]*}"
-  curl -s -m 20 -X POST "$BASE/element/$FIELD/value" -H 'Content-Type: application/json' \
-    -d "{\"text\":\"$QUERY\"}" > /dev/null
-  await "document.body.innerText.includes('$QUERY')" "the catalogue row for $QUERY" 20
-  say "searched the catalogue for '$QUERY'"
-  # A catalogue row for a model already on disk offers `Use`; that is its selection control, and the
-  # recommended list has no equivalent because its rows are radios.
-  USE=$(by_text "Use")
-  [ -n "$USE" ] || die "the catalogue row for $QUERY offers no 'Use' control; controls: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
-  click "$USE" "the catalogue's Use control for $QUERY"
+  # First run's search matches the whole id since #166. It used to match display names
+  # (`gigaam-v3-ctc (Q8)`), so this typed the family part of the id instead.
+  type_into "$FIELD" "$MODEL_ID" "the catalogue's search field"
+  # False before typing: the unfiltered list holds rows that do not carry the id. The wait that stood
+  # here, for the page to contain the query, was true before anything was typed (#166).
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')];return r.length>0&&r.every(function(e){return e.textContent.indexOf('$MODEL_ID')>=0;});})()" \
+        "the search to narrow the catalogue to $MODEL_ID" 20
+  say "searched the catalogue for '$MODEL_ID'"
+  # The row is the choice, inside the catalogue's own radiogroup. This pressed `Use`, which the
+  # Settings card offered only because the pass had seeded the file; a row not on disk had no control.
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[.='$MODEL_ID']]\"}")
+  [ -n "$ROW" ] || die "no row for $MODEL_ID inside the catalogue's radiogroup"
+  CHECKED=$(curl -s -m 20 "$BASE/element/$ROW/attribute/aria-checked" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value"))')
+  [ "$CHECKED" = "false" ] || die "the $MODEL_ID row reads aria-checked=$CHECKED before it was chosen"
+  click "$ROW" "the catalogue row for $MODEL_ID"
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')].find(function(e){return e.textContent.indexOf('$MODEL_ID')>=0;});return !!r&&r.getAttribute('aria-checked')==='true';})()" \
+        "the $MODEL_ID row to read aria-checked=true" 10
   CATALOGUE_USED=1
 fi
 
 # The recommended list wraps each option in a `<label>` around an `sr-only` radio. The catalogue has
-# already made the choice through `Use`, so this whole block is skipped there.
+# already made the choice through its row, so this whole block is skipped there.
 if [ -z "${CATALOGUE_USED:-}" ]; then
 MATCH="$MODEL_ID"
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,\\\"$MATCH\\\")]]\"}")

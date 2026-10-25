@@ -15,9 +15,21 @@ interface OnboardingStatus {
     parakeet: string;
     summary: string;
     selected_summary_model?: string;
+    /** The transcription model and the summariser chosen at steps 1 and 2. Absent in a status saved
+     *  before #172, which then resumes on the defaults, as every resume did. */
+    selected_transcribe_model?: string;
+    summary_provider?: string;
   };
   last_updated: string;
 }
+
+/**
+ * The summarisers first run offers, in `SummariserStep`'s order. A resumed status may name only one of
+ * these (#172): an id from a hand edit, or from an option a later version removed, would reach
+ * `complete_onboarding` as it stands. `a-resumed-first-run-keeps-its-choices.test.mjs` holds this list
+ * equal to the screen's.
+ */
+export const SUMMARISER_IDS = ['builtin-ai', 'ollama', 'claude', 'openai', 'groq', 'openrouter', 'custom-openai'] as const;
 
 interface SummaryModelProgressInfo {
   percent: number;
@@ -410,6 +422,30 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
           return;
         }
 
+        // The choices, before anything reads them (#172). A resume used to start on the defaults and
+        // finish with them: the download screen fetched the default, and `complete_onboarding` wrote it
+        // with `builtin-ai` beside a cloud summariser's model.
+        //
+        // Before `verifyModelStatus`, because it asks the disk about `selectedTranscribeModelRef`, which
+        // the setter moves at once. And through #170's setter, which clears the flag on a change: the
+        // raw state setter would leave a "downloaded" answered for the default standing for the
+        // restored model. A status from before #172 carries neither field and resumes on the defaults.
+        //
+        // Only a choice this build still offers is restored. A model no longer in the catalogue (a row
+        // upstream dropped, say) would leave the download screen on "Unknown model" with Continue
+        // disabled and no way back, and the auto-save would write it again on every launch, where the
+        // defaults at least finish (#172's gate).
+        const savedModel = status.model_status.selected_transcribe_model;
+        if (typeof savedModel === 'string' && savedModel) {
+          if (await isCatalogueModel(savedModel)) setSelectedTranscribeModel(savedModel);
+          else console.warn(`[OnboardingContext] The saved transcription model '${savedModel}' is not in the catalogue; resuming on the default`);
+        }
+        const savedProvider = status.model_status.summary_provider;
+        if (typeof savedProvider === 'string' && savedProvider) {
+          if ((SUMMARISER_IDS as readonly string[]).includes(savedProvider)) setSummaryProvider(savedProvider);
+          else console.warn(`[OnboardingContext] The saved summariser '${savedProvider}' is not offered; resuming on the default`);
+        }
+
         // Don't trust saved status - verify actual model status on disk
         const verifiedStatus = await verifyModelStatus(status);
 
@@ -520,6 +556,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
             parakeet: parakeetDownloaded ? 'downloaded' : 'not_downloaded',
             summary: summaryModelDownloaded ? 'downloaded' : 'not_downloaded',
             selected_summary_model: selectedSummaryModel || undefined,
+            selected_transcribe_model: selectedTranscribeModel || undefined,
+            summary_provider: summaryProvider || undefined,
           },
           last_updated: new Date().toISOString(),
         },
@@ -587,6 +625,17 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
    * it. The cost of being wrong that way is a redundant fetch; the other way it is a first run that
    * completes and cannot record.
    */
+  // Every catalogue row is listed, whatever its status, so a name it does not list is not a model.
+  const isCatalogueModel = async (modelName: string): Promise<boolean> => {
+    try {
+      const models = await invoke<Array<{ name: string }>>('transcribe_get_available_models');
+      return models.some((m) => m.name === modelName);
+    } catch (error) {
+      console.warn('[OnboardingContext] Could not read the catalogue to check a saved model:', error);
+      return false;
+    }
+  };
+
   const transcribeModelIsOnDisk = async (modelName: string): Promise<boolean> => {
     try {
       const models = await invoke<Array<{ name: string; status: unknown }>>(

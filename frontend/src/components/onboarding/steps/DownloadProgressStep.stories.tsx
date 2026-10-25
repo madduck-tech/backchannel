@@ -1,7 +1,7 @@
 import * as React from 'react'
 import type { Meta, StoryObj } from '@storybook/nextjs'
 import { DownloadProgressStep } from './DownloadProgressStep'
-import { OnboardingProvider } from '@/contexts/OnboardingContext'
+import { OnboardingProvider, useOnboarding } from '@/contexts/OnboardingContext'
 import { withTauri } from '../../../../.storybook/withTauri'
 
 /**
@@ -60,6 +60,50 @@ export const OneAlreadyOnDisk: StoryObj<typeof DownloadProgressStep> = {
       transcribe_has_available_models: false,
       transcribe_get_available_models: [],
       transcribe_download_model: null,
+      builtin_ai_download_model: null,
+      builtin_ai_list_models: [],
+    }),
+  ],
+}
+
+/** Renders the step once the provider holds `model`, the way a choice made one screen earlier does. */
+function ChosenFirst({ model, children }: { model: string; children: React.ReactNode }) {
+  const { selectedTranscribeModel, setSelectedTranscribeModel } = useOnboarding()
+  React.useEffect(() => {
+    setSelectedTranscribeModel(model)
+  }, [model, setSelectedTranscribeModel])
+  return selectedTranscribeModel === model ? <>{children}</> : null
+}
+
+/**
+ * A model outside the recommended four, chosen in the catalogue, before its first progress event.
+ *
+ * The frontend carries only the four's sizes, so this row read "0 of 0 MB" until the HTTP response
+ * arrived (#166). Its size is now the catalogue's, from the backend.
+ * `tests/lib/storybook-download-size.test.mjs` renders this story and reads the row.
+ */
+export const ChosenOutsideTheFour: StoryObj<typeof DownloadProgressStep> = {
+  decorators: [
+    (Story) => (
+      <ChosenFirst model="whisper-tiny-q8">
+        <Story />
+      </ChosenFirst>
+    ),
+    withTauri({
+      get_onboarding_status: null,
+      check_first_launch: false,
+      builtin_ai_get_recommended_model: 'gemma4:e2b',
+      save_onboarding_status: null,
+      transcribe_has_available_models: false,
+      transcribe_get_available_models: [
+        {
+          name: 'whisper-tiny-q8', family: 'Whisper', path: '/tmp/x.gguf', size_mb: 44, accuracy: 'Low',
+          wer: 7.7, wer_set: 'set', speed: 'Fast', status: 'Missing', description: '', streaming: false,
+          languages: ['en'], recommended: false, diarizes: false,
+        },
+      ],
+      // Accepted and never finished, so no progress event ever arrives: the window under test.
+      transcribe_download_model: new Promise(() => {}),
       builtin_ai_download_model: null,
       builtin_ai_list_models: [],
     }),

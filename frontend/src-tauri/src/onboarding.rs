@@ -23,6 +23,13 @@ pub struct ModelStatus {
     pub summary: String,   // Generic field for summary model (Gemma 4 variants)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_summary_model: Option<String>,
+    /// The transcription model and the summariser chosen at steps 1 and 2, so a first run that is
+    /// quit and resumed keeps them (#172). Optional, so a status saved before them still loads; serde
+    /// drops a key the struct does not declare, which is why they are declared here and not only sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_transcribe_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_provider: Option<String>,
 }
 
 impl Default for OnboardingStatus {
@@ -35,6 +42,8 @@ impl Default for OnboardingStatus {
                 parakeet: "not_downloaded".to_string(),
                 summary: "not_downloaded".to_string(),  // Changed from gemma
                 selected_summary_model: None,
+                selected_transcribe_model: None,
+                summary_provider: None,
             },
             last_updated: chrono::Utc::now().to_rfc3339(),
         }
@@ -243,5 +252,24 @@ mod tests {
         .expect("old onboarding status should remain compatible");
 
         assert_eq!(status.model_status.selected_summary_model, None);
+        // Read through the serialized form, so this compiles whether or not the struct declares the
+        // fields, and the round trip below is the one check a dropped field turns red (#172).
+        let back = serde_json::to_value(&status).expect("the status serializes");
+        assert!(back["model_status"].get("selected_transcribe_model").is_none(), "{back}");
+        assert!(back["model_status"].get("summary_provider").is_none(), "{back}");
+    }
+
+    /// The payload the frontend saves, kept through the struct (#172). The fixture is the one
+    /// `a-resumed-first-run-keeps-its-choices.test.mjs` asserts the frontend sends, so a name or a
+    /// nesting that differs between the two cannot leave both halves green. Read over
+    /// `serde_json::Value`, so a field missing from the struct is a runtime failure here.
+    #[test]
+    fn onboarding_status_keeps_both_choices_through_a_round_trip() {
+        const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-status-with-choices.json");
+        let status: OnboardingStatus = serde_json::from_str(FIXTURE).expect("the fixture deserializes");
+        let back = serde_json::to_value(&status).expect("the status serializes");
+        let ms = &back["model_status"];
+        assert_eq!(ms["selected_transcribe_model"], "moonshine-tiny-q8", "the transcription model was dropped: {ms}");
+        assert_eq!(ms["summary_provider"], "claude", "the summariser was dropped: {ms}");
     }
 }

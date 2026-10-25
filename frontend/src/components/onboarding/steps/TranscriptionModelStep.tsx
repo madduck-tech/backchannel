@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import TranscriptionModelManager from '@/components/TranscriptionModelManager';
+import { ModelCatalogue } from '../shared/ModelCatalogue';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
@@ -17,7 +17,9 @@ import { cn } from '@/lib/utils';
  * the application it is noise, and the product owner said so in those words.
  *
  * The catalogue is still reachable, behind a button, for the person who came here to find one
- * specific model. That is the whole of what search is for at this point.
+ * specific model. That is the whole of what search is for at this point. Its rows are first run's own
+ * (`ModelCatalogue`), not the Settings card: on that card a model not yet on disk had no control at
+ * all, so 82 of the 86 could not be chosen here (#166).
  *
  * **Order matters and is not alphabetical.** The multilingual models come first. The catalogue's own
  * order puts three English-only Moonshine rows above them, and the picker's "Recommended" sort is
@@ -110,8 +112,7 @@ export function TranscriptionModelStep() {
                 {/* Behind a button on purpose: the person who needs it came looking for one model by
                     name, and everyone else is served by the four above. */}
                 {showCatalogue && (
-                    <TranscriptionModelManager
-                        canDownload={false}
+                    <ModelCatalogue
                         selectedModel={selectedTranscribeModel}
                         onModelSelect={setSelectedTranscribeModel}
                     />

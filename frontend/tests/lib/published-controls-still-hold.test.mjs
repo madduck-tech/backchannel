@@ -106,16 +106,17 @@ const PUBLISHED = [
   {
     // #92 gave the same call a second site: `verifyModelPresence`, which runs on mount so the
     // state-drift repair is not behind a button the stuck user cannot press. The anchor text
-    // appears twice (`:364` in `verifyModelPresence`, `:400` in `handleContinue`); this control is
+    // appears twice (`:383` in `verifyModelPresence`, `:419` in `handleContinue`); this control is
     // about **Continue**, so it points at the latter. Mutating the mount one tests another claim.
     //
     // **Re-anchored by #170.** It was `:391` containing `invoke<boolean>('transcribe_has_available_models')`,
     // the any-model question #170 replaced with the chosen model by name. The claim is the same, that
     // Continue asks for itself. This file's value is that its controls predate the runner, and this
-    // row's anchor no longer does.
+    // row's anchor no longer does. **Moved by #166**, from `:400` to `:419`: the download screen gained
+    // an effect that reads a non-recommended model's size from the catalogue. The anchor is unchanged.
     id: '#93 first run: Continue stops asking the backend',
     file: 'src/components/onboarding/steps/DownloadProgressStep.tsx',
-    line: 400,
+    line: 419,
     anchor: 'await transcribeModelIsOnDisk(chosenRef.current)',
     replace: '      const actuallyAvailable = true;',
     check: ['node', 'tests/lib/first-run-step.test.mjs'],

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
-import { useOnboarding } from '@/contexts/OnboardingContext';
+import { useOnboarding, SUMMARISER_IDS } from '@/contexts/OnboardingContext';
 import { cn } from '@/lib/utils';
 
 /**
@@ -22,7 +22,8 @@ import { cn } from '@/lib/utils';
  */
 
 type Option = {
-    id: string;
+    /** One of the ids a resumed first run may restore (#172): an option the list lacks does not type-check. */
+    id: (typeof SUMMARISER_IDS)[number];
     name: string;
     /** Where the words go. Local options describe the machine; remote ones name the recipient. */
     where?: string;
@@ -70,6 +71,9 @@ const OPTIONS: Option[] = [
         defaultModel: 'gpt-4o',
     },
 ];
+
+/** The options' ids, in order, for the test that holds `SUMMARISER_IDS` equal to them (#172). */
+export const OFFERED_SUMMARISERS = OPTIONS.map((o) => o.id);
 
 export function SummariserStep() {
     const {

@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "completed": false,
+  "current_step": 4,
+  "model_status": {
+    "parakeet": "not_downloaded",
+    "summary": "not_downloaded",
+    "selected_summary_model": "claude-sonnet-4-5-20250929",
+    "selected_transcribe_model": "moonshine-tiny-q8",
+    "summary_provider": "claude"
+  },
+  "last_updated": "2026-10-25T00:00:00.000Z"
+}
