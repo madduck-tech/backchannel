@@ -305,8 +305,9 @@ mod falling_behind {
 
     /// Seconds of decoding per second of segment.
     const K: f64 = 2.0;
-    /// Wall seconds are audio seconds over this. Bounded at 10 so Silero's per-frame time stays
-    /// inside the tolerance; if it did not, the depth check would fail loudly, not pass falsely.
+    /// Wall seconds are audio seconds over this. Bounded at 10. Silero's own time is not scaled,
+    /// so it is measured on the reference run and counted in the prediction: on macOS CI it alone
+    /// put the depth 12 s past a prediction that left it out (#209's gate).
     const SCALE: f64 = 10.0;
     /// Seconds of `dots-full.wav` sent.
     const T: f64 = 120.0;
@@ -335,7 +336,11 @@ mod falling_behind {
     /// The reference goes through the same adapter, so a loss that happens whatever the speed is
     /// invisible here; what this proves is that **being slow loses nothing**, which is the claim:
     /// the dropping it replaces fired only on a model that had fallen behind. Its control drops
-    /// segments only when the decoder is slow.
+    /// segments only when the decoder is slow. Since that dropping could never fire, this check
+    /// held at the previous commit too: it guards against a speed-dependent loss coming back.
+    ///
+    /// `BenchSink` is built here by hand, as `start_transcription_task` builds it on both of its
+    /// branches; that both branches do is read from source, not driven.
     fn segments_of(audio: &[f32]) -> Vec<String> {
         let sink = FakeSink::default();
         let recorded = sink.0.clone();
@@ -354,7 +359,10 @@ mod falling_behind {
     fn a_segmented_model_slower_than_real_time_is_warned_about_and_loses_nothing() {
         let all = read_wav_mono_16k(&pinned_sample("dots-full.wav"));
         let audio = &all[..(T * 16_000.0) as usize];
+        // The adapter's own cost per second of audio (Silero, mostly), decoding instantly.
+        let timed = Instant::now();
         let expected_rows = segments_of(audio);
+        let c = timed.elapsed().as_secs_f64() / T;
         let speech: u64 = expected_rows.iter().map(|r| r.trim_end_matches(" samples").parse::<u64>().unwrap()).sum();
         let f = speech as f64 / audio.len() as f64;
         assert!(K * f >= 1.5, "inconclusive: k·f = {:.2} (f = {f:.2}), under 1.5, so this run cannot fall behind enough to mean anything", K * f);
@@ -385,9 +393,12 @@ mod falling_behind {
         consumer.join().unwrap();
 
         let log = recorded.lock().unwrap();
-        let predicted = T * (1.0 - 1.0 / (K * f));
+        // Per second of audio the consumer spends c on the adapter plus K·f/SCALE asleep, against
+        // the sender's 1/SCALE, so it runs at K·f + c·SCALE times the sender's pace.
+        let effective = K * f + c * SCALE;
+        let predicted = T * (1.0 - 1.0 / effective);
         eprintln!(
-            "f {f:.3}, k·f {:.2}; depth when sending ended {depth:.1} s, predicted {predicted:.1} s; {} rows of {} expected; warnings {:?}",
+            "f {f:.3}, k·f {:.2}, adapter {c:.4} s per audio s, effective {effective:.2}; depth when sending ended {depth:.1} s, predicted {predicted:.1} s; {} rows of {} expected; warnings {:?}",
             K * f, log.committed.len(), expected_rows.len(), log.warnings
         );
         assert!(depth >= 30.0, "the run fell only {depth:.1} s behind, so it says nothing about a backlog");

@@ -1456,10 +1456,21 @@ mod tests {
         mpsc::UnboundedReceiver<AudioChunk>,
         mpsc::UnboundedReceiver<AudioChunk>,
     ) {
+        let (pipeline, transcription, recording, _clock) = pipeline_with_clock();
+        (pipeline, transcription, recording)
+    }
+
+    /// The same, with the clock the transcription channel keeps (#209).
+    pub(super) fn pipeline_with_clock() -> (
+        AudioPipeline,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        crate::audio::transcription::sent_clock::SentClock,
+    ) {
         use super::super::device_detection::InputDeviceKind;
         let (_audio_tx, audio_rx) = mpsc::unbounded_channel();
         let (transcription_tx, transcription_rx) = crate::audio::transcription::sent_clock::feed_channel();
-        let (transcription_rx, _clock) = transcription_rx.into_parts();
+        let (transcription_rx, clock) = transcription_rx.into_parts();
         let (recording_tx, recording_rx) = mpsc::unbounded_channel();
         let mut pipeline = AudioPipeline::new(
             audio_rx,
@@ -1472,7 +1483,7 @@ mod tests {
             InputDeviceKind::Wired,
         );
         pipeline.recording_sender_for_mixed = Some(recording_tx);
-        (pipeline, transcription_rx, recording_rx)
+        (pipeline, transcription_rx, recording_rx, clock)
     }
 
     /// Two distinguishable windows: a constant each, so a chunk can be
@@ -1492,6 +1503,31 @@ mod tests {
 
     // `tokio::test`, not `test`: `AudioPipeline::new` builds an
     // `AudioMetricsBatcher`, which spawns onto a reactor.
+    /// The clock live lag is read from advances by one channel's samples per window, as the
+    /// timestamps do, however the window is sent (#209). Sent chunk by chunk, it would count both
+    /// channels and read every healthy recording as falling behind.
+    #[tokio::test]
+    async fn the_transcription_clock_advances_by_one_channel_per_window() {
+        let (mut pipeline, mut transcription, _recording, clock) = pipeline_with_clock();
+        let mut dead = false;
+
+        for _ in 0..10 {
+            pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+        }
+
+        let chunks = drain(&mut transcription);
+        let mic: u64 = chunks.iter().filter(|c| c.device_type == DeviceType::Microphone).map(|c| c.data.len() as u64).sum();
+        let sys: u64 = chunks.iter().filter(|c| c.device_type == DeviceType::System).map(|c| c.data.len() as u64).sum();
+        assert!(mic > 0 && mic == sys, "both channels carry the same windows: {mic} and {sys} samples");
+        assert_eq!(clock.samples(), mic, "the clock is one channel's samples, not both channels' ({})", mic + sys);
+        let last = chunks.last().expect("chunks were sent");
+        assert_eq!(
+            (last.timestamp * 16_000.0).round() as u64,
+            mic - last.data.len() as u64,
+            "the last window's timestamp is the clock before it"
+        );
+    }
+
     #[tokio::test]
     async fn transcription_receives_the_two_channels_apart_and_tagged() {
         let (mut pipeline, mut transcription, _recording) = pipeline_for_test();
