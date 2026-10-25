@@ -23,5 +23,6 @@ Status: accepted
 ## Consequences
 
 - Mapping, and the memory it saves, wait for #195. That issue owns a download that replaces a file without truncating it, and the replace-against-load race.
-- Two families' transcripts change visibly with this move: their words are the same, with capitals, punctuation and digits. #169's verdict records what each wrote before and after.
+- Two families' transcripts change visibly with this move. They gain capitals, punctuation and digits. For sensevoice, ITN also changes the decode itself, not only how it is written. Upstream's card says it "changes the CTC decode", at about +0.11 percentage points of WER on LibriSpeech. Measured on `zh.wav`: "开饭时间…" with ITN off, "开放时间早上9点…" with it on. #169's verdict records what each wrote before and after.
+- The catalogue's WER for these families was measured upstream with ITN off, so it no longer describes what the application runs. Regenerating the catalogue is #175.
 - Both are held in one module, so either can be reversed in one place, and a reversal is visible in review.

@@ -1,11 +1,12 @@
 # Every transcribe.cpp model is loaded, and every decode started, through `transcribe_engine::options`
-# (#169). The loaders copy the weights instead of mapping the file, and every run and stream keeps ITN
-# off. A call to one of these anywhere else fails Stage 1's `cargo clippy -- -D warnings`.
+# (#169). The loaders copy the weights instead of mapping the file, and every run and stream takes its
+# ITN setting from `itn_for`. A call to one of these anywhere else fails Stage 1's
+# `cargo clippy -- -D warnings`.
 disallowed-methods = [
   { path = "transcribe_cpp::Model::load", reason = "maps the file; load through transcribe_engine::options::load_model (#169)" },
   { path = "transcribe_cpp::Model::load_with", reason = "load through transcribe_engine::options::load_model, which sets no_mmap (#169)" },
   { path = "transcribe_cpp::transcribe", reason = "loads with default options; load through transcribe_engine::options::load_model (#169)" },
-  { path = "transcribe_cpp::Session::run", reason = "decode through transcribe_engine::options::run, which keeps ITN off (#169)" },
-  { path = "transcribe_cpp::Session::run_batch", reason = "decode through transcribe_engine::options, which keeps ITN off (#169)" },
-  { path = "transcribe_cpp::Session::stream", reason = "begin a stream through transcribe_engine::options::stream, which keeps ITN off (#169)" },
+  { path = "transcribe_cpp::Session::run", reason = "decode through transcribe_engine::options::run, which sets ITN by itn_for (#169)" },
+  { path = "transcribe_cpp::Session::run_batch", reason = "decode through transcribe_engine::options, which sets ITN by itn_for (#169)" },
+  { path = "transcribe_cpp::Session::stream", reason = "begin a stream through transcribe_engine::options::stream, which sets ITN by itn_for (#169)" },
 ]
