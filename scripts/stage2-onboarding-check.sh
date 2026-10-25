@@ -588,8 +588,9 @@ fi
 
 # --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
 #
-# Finishing still starts the on-device summary download with a cloud summariser chosen. That is #181;
-# this pass's teardown ends the application, and the download with it.
+# `completeOnboarding` asks for the selected summary model whatever the provider (#181). For a cloud
+# pick that name is the cloud model, which the backend's exact lookup should reject; that is read, not
+# run, so this pass reports what reached models/summary rather than asserting either way.
 if [ "$MODE" = catalogue ]; then
   FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
   [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
@@ -611,6 +612,9 @@ except Exception:
   done
   [ "$STORED" = "$CHOSEN_ID" ] || die "chose $CHOSEN_ID in the catalogue and the application stored '${STORED:-<nothing>}'"
   say "first run finished and transcript_settings.model is $STORED; the default's file is absent"
+  sleep 5
+  SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
+  say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded; #181)"
 fi
 
 if [ "$MODE" = keeps ]; then
