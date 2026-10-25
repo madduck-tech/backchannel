@@ -37,7 +37,9 @@ pub fn claude(stdout: &str) -> Result<String, AgentError> {
             }
             Some("assistant") => {
                 for item in e["message"]["content"].as_array().into_iter().flatten() {
-                    if item["type"] == "tool_use" {
+                    // `tool_use`, and `server_tool_use`, `mcp_tool_use`, `web_search_tool_result` and
+                    // whatever else names a tool: refused by name, not by an exact list (#212 round 4).
+                    if item["type"].as_str().is_some_and(|t| t.contains("tool")) {
                         let name = item["name"].as_str().unwrap_or("a tool").to_string();
                         return Err(AgentError::ToolUsed { cli, what: name });
                     }
@@ -81,10 +83,13 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
     for e in events(stdout) {
         match e["type"].as_str() {
             Some(t) if t.starts_with("item.") => match e["item"]["type"].as_str() {
+                // Codex says what it is about to do in a message of its own before the answer ("I'm
+                // using the … skill"), so the answer is the last message, not all of them (#212
+                // round 4).
                 Some("agent_message") => {
                     if t == "item.completed" {
                         if let Some(text) = e["item"]["text"].as_str() {
-                            messages.push(text.to_string());
+                            messages = vec![text.to_string()];
                         }
                     }
                 }
@@ -106,7 +111,7 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
             _ => {}
         }
     }
-    let text = messages.join("\n\n");
+    let text = messages.concat();
     if !completed {
         return Err(last_error.map_or(AgentError::Empty(cli), |message| AgentError::Failed { cli, message }));
     }
@@ -227,6 +232,26 @@ mod tests {
     fn codex_without_a_completed_turn_is_empty() {
         let s: String = fixture("codex-summary.jsonl").lines().filter(|l| !l.contains("turn.completed")).collect::<Vec<_>>().join("\n");
         assert_eq!(codex(&s), Err(AgentError::Empty(AgentCli::Codex)));
+    }
+
+    #[test]
+    fn claudes_other_tool_blocks_fail_the_summary_too() {
+        for kind in ["server_tool_use", "mcp_tool_use", "web_search_tool_result"] {
+            let s = with("claude-summary.jsonl", "[{\"type\":\"text\",\"text\":\"hello\"}]", &format!("[{{\"type\":\"{kind}\",\"name\":\"x\"}},{{\"type\":\"text\",\"text\":\"hello\"}}]"));
+            assert!(matches!(claude(&s), Err(AgentError::ToolUsed { .. })), "{kind}: {:?}", claude(&s));
+        }
+    }
+
+    /// The shape measured with a skill named in the transcript (#212 round 3): a preamble message, then the answer.
+    #[test]
+    fn codexs_answer_is_its_last_message() {
+        let s = fixture("codex-summary.jsonl").replacen(
+            "{\"type\":\"item.completed\"",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_p\",\"type\":\"agent_message\",\"text\":\"I'm using the bcuser skill.\"}}\n{\"type\":\"item.completed\"",
+            1,
+        );
+        assert!(s.contains("I'm using the bcuser skill."));
+        assert_eq!(codex(&s), Ok("hello".to_string()));
     }
 
     #[test]

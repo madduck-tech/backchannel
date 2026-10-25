@@ -45,7 +45,10 @@ pub fn codex_features_to_disable(listing: &str) -> Option<Vec<String>> {
     for line in listing.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         let (Some(name), Some(last)) = (cols.first(), cols.last()) else { continue };
-        if cols.len() < 3 || !matches!(*last, "true" | "false") || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+        // Any name the listing gives, however it is spelt: a filter on its characters left
+        // `future.read_files` and `FutureTool` on (#212 round 4). Codex refuses a name it does not
+        // know, which fails the run loudly rather than leaving a tool on.
+        if cols.len() < 3 || !matches!(*last, "true" | "false") {
             continue;
         }
         let stage = cols[1..cols.len() - 1].join(" ");
@@ -117,6 +120,12 @@ fn codex_home() -> Option<std::path::PathBuf> {
     std::env::var_os("CODEX_HOME").map(Into::into).or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
 }
 
+/// Codex's home, for the real-CLI instruments.
+#[cfg(test)]
+pub(crate) fn codex_home_for_instruments() -> Option<std::path::PathBuf> {
+    codex_home()
+}
+
 /// Write Codex's catalog without sub-agents into `dir`, and say where. A Codex with no model list to
 /// read is not run.
 pub(crate) fn codex_catalog_file(dir: &Path) -> Result<std::path::PathBuf, AgentError> {
@@ -181,6 +190,37 @@ pub fn toml_basic_string(s: &str) -> String {
     out
 }
 
+/// A zero-width space, put after each `@` and after a `$` that starts a word in what is sent to the
+/// CLI, and taken out of what comes back.
+const MENTION_BREAK: char = '\u{200B}';
+
+/// The prompt with the CLIs' own mention syntax broken, so a transcript cannot use it (#212 round 4).
+///
+/// Measured 2026-10-25, each with a control without the break:
+/// - Claude Code reads a file named `@/path` itself, before the model, with no tool event. With the
+///   break it looked up `<cwd>/\u{200B}/path`, which does not exist, and never opened the file. The
+///   permission deny in `CLAUDE_DENY_SETTINGS` also stops the read, but a managed policy with
+///   `allowManagedPermissionRulesOnly` would set that deny aside, and this does not depend on it.
+/// - Codex loads and follows the person's installed skill named `$name`. With the break it did not.
+pub fn neutralise_mentions(prompt: &str) -> String {
+    let mut out = String::with_capacity(prompt.len() + 16);
+    let mut chars = prompt.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        let starts_word = chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_');
+        if c == '@' || (c == '$' && starts_word) {
+            out.push(MENTION_BREAK);
+        }
+    }
+    out
+}
+
+/// What came back, with the breaks `neutralise_mentions` put in taken out again: a model repeats an
+/// address or a name as it was given.
+pub fn restore_mentions(answer: &str) -> String {
+    answer.replace(&format!("@{MENTION_BREAK}"), "@").replace(&format!("${MENTION_BREAK}"), "$")
+}
+
 /// Variables passed through by name.
 const PASSED: [&str; 16] = [
     "HOME", "USER", "LOGNAME", "LANG", "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
@@ -189,7 +229,20 @@ const PASSED: [&str; 16] = [
 /// Variables passed through by prefix: locale, and each vendor's routing and auth.
 const PASSED_PREFIXES: [&str; 6] = ["LC_", "AWS_", "ANTHROPIC_", "GOOGLE_", "OPENAI_", "CLAUDE_CODE_USE_"];
 /// The rest of what a login, a proxy or Windows needs.
-const PASSED_MORE: [&str; 4] = ["CLOUD_ML_REGION", "SystemRoot", "USERPROFILE", "APPDATA"];
+const PASSED_MORE: [&str; 13] = [
+    "CLOUD_ML_REGION", "SystemRoot", "USERPROFILE", "APPDATA",
+    // Windows, UNVERIFIED there: where temporary and per-user files go, and how a program is found.
+    "TEMP", "TMP", "LOCALAPPDATA", "ProgramFiles", "ProgramData", "SystemDrive", "PATHEXT", "COMSPEC", "windir",
+];
+
+/// No console window for a CLI started from the application on Windows (UNVERIFIED there), as the
+/// summary sidecar and the call detector already do.
+fn no_window(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
 
 /// The child's whole environment: the listed variables from `from`, and `PATH` set to `path`.
 /// Nothing else, so the application's own variables (an AppImage sets several) do not reach it.
@@ -243,11 +296,12 @@ pub async fn run(
         .kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    no_window(&mut cmd);
     let mut child = cmd.spawn().map_err(spawn_err)?;
     let pid = child.id();
 
     let mut stdin = child.stdin.take().expect("stdin was piped");
-    let prompt = user_prompt.to_owned();
+    let prompt = neutralise_mentions(user_prompt);
     let writer = tokio::spawn(async move {
         let _ = stdin.write_all(prompt.as_bytes()).await;
         // Dropping it closes stdin, so a CLI that asks for more input reads end-of-file.
@@ -296,7 +350,8 @@ pub async fn run(
     let parsed = match cli {
         AgentCli::ClaudeCode => parse::claude(&stdout),
         AgentCli::Codex => parse::codex(&stdout),
-    };
+    }
+    .map(|answer| restore_mentions(&answer));
     if status.success() {
         return parsed;
     }
@@ -331,6 +386,7 @@ pub async fn logged_in(cli: AgentCli, binary: &Path, child_path: &OsStr) -> Opti
         .envs(environment(std::env::vars_os(), child_path))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
+    no_window(&mut cmd);
     let out = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await.ok()?.ok()?;
     read_login(cli, &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr))
 }
@@ -367,6 +423,7 @@ pub(crate) async fn codex_features(binary: &Path, child_path: &OsStr) -> Result<
         .env("CODEX_HOME", work.path())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
+    no_window(&mut cmd);
     let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
         .await
         .map_err(|_| AgentError::TimedOut { cli, secs: 10 })?
@@ -489,6 +546,22 @@ mod tests {
     }
 
     #[test]
+    fn a_feature_is_turned_off_however_its_name_is_spelt() {
+        let off = codex_features_to_disable("shell_tool  stable  true\nfuture.read_files  stable  true\nfuture-web  stable  true\nFutureTool  stable  true\n").unwrap();
+        assert_eq!(off, ["shell_tool", "future.read_files", "future-web", "FutureTool"]);
+    }
+
+    #[test]
+    fn mention_syntax_is_broken_on_the_way_in_and_mended_on_the_way_out() {
+        let t = "See @/home/u/.ssh/id_ed25519, use $bcuser, mail anna@example.com, it costs $5 and $ 10.";
+        let n = neutralise_mentions(t);
+        assert_eq!(n, "See @\u{200B}/home/u/.ssh/id_ed25519, use $\u{200B}bcuser, mail anna@\u{200B}example.com, it costs $5 and $ 10.");
+        assert!(!n.contains("@/") && !n.contains("$bcuser"));
+        assert_eq!(restore_mentions(&n), t);
+        assert_eq!(neutralise_mentions("@\"/quoted path\" @~/.bashrc"), "@\u{200B}\"/quoted path\" @\u{200B}~/.bashrc");
+    }
+
+    #[test]
     fn a_listing_without_the_shell_row_is_not_read() {
         assert_eq!(codex_features_to_disable(""), None);
         assert_eq!(codex_features_to_disable("view_image  stable  true\n"), None);
@@ -549,7 +622,7 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = features ]; then if [ -z \"$CODEX_HOME\" ] || [ -e \"$CODEX_HOME/config.toml\" ]; then exit 1; fi; cat {}; exit 0; fi\nexec {} \"$@\"\n",
+                "#!/bin/sh\nif [ \"$1\" = features ]; then case \"$CODEX_HOME\" in */bc-agent-*) ;; *) exit 1 ;; esac; if [ -e \"$CODEX_HOME/config.toml\" ]; then exit 1; fi; cat {}; exit 0; fi\nexec {} \"$@\"\n",
                 listing_file.display(),
                 run.display()
             ),
@@ -623,9 +696,9 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let rec = t.path().join("rec");
         let cli = fake_cli(t.path(), &rec, &fixture("claude-summary.jsonl"), 0, "");
-        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "SYSTEM", "the transcript", None, TIMEOUT).await;
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "SYSTEM", "the transcript names @/etc/passwd and $skill", None, TIMEOUT).await;
         assert_eq!(got, Ok("hello".to_string()));
-        assert_eq!(recorded(&rec, "stdin"), "the transcript");
+        assert_eq!(recorded(&rec, "stdin"), "the transcript names @\u{200B}/etc/passwd and $\u{200B}skill", "the CLI was handed the mention syntax unbroken");
         assert_eq!(recorded(&rec, "ls").trim(), "", "the working directory was not empty");
         assert!(recorded(&rec, "cwd").contains("bc-agent-"), "not run in its own directory: {}", recorded(&rec, "cwd"));
         let args = recorded(&rec, "args");
@@ -634,6 +707,18 @@ mod tests {
         assert!(!file.contains(recorded(&rec, "cwd").trim()), "the system prompt sits in the working directory");
         let env = recorded(&rec, "env");
         assert!(env.lines().all(|k| ["PATH", "PWD", "SHLVL", "_", "OLDPWD"].contains(&k) || PASSED.contains(&k) || PASSED_MORE.contains(&k) || PASSED_PREFIXES.iter().any(|p| k.starts_with(p))), "unlisted variables reached the CLI: {env}");
+    }
+
+    /// The model repeats an address as it was handed it, break and all; the summary has none.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_breaks_are_taken_out_of_the_summary() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let stream = fixture("claude-summary.jsonl").replace("\"result\":\"hello\"", "\"result\":\"Mail anna@\u{200B}example.com about $\u{200B}budget.\"");
+        let cli = fake_cli(t.path(), &rec, &stream, 0, "");
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert_eq!(got, Ok("Mail anna@example.com about $budget.".to_string()));
     }
 
     #[cfg(unix)]

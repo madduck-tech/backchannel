@@ -318,6 +318,25 @@ const click = async (el) => {
   assert.equal(saveButton(missing.container).disabled, true, 'a CLI that was not found cannot be saved');
 }
 
+// --- 8: the agent rows say what the approved prototype says (#212 round 4) -------------------------
+//
+// Read from source, not rendered: Radix renders a Select's items only while it is open, and this
+// harness cannot open one. The product owner's round-3 copy left Settings' Codex row held by
+// nothing — "your Codex settings are not used" was put back and every test stayed green.
+{
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  const component = fs.readFileSync(path.join(root, 'src/components/ModelSettingsModal.tsx'), 'utf8');
+  const prototype = fs.readFileSync(path.join(root, '..', 'design/prototypes/settings-summariser-agents.html'), 'utf8');
+  for (const id of ['claude-code', 'codex']) {
+    const approved = prototype.match(new RegExp(`id: '${id}', t: (['"])(.*?)\\1`))?.[2];
+    const item = component.match(new RegExp(`<SelectItem value="${id}">\\s*([^<]*?)\\s*</SelectItem>`))?.[1]?.replace(/&apos;/g, "'");
+    assert.ok(approved, `the prototype has no ${id} row`);
+    assert.equal(item, approved, `Settings' ${id} row is not the approved one`);
+  }
+}
+
 console.log(
   'ok - model settings: a keyless provider and a blank custom endpoint cannot be saved, the key ' +
     'is trimmed, another provider\'s custom fields are dropped, a refused backend save produces no ' +
