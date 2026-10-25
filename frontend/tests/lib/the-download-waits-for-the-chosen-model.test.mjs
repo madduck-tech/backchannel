@@ -37,7 +37,9 @@ const mounted = [];
  */
 function holdable() {
   const queue = [];
-  return {
+  const h = {
+    /** How many held answers have been handed back: the sentinel that the late answer landed. */
+    released: 0,
     hold() {
       let release;
       const gate = new Promise((r) => { release = r; });
@@ -46,11 +48,15 @@ function holdable() {
     },
     async pass(answer) {
       const gate = queue.shift();
-      if (gate) await gate;
+      if (gate) { await gate; h.released += 1; }
       return answer();
     },
   };
+  return h;
 }
+// Longer than `settle`: a late answer may be applied a little after it lands, and the check below has
+// to outlast that, or a stale write that comes later than this reads as one that never came.
+const outlast = () => act(async () => { await new Promise((r) => setTimeout(r, 400)); });
 async function mount({ onDisk = [], saved = null, disk = holdable(), summaryReady = holdable() } = {}) {
   const stubs = tauriStubs({
     extra: {
@@ -178,13 +184,19 @@ const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${det
   const before = m.ctx().parakeetDownloaded;
   releaseResume();
   await settle();
+  await outlast();
+  // The sentinel: only the resume sets the summary flag in this run, so it is true once the resume's
+  // answer has been applied. Without it, "the flag stayed false" could mean the answer never arrived.
+  check('2c precondition: the resume finished', summaryReady.released === 1 && m.ctx().summaryModelDownloaded === true,
+    `held answers released: ${summaryReady.released}; summaryModelDownloaded is ${m.ctx().summaryModelDownloaded}`);
   check('2c a late resume answer does not answer for a newer choice', before === false && m.ctx().parakeetDownloaded === false,
     `parakeetDownloaded is ${before} after choosing ${OTHER} and ${m.ctx().parakeetDownloaded} once the resume's check of ${DEFAULT} returned`);
   await act(async () => { m.ctx().goToStep(3); });
   await settle();
   const go = continueButton(m.container);
-  check('2c then step 3 waits', go && go.disabled === true && !m.container.textContent.includes(EVERYTHING),
-    `disabled=${go?.disabled}, everything=${m.container.textContent.includes(EVERYTHING)}`);
+  const row = chosenRow(m.container, OTHER);
+  check('2c then step 3 waits', go && go.disabled === true && !m.container.textContent.includes(EVERYTHING) && row && !row.textContent.includes(ALREADY),
+    `disabled=${go?.disabled}, everything=${m.container.textContent.includes(EVERYTHING)}, already=${row?.textContent.includes(ALREADY)}`);
   await clear();
 }
 
@@ -200,6 +212,8 @@ const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${det
   await settle();
   releaseFirst();
   await settle();
+  await outlast();
+  check('1e precondition: the earlier choice\'s answer landed', disk.released === 1, `held answers released: ${disk.released}`);
   check('1e a late disk answer for an earlier choice does not answer for the current one', m.ctx().parakeetDownloaded === false,
     `parakeetDownloaded is ${m.ctx().parakeetDownloaded} with ${OTHER} chosen, once the check of ${SECOND_ON_DISK} returned`);
   await clear();
