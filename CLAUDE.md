@@ -30,7 +30,7 @@ Commit trailer for agent commits:
 - **Audio Processing**: Rust (cpal, professional audio mixing)
 - **Transcription**: transcribe.cpp (GGUF on ggml) via the `transcribe-cpp` Rust bindings for ASR models, plus audio-capable LLMs (Gemma 4) through the bundled `llama-helper` sidecar (llama.cpp mtmd) — no external Ollama install
 - **App API Surface**: Tauri commands and events
-- **LLM Integration**: Ollama (local), Claude, Groq, OpenRouter
+- **LLM Integration**: Ollama (local), Claude, Groq, OpenRouter, and the Claude Code or Codex CLI already on the machine, run with no tools (ADR 0028)
 
 ## Essential Development Commands
 
