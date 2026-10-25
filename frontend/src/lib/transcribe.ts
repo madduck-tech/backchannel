@@ -148,9 +148,11 @@ export function isDownloading(status: ModelStatus): boolean {
  * neither usable nor missing, so it needs its own actions rather than falling
  * through to "not downloaded".
  *
- * Decimal MB, matching how the catalog's `size_mb` was derived.
+ * In MiB, the unit the engine's 90% floor reads `size_mb` in (`engine.rs:169`). `size_mb` itself
+ * is not one unit: it comes from model cards that mix decimal and binary figures
+ * (`gen_model_catalog.py:215`), so whisper-tiny-q8's 44 is MiB and parakeet-tdt-0.6b-v3-q8's 740
+ * is decimal. Fixing that is #175's and #190's; this follows the floor.
  */
-/** The bytes a truncated file holds, in the catalogue's unit: `size_mb` counts MiB (`engine.rs:169`). */
 export function corruptedSizeMb(status: ModelStatus): number | null {
   return typeof status === 'object' && 'Corrupted' in status
     ? Math.round(status.Corrupted.file_size / (1024 * 1024))

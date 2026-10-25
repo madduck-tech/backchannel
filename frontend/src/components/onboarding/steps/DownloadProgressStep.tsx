@@ -232,7 +232,7 @@ export function DownloadProgressStep() {
           progress,
           fetched: true,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
-          // `||`, not `??`: a response with no Content-Length reports a total of 0 (`engine.rs:437`),
+          // `||`, not `??`: a response with no Content-Length reports a total of 0 (`engine.rs:429`, `:440`),
           // which would put the row back to "0 of 0 MB" over the catalogue's size (#166's gate).
           totalMb: total_mb || prev.totalMb,
           speedMbps: speed_mbps ?? prev.speedMbps,

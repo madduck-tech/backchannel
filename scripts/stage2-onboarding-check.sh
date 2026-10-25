@@ -266,17 +266,16 @@ if [ "$MODE" = narrow ]; then
     || die "clicking a catalogue row put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
   say "and a click on a row fetched nothing: models/ still holds $AFTER entries"
 
-  # Back to the recommended four, and on through the flow at this size. The row click above may have
-  # selected a model and closed the catalogue on its own, so both shapes are accepted rather than one
-  # assumed: what matters is that the option the rest of this pass chooses is reachable again.
+  # Back to the recommended four, and on through the flow at this size. Choosing a row does not close
+  # the catalogue, so its toggle must be there. The wait is for the catalogue's own rows to be gone:
+  # the four radios render above the catalogue too, so a wait on them was true while it was still open
+  # (#166's gate, round 2). Unquoted attribute selectors on purpose -- a `"` here has to survive the
+  # shell, this script's JSON body and the driver, and the first version's did not.
   BACK=$(by_text "Hide the catalogue")
-  [ -n "$BACK" ] && click "$BACK"
-  # By element, not by text: "Recommended transcription models" is the panel's `aria-label`, so it is
-  # never in `innerText` and that await could not have returned true. Unquoted attribute selector on
-  # purpose too -- a `"` here has to survive the shell, this script's JSON body and the driver, and
-  # the first version's did not.
-  await "document.querySelectorAll('[name=transcription-model]').length > 0" \
-        "the recommended options to be on screen again" 20
+  [ -n "$BACK" ] || die "no 'Hide the catalogue' button while the catalogue is open"
+  click "$BACK" "Hide the catalogue"
+  await "document.querySelector('[role=radiogroup][aria-label=Models]') === null && document.querySelectorAll('[name=transcription-model]').length > 0" \
+        "the catalogue to close, with the recommended options on screen" 20
   say "the catalogue closed and the recommended options are back"
 fi
 
@@ -415,7 +414,7 @@ fi
 # file still on its way. "Is SOME model on disk" set the flag. So, from the moment the screen is up,
 # the button is read and then the chosen file is measured, as often as the driver answers. A sample is
 # *in flight* when the file is absent or under 90% of its final size after the read; no file exists
-# until the HTTP response arrives (`engine.rs:418-420`). Every in-flight sample must read disabled.
+# until the HTTP response arrives (`engine.rs:430`). Every in-flight sample must read disabled.
 # An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
 if [ "$MODE" = keeps ]; then
   # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the
@@ -624,8 +623,13 @@ except Exception:
   # Again after finishing: the check above runs before the finishing click, and finishing is where #130
   # fetched the default (#166's gate).
   [ -e "$APPDATA/models/$DEFAULT_FILE" ] && die "finishing first run fetched the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
-  say "first run finished and transcript_settings.model is $STORED; the default's file is still absent"
   sleep 5
+  # The log too, after the wait: the file exists only once the HTTP response has arrived, and the
+  # `catalogue` mode's own C3 control started a download that left models/ unchanged for the whole
+  # walk. The line is written before the request (#166's gate, round 2).
+  grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG" \
+    && die "finishing first run started a download of the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
+  say "first run finished and transcript_settings.model is $STORED; the default's file is still absent, and nothing started fetching it"
   SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
   say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded; #181)"
 fi

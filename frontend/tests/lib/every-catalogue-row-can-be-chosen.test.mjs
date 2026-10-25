@@ -30,7 +30,11 @@ const MODELS = [
   model({ name: 'moonshine-tiny-q8', family: 'Moonshine', size_mb: 34, status: 'Available', recommended: true }),
   model({ name: 'gigaam-v3-ctc-q8', family: 'GigaAM', size_mb: 259, languages: ['ru'], description: 'Sber model trained on Russian speech.' }),
   // Italian and Estonian too: their names contain "ta" and begin with "es", which are codes no model here carries.
-  model({ name: 'whisper-tiny-q8', family: 'Whisper', size_mb: 44, languages: ['en', 'ru', 'de', 'ja', 'zh', 'it', 'et'], description: 'Smallest Whisper: smaller download, lower memory use.' }),
+  // Two-word language names, Norwegian Bokmål and Norwegian Nynorsk. Listed before whisper, so `nb` is
+  // the first code "norwegian" names, and a row carrying only `no` needs the whole set.
+  model({ name: 'kb-whisper-small-q8', family: 'KB Whisper', size_mb: 300, languages: ['nb', 'nn', 'sv'] }),
+  // Norwegian as `no`, beside a row naming `nb` and `nn`: "norwegian" names all three codes.
+  model({ name: 'whisper-tiny-q8', family: 'Whisper', size_mb: 44, languages: ['en', 'ru', 'de', 'ja', 'zh', 'it', 'et', 'no'], description: 'Smallest Whisper: smaller download, lower memory use.' }),
   // Belarusian: its name contains "rus", which begins Russian.
   model({ name: 'granite-speech-4.1-2b-q8', family: 'Granite Speech', size_mb: 2100, languages: ['en', 'fr', 'be'] }),
   model({ name: 'canary-180m-flash-q8', family: 'Canary', size_mb: 190, status: { Corrupted: { file_size: 52_000_000, expected_min_size: 179_000_000 } } }),
@@ -115,7 +119,7 @@ assert.equal(rows().length, MODELS.length, `the catalogue lists ${rows().length}
 const searchField = container.querySelector('input[type="search"]');
 check('1e the search is focused when the catalogue opens', document.activeElement === searchField,
   `the focused element is <${document.activeElement?.tagName?.toLowerCase()}>`);
-const ORDER = ['canary-180m-flash-q8', 'gigaam-v3-ctc-q8', 'granite-speech-4.1-2b-q8', 'moonshine-tiny-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'];
+const ORDER = ['canary-180m-flash-q8', 'gigaam-v3-ctc-q8', 'granite-speech-4.1-2b-q8', 'kb-whisper-small-q8', 'moonshine-tiny-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'];
 check('1e the rows are in the prototype\'s order', JSON.stringify(shownIds()) === JSON.stringify(ORDER), `the rows read ${JSON.stringify(shownIds())}`);
 
 const fetchesBefore = stubs.calls.filter((c) => /download/i.test(c.cmd)).length;
@@ -169,6 +173,12 @@ check('4 nothing the product owner removed is back (#138)', !/Sort by|Sort model
   `the catalogue reads "${catalogueText.match(/Sort by|Sort models|Installed only|Show only installed|word error rate|WER/i)?.[0]}"`);
 const extraControls = [...(catalogue?.querySelectorAll('button, select, input:not([type="search"])') ?? [])].map((el) => `<${el.tagName.toLowerCase()}> "${el.textContent.trim().slice(0, 30)}"`);
 check('4 the search field is the catalogue\'s only control', extraControls.length === 0 && catalogue?.querySelectorAll('input').length === 1, `the catalogue also offers ${extraControls.join(', ')}`);
+// And on the whole screen: the instruction is about what first run shows, not about one component.
+// The screen's only buttons are Continue and the catalogue's own toggle, and nothing sorts or filters.
+const screenButtons = [...container.querySelectorAll('button')].map((b) => b.textContent.trim()).sort();
+check('4 the screen offers no sort or filter beside the catalogue', JSON.stringify(screenButtons) === JSON.stringify(['Continue', 'Hide the catalogue'])
+  && container.querySelectorAll('select').length === 0 && !/Sort by|Sort models|Installed only|Show only installed/i.test(container.textContent),
+  `the screen's buttons read ${JSON.stringify(screenButtons)}`);
 const truncated = rowFor('canary-180m-flash-q8')?.textContent ?? '';
 check('6 a truncated row says what choosing it does', /Incomplete download/.test(truncated) && /the whole file is fetched again/.test(truncated),
   `the truncated row reads "${truncated}"`);
@@ -195,13 +205,22 @@ for (const [query, want, by] of [
   ['es', [], 'a code no model carries, though "Estonian" begins with it'],
   ['ital', ['whisper-tiny-q8'], 'the start of a language name'],
   ['rus', ['gigaam-v3-ctc-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'], 'the start of a name, not anywhere in one (Belarusian)'],
+  ['norwegian bokmål', ['kb-whisper-small-q8'], 'a name of two words'],
+  ['bok', ['kb-whisper-small-q8'], 'the start of a second word'],
+  ['norwegian', ['kb-whisper-small-q8', 'whisper-tiny-q8'], 'a name several codes share'],
 ]) {
   await type(query);
   const got = shownIds().sort();
   check(`1e ${by} finds its rows`, JSON.stringify(got) === JSON.stringify([...want].sort()), `"${query}" shows ${JSON.stringify(got)}`);
+  // Compared with the name the row itself prints, in the reader's locale, so this holds on any desktop.
+  const shown = (code) => new Intl.DisplayNames(undefined, { type: 'language', fallback: 'none' }).of(code);
   if (query === 'ital') {
     const langs = rowFor('whisper-tiny-q8')?.textContent ?? '';
-    check('1e a row of many languages names the one searched for', /7 languages, incl\. Italian/.test(langs), `the whisper row reads "${langs}"`);
+    check('1e a row of many languages names the one searched for', langs.includes(`8 languages, incl. ${shown('it')}`), `the whisper row reads "${langs}"`);
+  }
+  if (query === 'norwegian') {
+    const langs = rowFor('whisper-tiny-q8')?.textContent ?? '';
+    check('1e every code a query names counts for "incl."', langs.includes(`8 languages, incl. ${shown('no')}`), `the whisper row reads "${langs}"`);
   }
 }
 await type('memory');
@@ -214,8 +233,8 @@ container.remove();
 
 // --- the catalogue's other states: a backend that fails, an empty catalogue, and one still loading -----
 for (const [state, answer, expect, forbid] of [
-  ['an error', () => { throw new Error('engine not initialised'); }, /Could not read the model catalogue: Error: engine not initialised/, /Nothing matches/],
-  ['an empty catalogue', () => [], /The catalogue is empty/, /Nothing matches/],
+  ['an error', () => { throw new Error('engine not initialised'); }, /Could not read the model catalogue: engine not initialised\. Choose one of the four models above\./, /Nothing matches|Error: /],
+  ['an empty catalogue', () => [], /The catalogue is empty, so there is no other model to choose\. Choose one of the four above\./, /Nothing matches/],
   ['loading', () => new Promise(() => {}), null, /Nothing matches|Loading models…/],
 ]) {
   const st = tauriStubs({ extra: { transcribe_get_available_models: answer } });
@@ -231,6 +250,100 @@ for (const [state, answer, expect, forbid] of [
   if (expect) check(`7b ${state} says so`, expect.test(text), `the catalogue reads "${text.slice(0, 120)}"`);
   else check(`7b ${state} is a skeleton`, box.querySelector('[aria-busy="true"]') !== null, `the catalogue reads "${text.slice(0, 120)}"`);
   check(`7b ${state} gives no search advice`, !forbid.test(text), `the catalogue reads "${text.slice(0, 120)}"`);
+  await act(async () => { r.unmount(); });
+  box.remove();
+}
+
+// --- 1e on a desktop in another language ----------------------------------------------------------
+//
+// The rows print language names in the reader's locale, as Settings does. A desktop in Russian, run in
+// a child process because the default locale is fixed when Node starts. The sentinel is the row
+// printing "русский": without it, an English-only run would read as a pass.
+{
+  const lib = new URL('.', import.meta.url).pathname;
+  const child = `
+    const { setupDom } = await import(${JSON.stringify(lib + 'dom-harness.mjs')});
+    const { tauriStubs } = await import(${JSON.stringify(lib + 'tauri-stubs.mjs')});
+    const { boundaryStubs } = await import(${JSON.stringify(lib + 'boundary-stubs.mjs')});
+    const { React, createRoot, act } = await setupDom();
+    const { loadTsx } = await import(${JSON.stringify(lib + 'render-tsx.mjs')});
+    const st = tauriStubs({ extra: { transcribe_get_available_models: () => ${JSON.stringify(MODELS)} } });
+    const { ModelCatalogue } = loadTsx('src/components/onboarding/shared/ModelCatalogue.tsx', {
+      ...boundaryStubs().modules, '@tauri-apps/api/core': st.core, '@tauri-apps/api/event': st.event,
+    });
+    const box = document.createElement('div'); document.body.appendChild(box);
+    await act(async () => { createRoot(box).render(React.createElement(ModelCatalogue, { selectedModel: '', onModelSelect: () => {} })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    const field = box.querySelector('input[type="search"]');
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    await act(async () => { set.call(field, 'Russian'); field.dispatchEvent(new window.Event('input', { bubbles: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    const rows = [...box.querySelectorAll('[role="radio"]')].map((r) => r.textContent);
+    console.log(JSON.stringify({ rows: rows.length, gigaam: rows.find((t) => t.includes('gigaam-v3-ctc-q8')) ?? null }));
+    process.exit(0);
+  `;
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', child], {
+    cwd: new URL('../..', import.meta.url).pathname, encoding: 'utf8', timeout: 60_000,
+    env: { ...process.env, LANG: 'ru_RU.UTF-8', LC_ALL: 'ru_RU.UTF-8' },
+  });
+  const line = (r.stdout || '').trim().split('\n').pop() || '{}';
+  let got = {};
+  try { got = JSON.parse(line); } catch { got = { error: (r.stderr || '').slice(0, 200) }; }
+  check('1e precondition: the child run is in Russian', /русский/.test(got.gigaam ?? ''), `the gigaam row reads ${JSON.stringify(got.gigaam ?? got)}`);
+  check('1e an English name finds its rows on a Russian desktop', got.rows === 3, `"Russian" shows ${got.rows} rows under ru_RU`);
+}
+
+// --- 7c: a progress event with no total keeps the catalogue's size --------------------------------
+{
+  const handlers = new Map();
+  const listen = async (name, fn) => { handlers.set(name, [...(handlers.get(name) ?? []), fn]); return () => {}; };
+  const emit = async (name, payload) => { for (const fn of handlers.get(name) ?? []) await fn({ payload }); };
+  const st = tauriStubs({
+    extra: {
+      transcribe_get_available_models: () => MODELS.map((m) => ({ ...m })),
+      transcribe_init: null,
+      transcribe_has_available_models: false,
+      transcribe_download_model: () => new Promise(() => {}),
+      transcribe_list_models: [],
+      builtin_ai_download_model: () => new Promise(() => {}),
+      builtin_ai_list_models: [],
+      builtin_ai_get_recommended_model: 'gemma4:e2b',
+      builtin_ai_is_model_ready: true,
+      get_onboarding_status: null,
+      save_onboarding_status: null,
+      check_first_launch: true,
+      check_database_exists: false,
+      check_default_legacy_database: false,
+      initialize_fresh_database: null,
+      get_permission_status: {},
+    },
+  });
+  const mods = { ...boundaryStubs().modules, '@tauri-apps/api/core': st.core, '@tauri-apps/api/event': { ...st.event, listen } };
+  const onboarding = loadTsx('src/contexts/OnboardingContext.tsx', mods);
+  const motion = new Proxy({}, { get: () => (props) => React.createElement('div', null, props?.children) });
+  const { DownloadProgressStep } = loadTsx('src/components/onboarding/steps/DownloadProgressStep.tsx', {
+    ...mods,
+    '@/contexts/OnboardingContext': onboarding,
+    '../OnboardingContainer': { OnboardingContainer: ({ children, footer }) => React.createElement('div', null, children, React.createElement('footer', null, footer)) },
+    'framer-motion': { motion, AnimatePresence: ({ children }) => children },
+  });
+  let c = null;
+  const Probe = () => { c = onboarding.useOnboarding(); return c.currentStep === 3 ? React.createElement(DownloadProgressStep) : null; };
+  const box = document.createElement('div');
+  document.body.appendChild(box);
+  const r = createRoot(box);
+  await act(async () => { r.render(React.createElement(onboarding.OnboardingProvider, null, React.createElement(Probe))); });
+  await settle();
+  await act(async () => { c.setSelectedTranscribeModel('whisper-tiny-q8'); });
+  await settle();
+  await act(async () => { c.goToStep(3); });
+  await settle();
+  const rowText = () => box.querySelector('section[aria-label="whisper-tiny-q8"]')?.textContent ?? '';
+  check('7c precondition: the row shows the catalogue\'s size', /0 of 44 MB/.test(rowText()), `the row reads "${rowText().slice(0, 120)}"`);
+  await act(async () => { await emit('model-download-progress', { modelName: 'whisper-tiny-q8', progress: 2, downloaded_mb: 1, total_mb: 0 }); });
+  await settle();
+  check('7c a progress event with no total keeps it', /1 of 44 MB/.test(rowText()), `after a progress event with total_mb 0 the row reads "${rowText().slice(0, 120)}"`);
   await act(async () => { r.unmount(); });
   box.remove();
 }

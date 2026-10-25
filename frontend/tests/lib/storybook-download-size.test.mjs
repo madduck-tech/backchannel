@@ -5,7 +5,7 @@
 // models choosable in first run. The size is now the catalogue's, read from the backend.
 //
 // **Rendered in a browser, from the story.** The window is one request long in the real application:
-// the first progress event arrives with the HTTP response (`engine.rs:431-433`), so a polling pass
+// the first progress event arrives with the HTTP response (`engine.rs:440`), so a polling pass
 // cannot see it. The story's download is accepted and never finishes, so no progress event comes.
 import assert from 'node:assert/strict';
 import { browser } from './browser.mjs';

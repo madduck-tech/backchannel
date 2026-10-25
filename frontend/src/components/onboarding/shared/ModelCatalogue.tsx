@@ -45,41 +45,50 @@ function englishName(code: string): string {
   }
 }
 
+/** A name as words separated by single spaces, so a query can be matched at a word's start. */
+const words = (name: string) => ' ' + name.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean).join(' ');
+
 /**
  * Whether a query names this language. A query of one or two letters is a code and matches only a
- * code. A longer one matches the start of a word of the language's name, in English or in the
- * reader's language. The prototype matched any substring of the name, so "ta" found Italian and "es"
- * found Estonian, and a row reading "28 languages" answered for a language it does not show
- * (#166's gate). The intent, a language or a model name, is the prototype's.
+ * code. A longer one matches the name, in English or in the reader's language, from the start of a
+ * word on: "ital" finds Italian, "bok" and "norwegian bokmål" find Norwegian Bokmål.
+ *
+ * The prototype matched any substring of the name, so "ta" found Italian, "es" Estonian and "rus"
+ * Belarusian, and a row reading "28 languages" answered for a language it does not show. A rule on
+ * single words alone, the next attempt, found nothing for a name of two words (#166's gate, rounds 1
+ * and 2). The intent, a language or a model name, is the prototype's.
  */
 function namesLanguage(code: string, q: string): boolean {
   const b = base(code);
   if (b === q) return true;
   if (q.length < 3) return false;
-  return [languageName(b), englishName(b)].some((name) =>
-    name.toLowerCase().split(/[^\p{L}]+/u).some((word) => word.startsWith(q))
-  );
+  const query = ' ' + q.split(/[^\p{L}]+/u).filter(Boolean).join(' ');
+  return [languageName(b), englishName(b)].some((name) => words(name).includes(query));
 }
 
-/** The language a query names, as a base code, or `null` when it names none. */
-function queryLanguage(models: ModelInfo[], q: string): string | null {
-  if (!q) return null;
+/** Every base code a query names, among the catalogue's languages. */
+function queryLanguages(models: ModelInfo[], q: string): Set<string> {
+  const asked = new Set<string>();
+  if (!q) return asked;
   for (const m of models) {
     for (const code of m.languages) {
-      if (namesLanguage(code, q)) return base(code);
+      if (namesLanguage(code, q)) asked.add(base(code));
     }
   }
-  return null;
+  return asked;
 }
 
-/** Names when there are four or fewer, otherwise a count, as the prototype writes it (`:302-305`). */
-function languageWords(model: ModelInfo, asked: string | null): string {
+/**
+ * Names when there are four or fewer, otherwise a count, as the prototype writes it (`:302-305`).
+ * A row matched on a language it does not name says which one: every code the query names counts,
+ * since "norwegian" names `nb`, `nn` and `no` at once.
+ */
+function languageWords(model: ModelInfo, asked: Set<string>): string {
   const codes = [...new Set(model.languages.map(base))];
   if (codes.length === 0) return 'Unknown';
   if (codes.length <= 4) return codes.map(languageName).join(', ');
-  return asked && codes.includes(asked)
-    ? `${codes.length} languages, incl. ${languageName(asked)}`
-    : `${codes.length} languages`;
+  const named = codes.find((c) => asked.has(c));
+  return named ? `${codes.length} languages, incl. ${languageName(named)}` : `${codes.length} languages`;
 }
 
 function matches(model: ModelInfo, q: string): boolean {
@@ -113,7 +122,14 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
     let live = true;
     TranscribeAPI.getAvailableModels()
       .then((list) => { if (live) setModels(list); })
-      .catch((e) => { if (live) setError(String(e)); })
+      // The message, not `String(e)`: that prefixes an Error's name to what a person reads. Read by
+      // shape, not `instanceof`: Tauri rejects with a string, and a value from another realm is no
+      // `Error` here.
+      .catch((e: unknown) => {
+        if (!live) return;
+        const message = typeof e === 'object' && e !== null && 'message' in e ? (e as { message: unknown }).message : e;
+        setError(String(message));
+      })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, []);
@@ -121,29 +137,38 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
   // A skeleton, as `DESIGN.md` asks of a content area, in the rows' own grid.
   if (loading) {
     return (
-      <div aria-busy="true" aria-label="Loading models" className="grid">
+      <div role="status" aria-busy="true" aria-label="Loading models" className="grid">
         {[0, 1, 2].map((i) => (
           <div key={i} className={cn(GRID, 'min-h-10 border-b border-line py-[7px]')}>
             <span className="h-4 w-4 rounded-full bg-sunken" />
             <span className="h-3 w-40 rounded-sm bg-sunken" />
             <span className="h-3 w-12 rounded-sm bg-sunken" />
-            <span className="h-3 w-16 rounded-sm bg-sunken" />
-            <span className="h-3 w-24 rounded-sm bg-sunken" />
+            <span className="h-3 w-16 rounded-sm bg-sunken max-[900px]:col-start-3 max-[900px]:row-start-2" />
+            <span className="h-3 w-24 rounded-sm bg-sunken max-[900px]:col-start-2 max-[900px]:row-start-2" />
           </div>
         ))}
       </div>
     );
   }
 
+  // Each names the next step, as `DESIGN.md` asks of an empty or failed state: the four above stay.
   if (error) {
-    return <div className="rounded-md bg-danger-soft p-3 text-sm text-danger-ink">Could not read the model catalogue: {error}</div>;
+    return (
+      <div className="rounded-md bg-danger-soft p-3 text-sm text-danger-ink">
+        Could not read the model catalogue: {error}. Choose one of the four models above.
+      </div>
+    );
   }
   if (models.length === 0) {
-    return <p className="py-6 text-sm text-ink-muted">The catalogue is empty, so there is no model to choose here.</p>;
+    return (
+      <p className="py-6 text-sm text-ink-muted">
+        The catalogue is empty, so there is no other model to choose. Choose one of the four above.
+      </p>
+    );
   }
 
   const q = query.trim().toLowerCase();
-  const asked = queryLanguage(models, q);
+  const asked = queryLanguages(models, q);
   const shown = models.filter((m) => matches(m, q)).sort(byFamily);
 
   const row = (model: ModelInfo) => {
@@ -165,8 +190,9 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
         }}
         className={cn(
           'min-h-10 cursor-pointer border-b border-line py-[7px] transition-colors duration-fast hover:bg-sunken',
-          // The prototype's inset bar (`.row.on`), which moves no column, where a left border would.
-          on && 'shadow-[inset_2px_0_0_oklch(var(--brand-soft-ink))]'
+          // `DESIGN.md`'s item selection, a 2px `--brand` edge in the gutter, drawn as the prototype's
+          // inset (`.row.on`) so it moves no column. The four options above use the same `--brand`.
+          on && 'shadow-[inset_2px_0_0_oklch(var(--brand))]'
         )}
       >
         <div className={GRID}>
@@ -175,7 +201,7 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
             className={cn(
               'h-4 w-4 rounded-full border',
               on
-                ? 'border-brand-soft-ink bg-[radial-gradient(circle,oklch(var(--brand-soft-ink))_0_4px,transparent_4.5px)]'
+                ? 'border-brand bg-[radial-gradient(circle,oklch(var(--brand))_0_4px,transparent_4.5px)]'
                 : 'border-line-strong bg-canvas'
             )}
           />
@@ -211,7 +237,7 @@ export function ModelCatalogue({ selectedModel, onModelSelect }: Props) {
         className={cn(
           'h-11 w-full rounded-md border border-line-strong bg-sunken px-3.5 text-base text-ink',
           'placeholder:text-ink-muted transition-colors duration-fast',
-          'hover:border-ink focus:border-brand-soft-ink'
+          'hover:border-ink focus:border-brand'
         )}
       />
       <div role="radiogroup" aria-label="Models" className="grid">
