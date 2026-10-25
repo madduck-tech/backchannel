@@ -21,7 +21,7 @@
 # `ok` has told us nothing about what reached the disk; that rule is in .claude/rules/testing.md and
 # this pass is one of the places it was not being applied.
 #
-#   scripts/stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote] [profile-dir]
+#   scripts/stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue] [profile-dir]
 #
 #     chooses  the chosen model's file must appear                      (default)
 #     keeps    a different model is already on disk; the chosen one must still arrive,
@@ -33,6 +33,8 @@
 #     narrow   the whole walk at 720x520 -- the smallest window tauri.conf.json permits -- with the
 #              catalogue opened and a row clicked. Three of the four defects #157 measured as caught
 #              by nothing were missed because every other mode walks one path at one size.
+#     catalogue `whisper-tiny-q8`, neither recommended nor the default, chosen through the catalogue
+#              alone, with a cloud summariser; first run is finished and the stored choice read (#166)
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -43,6 +45,9 @@
 #               plus one already on disk
 #     remote    the summariser (claude)        transcription model (still moonshine-tiny), window
 #                                              size, permissions
+#     catalogue the transcription model, chosen window size, permissions
+#               in the catalogue; the
+#               summariser (claude)
 #
 # None of the three varies the window, so nothing here would see a control that only fails at
 # `minHeight: 520` -- `storybook-summariser-reveal.test.mjs` is what covers that, in a browser.
@@ -56,7 +61,7 @@
 # is indistinguishable from "nothing ran".
 set -euo pipefail
 
-APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps] [profile-dir]}"
+APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue] [profile-dir]}"
 MODE="${2:-chooses}"
 PROFILE="${3:-}"
 PORT="${BC_WD_PORT:-14446}"
@@ -71,11 +76,16 @@ CHOSEN_FILE="moonshine-tiny-Q8_0.gguf"
 # "a call that returned success is not evidence" shape this pass was written to catch, one level in.
 CHOSEN_MB=34
 PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
+# `catalogue` chooses a model the recommended four cannot offer, so only the catalogue can choose it
+# (#166). `size_mb: 44` in config.rs.
+if [ "$MODE" = catalogue ]; then
+  CHOSEN_ID="whisper-tiny-q8"; CHOSEN_FILE="whisper-tiny-Q8_0.gguf"; CHOSEN_MB=44
+fi
 
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote|present|narrow) ;; *) die "mode must be chooses, keeps, remote, present or narrow, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow|catalogue) ;; *) die "mode must be chooses, keeps, remote, present, narrow or catalogue, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -93,7 +103,7 @@ mkdir -p "$APPDATA/models"
 # is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
 # "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
 # which is the same class of mistake as an empty one that is not a pass.
-if [ "$MODE" != remote ] && [ -d "$CACHE/models/summary" ]; then
+if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
@@ -225,44 +235,90 @@ if [ "$MODE" = narrow ]; then
   say "the search field at its own centre: $OVER"
   [ "$OVER" = CLEAR ] || die "the catalogue's search field is not the thing at its own centre: $OVER"
 
-  # 2. A row in the catalogue must not start a download. Onboarding passes `canDownload={false}`;
-  #    Settings mounts the same component and must keep its button, which is why removing it was the
-  #    wrong fix and a mode is the right one.
+  # 2. A row in the catalogue must not start a download. First run's rows are its own since #166, and
+  #    Settings' card, which keeps its Download, is a different component.
   # Asserted as an absence of the control, not as a race with a download. The first version clicked
   # "some button in a row" and counted `models/` four seconds later; with the defect restored it still
   # passed, because the click landed elsewhere and four seconds is not a download. A button that is
   # not there cannot be pressed, which is the instruction — and ADR 0023's shape for it.
-  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove)$/.test(t)).length"')
+  # `Delete` too: the control reads `Delete`, and forbidding only `Remove` is one of the reasons this
+  # pass stayed green while first run's rows had no control at all (#166).
+  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove|Delete)$/.test(t)).length"')
   say "buttons in the catalogue that would fetch or delete: $FETCHERS"
   [ "$FETCHERS" = "0" ] \
     || die "the catalogue offers $FETCHERS download/remove buttons during first run; a row selects, it does not fetch"
 
   # And nothing reached the disk while we were in there, which is the same claim from the other side.
   BEFORE=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
-  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,'moonshine')]]\"}")
-  if [ -n "$ROW" ]; then click "$ROW"; sleep 4; fi
+  # Inside the catalogue's own radiogroup. This used to match `//label[...moonshine...]`, which is a
+  # recommended option above the catalogue, so the click never reached a catalogue row (#166).
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[.='whisper-tiny-q8']]\"}")
+  [ -n "$ROW" ] || die "no whisper-tiny-q8 row inside the catalogue's radiogroup"
+  CHECKED=$(curl -s -m 20 "$BASE/element/$ROW/attribute/aria-checked" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value"))')
+  [ "$CHECKED" = "false" ] || die "the whisper-tiny-q8 row reads aria-checked=$CHECKED before it was clicked"
+  click "$ROW" "a catalogue row"
+  # The positive sentinel: the click chose the row, so the absence below is about a click that landed.
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')].find(function(e){return e.textContent.indexOf('whisper-tiny-q8')>=0;});return !!r&&r.getAttribute('aria-checked')==='true';})()" \
+        "the clicked row to read aria-checked=true" 10
+  sleep 4
   AFTER=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
   [ "$BEFORE" = "$AFTER" ] \
     || die "clicking a catalogue row put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
   say "and a click on a row fetched nothing: models/ still holds $AFTER entries"
 
-  # Back to the recommended four, and on through the flow at this size. The row click above may have
-  # selected a model and closed the catalogue on its own, so both shapes are accepted rather than one
-  # assumed: what matters is that the option the rest of this pass chooses is reachable again.
+  # Back to the recommended four, and on through the flow at this size. Choosing a row does not close
+  # the catalogue, so its toggle must be there. The wait is for the catalogue's own rows to be gone:
+  # the four radios render above the catalogue too, so a wait on them was true while it was still open
+  # (#166's gate, round 2). Unquoted attribute selectors on purpose -- a `"` here has to survive the
+  # shell, this script's JSON body and the driver, and the first version's did not.
   BACK=$(by_text "Hide the catalogue")
-  [ -n "$BACK" ] && click "$BACK"
-  # By element, not by text: "Recommended transcription models" is the panel's `aria-label`, so it is
-  # never in `innerText` and that await could not have returned true. Unquoted attribute selector on
-  # purpose too -- a `"` here has to survive the shell, this script's JSON body and the driver, and
-  # the first version's did not.
-  await "document.querySelectorAll('[name=transcription-model]').length > 0" \
-        "the recommended options to be on screen again" 20
+  [ -n "$BACK" ] || die "no 'Hide the catalogue' button while the catalogue is open"
+  click "$BACK" "Hide the catalogue"
+  await "document.querySelector('[role=radiogroup][aria-label=Models]') === null && document.querySelectorAll('[name=transcription-model]').length > 0" \
+        "the catalogue to close, with the recommended options on screen" 20
   say "the catalogue closed and the recommended options are back"
+fi
+
+# --- catalogue: choose a model only the catalogue offers (#166) -----------------------------------
+#
+# Every first-run row used to render no control on a clean profile: the Settings card offered `Use`
+# only for a file on disk, and first run had switched its `Download` off. So the catalogue could not
+# choose any of the 82 models outside the recommended four.
+if [ "$MODE" = catalogue ]; then
+  # Entries and sizes, not `ls -la`: that also lists `..`, the app-data directory, whose minute-level
+  # time can change for reasons that are not a download (#166's gate).
+  MODELS_BEFORE=$(find "$APPDATA/models" -mindepth 1 -printf '%P %s\n' | sort)
+  CAT=$(by_text "Browse every model")
+  [ -n "$CAT" ] || die "no 'Browse every model' button on the first-run screen"
+  click "$CAT" "the catalogue button"
+  # False before the click: the catalogue is not on screen until it is asked for.
+  await "document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]').length > 1" "the catalogue's rows" 20
+  FIELD=$(find_el '{"using":"css selector","value":"input[type=search]"}')
+  [ -n "$FIELD" ] || die "the catalogue has no search field"
+  type_into "$FIELD" "$CHOSEN_ID" "the catalogue's search field"
+  # False before typing: the unfiltered list holds rows that do not carry the id.
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')];return r.length>0&&r.every(function(e){return e.textContent.indexOf('$CHOSEN_ID')>=0;});})()" \
+        "the search to narrow the catalogue to $CHOSEN_ID" 20
+  ROW_XPATH="//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[.='$CHOSEN_ID']]"
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"$ROW_XPATH\"}")
+  [ -n "$ROW" ] || die "no row for $CHOSEN_ID inside the catalogue's radiogroup"
+  CHECKED=$(curl -s -m 20 "$BASE/element/$ROW/attribute/aria-checked" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value"))')
+  [ "$CHECKED" = "false" ] || die "the $CHOSEN_ID row reads aria-checked=$CHECKED before it was chosen"
+  click "$ROW" "the catalogue row for $CHOSEN_ID"
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')].find(function(e){return e.textContent.indexOf('$CHOSEN_ID')>=0;});return !!r&&r.getAttribute('aria-checked')==='true';})()" \
+        "the $CHOSEN_ID row to read aria-checked=true" 10
+  # None of the four above is checked: the choice is the catalogue's, not a recommended option's.
+  [ "$(js '"return document.querySelector(\"input[name=transcription-model]:checked\") === null"')" = "True" ] \
+    || die "a recommended option is still checked after choosing $CHOSEN_ID in the catalogue"
+  say "chose $CHOSEN_ID in the catalogue: aria-checked false, then true"
+  CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the model screen"
+  click "$CONT" "Continue on the transcription screen"
 fi
 
 # --- choose a model that is not the default -------------------------------------------------------
 #
 # The radio itself is `sr-only`, so the label carrying the id is the clickable thing.
+if [ "$MODE" != catalogue ]; then
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//label[.//text()[contains(.,\\\"$CHOSEN_ID\\\")]]\"}")
 [ -n "$OPT" ] || die "no option labelled $CHOSEN_ID on the first-run screen"
 click "$OPT" "the transcription model the pass chose"
@@ -275,6 +331,7 @@ await "(function(){var r=document.querySelector('input[name=transcription-model]
 
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the model screen"
 click "$CONT" "Continue on the transcription screen"
+fi
 
 # --- the summariser screen ------------------------------------------------------------------------
 #
@@ -282,15 +339,14 @@ click "$CONT" "Continue on the transcription screen"
 # nothing is fetched for it. `remote` picks a cloud provider and types a key, which is the state
 # neither of the others has ever entered.
 await "document.body.innerText.includes('Where should the summary be written')" "the summariser screen" 30
-if [ "$MODE" = remote ]; then
+if [ "$MODE" = remote ] || [ "$MODE" = catalogue ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
   click "$OPT" "the summariser the pass chose"
   await "document.querySelector('input[type=password]') !== null" "Claude's key field" 10
   KEY=$(find_el '{"using":"css selector","value":"input[type=password]"}')
   [ -n "$KEY" ] || die "no key field after choosing Claude"
-  curl -s -m 20 -X POST "$BASE/element/$KEY/value" -H 'Content-Type: application/json' \
-    -d '{"text":"sk-not-a-real-key-for-a-gate-run"}' > /dev/null
+  type_into "$KEY" "sk-not-a-real-key-for-a-gate-run" "Claude's key field"
   # A typed value is not a stored one: assert the field holds it before moving on.
   await "(document.querySelector('input[type=password]')||{}).value.length > 10" "the key to be typed" 10
   say "chose Claude and typed a key — nothing local should be fetched for the summariser"
@@ -319,6 +375,18 @@ else: print("OK")' > /tmp/bc-key.$$ 2>&1
   [ -n "$LOCAL" ] || die "no builtin-ai option on the summariser screen to switch back to"
   click "$LOCAL" "the on-this-machine summariser"
 fi
+# The last moment before the download screen opens. Choosing in the catalogue fetched nothing, so
+# models/ is as it was before the catalogue was opened, and every download line for the chosen file
+# must come after this mark (#166 condition 3).
+if [ "$MODE" = catalogue ]; then
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  MARK=$(wc -l < "$LOG")
+  MODELS_NOW=$(find "$APPDATA/models" -mindepth 1 -printf '%P %s\n' | sort)
+  [ "$MODELS_BEFORE" = "$MODELS_NOW" ] || die "models/ changed before the download screen opened:
+$(diff <(printf '%s\n' "$MODELS_BEFORE") <(printf '%s\n' "$MODELS_NOW") | sed 's/^/    /')"
+  say "models/ is unchanged since before the catalogue was opened, and the log is at line $MARK"
+fi
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue button on the summariser screen"
 click "$CONT" "Continue on the summariser screen"
 say "walked to the download screen"
@@ -346,7 +414,7 @@ fi
 # file still on its way. "Is SOME model on disk" set the flag. So, from the moment the screen is up,
 # the button is read and then the chosen file is measured, as often as the driver answers. A sample is
 # *in flight* when the file is absent or under 90% of its final size after the read; no file exists
-# until the HTTP response arrives (`engine.rs:418-420`). Every in-flight sample must read disabled.
+# until the HTTP response arrives (`engine.rs:430`). Every in-flight sample must read disabled.
 # An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
 if [ "$MODE" = keeps ]; then
   # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the
@@ -406,6 +474,15 @@ if [ -z "$FOUND" ]; then
   die "first run finished without fetching $CHOSEN_ID, the model that was chosen"
 fi
 say "the chosen model arrived whole: $CHOSEN_FILE ($(stat -c %s "$APPDATA/models/$CHOSEN_FILE") bytes, ${CHOSEN_MB} MB advertised)"
+
+# The download line for the chosen file is the positive sentinel: the fetch happened, and it happened
+# after the mark, so the catalogue's row did not start it.
+if [ "$MODE" = catalogue ]; then
+  FIRST=$(grep -nE "Downloading model file .+ -> .+/$CHOSEN_FILE" "$LOG" | head -1 | cut -d: -f1)
+  [ -n "$FIRST" ] || die "the application never logged downloading $CHOSEN_FILE, and yet it is on disk"
+  [ "$FIRST" -gt "$MARK" ] || die "the first download of $CHOSEN_FILE is at log line $FIRST, before the download screen opened (line $MARK)"
+  say "the first download of $CHOSEN_FILE is at log line $FIRST, after the download screen opened (line $MARK)"
+fi
 
 # --- remote: the summariser fetched nothing, and the sentinel says the run was real ---------------
 #
@@ -514,8 +591,47 @@ if OUT=$( (probe_stays_out) 2>&1 ); then say "${OUT#stage2-onboarding-check: }";
 $FAILED_167"
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
-if [ "$MODE" = chooses ] && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
+if { [ "$MODE" = chooses ] || [ "$MODE" = catalogue ]; } && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
   die "the default was fetched as well as the choice; the choice is not what drives the download"
+fi
+
+# --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
+#
+# `completeOnboarding` asks for the selected summary model whatever the provider (#181). For a cloud
+# pick that name is the cloud model, which the backend's exact lookup should reject; that is read, not
+# run, so this pass reports what reached models/summary rather than asserting either way.
+if [ "$MODE" = catalogue ]; then
+  FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
+  [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
+  click "$FIN" "the control that finishes first run"
+  # False on the audio check: the main screen only exists once first run has reloaded into it.
+  await "document.body.innerText.includes('MEETINGS')" "the main screen after first run" 90
+  STORED=""
+  for _ in $(seq 1 40); do
+    STORED=$(python3 -I -c '
+import sqlite3, sys
+try:
+    c = sqlite3.connect(sys.argv[1])
+    r = c.execute("select model from transcript_settings").fetchone()
+    print(r[0] if r else "")
+except Exception:
+    print("")' "$APPDATA/meeting_minutes.sqlite")
+    [ "$STORED" = "$CHOSEN_ID" ] && break
+    sleep 0.5
+  done
+  [ "$STORED" = "$CHOSEN_ID" ] || die "chose $CHOSEN_ID in the catalogue and the application stored '${STORED:-<nothing>}'"
+  # Again after finishing: the check above runs before the finishing click, and finishing is where #130
+  # fetched the default (#166's gate).
+  [ -e "$APPDATA/models/$DEFAULT_FILE" ] && die "finishing first run fetched the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
+  sleep 5
+  # The log too, after the wait: the file exists only once the HTTP response has arrived, and the
+  # `catalogue` mode's own C3 control started a download that left models/ unchanged for the whole
+  # walk. The line is written before the request (#166's gate, round 2).
+  grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG" \
+    && die "finishing first run started a download of the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
+  say "first run finished and transcript_settings.model is $STORED; the default's file is still absent, and nothing started fetching it"
+  SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
+  say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded; #181)"
 fi
 
 if [ "$MODE" = keeps ]; then

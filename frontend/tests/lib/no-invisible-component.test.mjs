@@ -89,7 +89,6 @@ const BACKLOG = new Set([
   'src/components/ThemeToggle.tsx',
   'src/components/TranscriptRecovery/TranscriptRecovery.tsx',
   'src/components/TranscriptSettings.tsx',
-  'src/components/TranscriptionModelManager.tsx',
   'src/components/UpdateCheckProvider.tsx',
   'src/components/UpdateDialog.tsx',
   'src/components/UpdateNotification.tsx',

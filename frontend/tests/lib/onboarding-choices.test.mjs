@@ -65,9 +65,10 @@ async function render(component, ctx, extra = {}) {
       // wraps a module without that flag in `{ default: mod }` — so the component would come out as
       // the stub object itself and React would reject it with "Element type is invalid... got:
       // object". Measured while writing this.
-      '@/components/TranscriptionModelManager': {
-        __esModule: true,
-        default: ({ selectedModel }) =>
+      // The step's catalogue since #166. This stubbed `@/components/TranscriptionModelManager`, which
+      // the step no longer imports, so the "not on the first screen" assertion below could not fail.
+      '../shared/ModelCatalogue': {
+        ModelCatalogue: ({ selectedModel }) =>
           React.createElement('div', { 'data-picker': selectedModel ?? '' }),
       },
       ...extra,
@@ -112,10 +113,11 @@ const click = async (el) => {
   assert.match(text, /two sides/, 'a batch model must say the transcript has two sides');
   assert.match(text, /one column/, 'and a streaming one must say it does not');
 
-  // The catalogue is reachable, and not on screen until asked for.
-  assert.equal(
-    container.querySelector('[data-picker]'),
-    null,
+  // The catalogue is reachable, and not on screen until asked for. `assert.ok` on a boolean, not
+  // `assert.equal(element, null)`: on failure that diff inspects a jsdom element, which ran a capped
+  // run into "cancelled" and an uncapped one into the OOM killer (#166's gate, measured).
+  assert.ok(
+    container.querySelector('[data-picker]') === null,
     'the 86-row picker must not be on the first screen'
   );
   // The assertion that used to stand here required a button labelled with the catalogue's row count,

@@ -27,26 +27,17 @@ import { Search } from 'lucide-react';
 import { languageHaystack, languageNames, languagesSummary } from '@/lib/languages';
 import { cn } from '@/lib/utils';
 
+/**
+ * Settings' catalogue. First run used to mount it too, with Download switched off (#138), and on a
+ * clean profile that left all 86 rows without a control: a model not yet on disk offers only
+ * `Download` here. First run now renders its own rows, `onboarding/shared/ModelCatalogue.tsx` (#166).
+ */
 interface Props {
   selectedModel?: string;
   onModelSelect?: (modelName: string) => void;
-  /**
-   * Whether a row may start a download. False during first run, where the product owner reported that
-   * pointing at a model fetched it while the four recommended options merely selected (#138).
-   *
-   * A mode rather than a deletion, and the reason is measurable: `TranscriptSettings.tsx` mounts this
-   * same component and has no Continue (`grep -ci "continue|goNext"` there returns 0), so removing the
-   * button outright would leave a Settings user unable to download a model at all. Hiding rather than
-   * removing is the move ADR 0023's worked example is about, which is why the test asserts both sides.
-   */
-  canDownload?: boolean;
 }
 
-export default function TranscriptionModelManager({
-  selectedModel,
-  onModelSelect,
-  canDownload = true,
-}: Props) {
+export default function TranscriptionModelManager({ selectedModel, onModelSelect }: Props) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -228,16 +219,14 @@ export default function TranscriptionModelManager({
               <span className="text-sm font-medium text-brand">Selected</span>
             )}
             {!available && !downloading && (
-              canDownload && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy !== null}
-                  onClick={() => download(model.name)}
-                >
-                  {truncatedMb === null ? 'Download' : 'Download again'}
-                </Button>
-              )
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy !== null}
+                onClick={() => download(model.name)}
+              >
+                {truncatedMb === null ? 'Download' : 'Download again'}
+              </Button>
             )}
             {(available || truncatedMb !== null) && (
               <Button size="sm" variant="ghost" onClick={() => remove(model.name)}>
