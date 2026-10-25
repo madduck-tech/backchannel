@@ -3,11 +3,6 @@
   "description": "Time-boxed daily updates for engineering/product teams.",
   "sections": [
     {
-      "title": "Date",
-      "instruction": "YYYY-MM-DD",
-      "format": "string"
-    },
-    {
       "title": "Attendees",
       "instruction": "List of participants present",
       "format": "list"

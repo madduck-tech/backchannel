@@ -854,3 +854,272 @@ mod tests {
         assert_eq!(resolve_cached_english(Some("body"), Some("en_GB")), None);
     }
 }
+
+#[cfg(test)]
+mod template_slots {
+    //! What the model is told about values a meeting may not state. (#171)
+    //!
+    //! A summary's action item read `(due: None)`: the template ordered a due date on every item, with a
+    //! fixed slot in its format, and the input carries none. Every slot of that kind, in every shipped
+    //! template, is declared here, and the prompt each template produces is read against it.
+    //!
+    //! This proves what the model is told, not what it writes. ADR 0023's context names that shape as
+    //! weak; the instrument in `due_slots` measures what it writes.
+    use super::build_final_report_system_prompt;
+    use crate::summary::templates::Template;
+    use std::path::Path;
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Kind {
+        /// Asked for in the instruction, only when stated, and never in the item format.
+        Inline,
+        /// A table column: only when stated, otherwise the agreed blank.
+        Table,
+        /// Not asked for at all.
+        Removed,
+    }
+
+    /// file → section → kind → label. Read by reading every `instruction`, `item_format` and
+    /// `example_item_format` in `templates/*.json`.
+    const DECLARED: &[(&str, &str, Kind, &str)] = &[
+        ("standard_meeting.json", "Action Items", Kind::Inline, "due date"),
+        ("retrospective.json", "Sprint", Kind::Inline, "date range"),
+        ("retrospective.json", "Action Items", Kind::Table, "Due Date"),
+        ("retrospective.json", "Action Items", Kind::Table, "Success Metric"),
+        ("daily_standup.json", "Date", Kind::Removed, "YYYY-MM-DD"),
+    ];
+    const BLANK: &str = crate::summary::due_slots::BLANK;
+    const CONDITIONS: &[&str] = &["only if", "only when", "if stated"];
+    const CONNECTIVES: &[&str] = &["otherwise", "else", "if not"];
+    const FILLERS: &[&str] = &["None", "N/A", "TBD", "unknown", "not specified", "not mentioned"];
+    /// What the unstated case sounds like: a sentence naming a date that also says what to do when the
+    /// transcript has none ("estimate one when it does not") is giving the model a fallback. Added
+    /// after the gate's adversary passed nine mutations through the rules above at `0e8b8a3`.
+    const UNSTATED: &[&str] = &["does not", "doesn't", "is not", "isn't", "not stated", "not given", "none is", "when not", "if none"];
+    /// Words that ask for a date, so a sentence holding one is read whatever label it uses. `due` is
+    /// read only when `to` does not follow it, so "due to rain" asks for nothing.
+    const DATE_WORDS: &[&str] = &["due date", "deadline", "date range", "date", "dates", "deadlines"];
+
+    fn names_a_date(text: &str) -> bool {
+        if DATE_WORDS.iter().any(|w| has_word(text, w)) {
+            return true;
+        }
+        let lower = text.to_lowercase();
+        let mut from = 0;
+        while let Some(at) = lower[from..].find("due") {
+            let start = from + at;
+            let end = start + 3;
+            let before = lower[..start].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let after = lower[end..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+            if before && after && !lower[end..].trim_start().starts_with("to ") {
+                return true;
+            }
+            from = end;
+        }
+        false
+    }
+
+    /// A labelled slot, `due:` or `deadline:` with any emphasis, written anywhere in the section.
+    fn has_slot(text: &str) -> bool {
+        let plain = text.replace(['*', '_'], "").to_lowercase();
+        ["due date:", "due:", "deadline:", "due date :", "due :", "deadline :"].iter().any(|l| plain.contains(l))
+    }
+
+    /// A sentence is the text between `. `, `.\n`, `;` and `\n`.
+    fn sentences(text: &str) -> Vec<String> {
+        text.replace(". ", "\u{1}").replace(".\n", "\u{1}").replace([';', '\n'], "\u{1}")
+            .split('\u{1}')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// `needle` as a whole word or phrase, case-insensitive.
+    fn has_word(hay: &str, needle: &str) -> bool {
+        let (hay, needle) = (hay.to_lowercase(), needle.to_lowercase());
+        let mut from = 0;
+        while let Some(at) = hay[from..].find(&needle) {
+            let start = from + at;
+            let end = start + needle.len();
+            let before = hay[..start].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let after = hay[end..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+            if before && after {
+                return true;
+            }
+            from = start + needle.len().max(1);
+        }
+        false
+    }
+
+    /// What `to_section_instructions` emits for a section: its instruction, and its whole format if it
+    /// has one, every line of it. Read from that function's output, which the test first finds in the
+    /// prompt verbatim, so a multi-line format cannot hide a line past the first. Rule 5 of the system
+    /// prompt sits outside every section.
+    fn section(instructions: &str, title: &str) -> Option<(String, Option<String>)> {
+        const FORMAT: &str = "\n  - Items in this section should follow the format: ";
+        let head = format!("- **For the '{title}' section:** ");
+        let start = instructions.find(&head)? + head.len();
+        let rest = &instructions[start..];
+        let end = rest.find("\n- **For the '").unwrap_or(rest.len());
+        let block = &rest[..end];
+        Some(match block.find(FORMAT) {
+            Some(at) => (block[..at].to_string(), Some(block[at + FORMAT.len()..].to_string())),
+            None => (block.to_string(), None),
+        })
+    }
+
+    /// Every section title `to_section_instructions` emits.
+    fn titles(instructions: &str) -> Vec<String> {
+        instructions
+            .lines()
+            .filter_map(|l| l.strip_prefix("- **For the '"))
+            .filter_map(|l| l.split_once("' section:**").map(|(t, _)| t.to_string()))
+            .collect()
+    }
+
+    fn header_cells(format: &str) -> Vec<String> {
+        format
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == '`' || c == '|')
+            .split('|')
+            .map(|c| c.trim().trim_matches('*').trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_template_asks_only_for_what_the_meeting_states() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("templates/ is readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        on_disk.sort();
+        let mut declared: Vec<String> = DECLARED.iter().map(|d| d.0.to_string()).collect();
+        declared.sort();
+        declared.dedup();
+        let mut failures = Vec::new();
+        if on_disk != declared {
+            failures.push(format!("templates/ holds {on_disk:?}, the table declares {declared:?}"));
+        }
+
+        // Every section no row declares asks for no date at all, in any words or slot.
+        for file in &on_disk {
+            let text = std::fs::read_to_string(dir.join(file)).expect("a template on disk");
+            let template: Template = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+            let instructions = template.to_section_instructions();
+            let prompt = build_final_report_system_prompt(&instructions, &template.to_markdown_structure());
+            if !prompt.contains(&instructions) {
+                failures.push(format!("{file}: the prompt does not carry the section instructions verbatim, so what is read here is not what the model is told"));
+            }
+            for title in titles(&instructions) {
+                if DECLARED.iter().any(|d| d.0 == file && d.1 == title) {
+                    continue;
+                }
+                let (instruction, format) = section(&instructions, &title).expect("a listed title");
+                let whole = format!("{instruction}\n{}", format.unwrap_or_default());
+                if names_a_date(&whole) || has_slot(&whole) {
+                    failures.push(format!("{file} › {title}: an undeclared section asks for a date: {whole}"));
+                }
+            }
+        }
+
+        for &(file, title, kind, label) in DECLARED {
+            let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+                failures.push(format!("{file}: not on disk"));
+                continue;
+            };
+            let template: Template = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+            let instructions = template.to_section_instructions();
+            let prompt = build_final_report_system_prompt(&instructions, &template.to_markdown_structure());
+            let at = format!("{file} › {title} › {label}");
+            match kind {
+                Kind::Removed => {
+                    if section(&instructions, title).is_some() {
+                        failures.push(format!("{at}: the section is still asked for"));
+                    }
+                    if prompt.contains(label) {
+                        failures.push(format!("{at}: `{label}` is still in the prompt"));
+                    }
+                    for t in titles(&instructions).iter().filter(|t| names_a_date(t)) {
+                        failures.push(format!("{at}: the section `{t}` asks for a date by its title"));
+                    }
+                }
+                Kind::Inline => {
+                    let Some((instruction, format)) = section(&instructions, title) else {
+                        failures.push(format!("{at}: no such section"));
+                        continue;
+                    };
+                    if !has_word(&instruction, label) {
+                        failures.push(format!("{at}: the instruction does not name it, so nothing here is checked: {instruction}"));
+                    }
+                    if let Some(f) = format.as_deref().filter(|f| has_word(f, label) || names_a_date(f) || has_slot(f)) {
+                        failures.push(format!("{at}: the item format still has a slot for it: {f}"));
+                    }
+                    for s in sentences(&instruction).iter().filter(|s| has_word(s, label) || names_a_date(s)) {
+                        if !CONDITIONS.iter().any(|c| has_word(s, c)) {
+                            failures.push(format!("{at}: \"{s}\" asks for a date with no condition"));
+                        }
+                        if let Some(u) = UNSTATED.iter().find(|u| has_word(s, u)) {
+                            failures.push(format!("{at}: \"{s}\" says what to do when none is stated (`{u}`)"));
+                        }
+                    }
+                    if has_slot(&instruction) {
+                        failures.push(format!("{at}: the instruction writes out a slot: {instruction}"));
+                    }
+                    let whole = format!("{instruction}\n{}", format.unwrap_or_default());
+                    for token in CONNECTIVES.iter().chain(FILLERS) {
+                        if has_word(&whole, token) {
+                            failures.push(format!("{at}: the section carries the fallback `{token}`"));
+                        }
+                    }
+                }
+                Kind::Table => {
+                    let Some((instruction, format)) = section(&instructions, title) else {
+                        failures.push(format!("{at}: no such section"));
+                        continue;
+                    };
+                    if !format.as_deref().map(header_cells).unwrap_or_default().iter().any(|c| c.eq_ignore_ascii_case(label)) {
+                        failures.push(format!("{at}: not a header cell of the table, so nothing here is checked"));
+                    }
+                    let all = sentences(&instruction);
+                    let naming: Vec<usize> = (0..all.len()).filter(|&i| has_word(&all[i], label)).collect();
+                    if !naming.iter().any(|&i| CONDITIONS.iter().any(|c| has_word(&all[i], c))) {
+                        failures.push(format!("{at}: no sentence asks for it with a condition: {instruction}"));
+                    }
+                    // The agreed blank is required, not merely allowed: the sentence naming the column, or
+                    // the one after it, says to write it.
+                    if !naming.iter().any(|&i| all[i].contains(BLANK) || all.get(i + 1).is_some_and(|n| n.contains(BLANK))) {
+                        failures.push(format!("{at}: nothing says to write the agreed blank {BLANK} when it is not stated: {instruction}"));
+                    }
+                    for s in all.iter().filter(|s| has_word(s, label) || names_a_date(s)) {
+                        if !CONDITIONS.iter().any(|c| has_word(s, c)) {
+                            failures.push(format!("{at}: \"{s}\" asks for a date with no condition"));
+                        }
+                        if UNSTATED.iter().any(|u| has_word(s, u)) && !s.contains(BLANK) {
+                            failures.push(format!("{at}: \"{s}\" says what to do when none is stated, and it is not the agreed blank"));
+                        }
+                    }
+                    if format.as_deref().is_some_and(|f| f.lines().count() > 2) {
+                        failures.push(format!("{at}: the format carries rows past its header, which the model copies: {}", format.as_deref().unwrap_or_default()));
+                    }
+                    let whole = format!("{instruction}\n{}", format.unwrap_or_default());
+                    for token in FILLERS {
+                        if has_word(&whole, token) {
+                            failures.push(format!("{at}: the section carries the filler `{token}`"));
+                        }
+                    }
+                    for s in sentences(&instruction) {
+                        if CONNECTIVES.iter().any(|c| has_word(&s, c)) && !s.contains(BLANK) {
+                            failures.push(format!("{at}: \"{s}\" leads somewhere other than the agreed blank {BLANK}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+    }
+}

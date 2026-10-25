@@ -4,7 +4,7 @@
       "sections": [
         {
           "title": "Sprint",
-          "instruction": "Sprint name/number and date range",
+          "instruction": "Sprint name or number, and its date range only if the transcript states one",
           "format": "string"
         },
         {
@@ -32,7 +32,7 @@
         },
         {
           "title": "Action Items",
-          "instruction": "Concrete experiments with owners and success metrics",
+          "instruction": "Concrete experiments, each with its owner. Fill the Due Date only if the transcript states one; otherwise write —. Fill the Success Metric only if the transcript states one; otherwise write —",
           "format": "list",
           "item_format": "| **Owner** | **Task** | **Due Date** | **Success Metric** |\n| --- | --- | --- | --- |"
         },
