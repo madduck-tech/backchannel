@@ -33,7 +33,7 @@ use crate::transcribe_engine::{keep_partial_on_truncation, scored_confidence, sp
 use anyhow::Result;
 use log::warn;
 use std::collections::VecDeque;
-use transcribe_cpp::{RunOptions, Session};
+use transcribe_cpp::{Diarize, Session};
 
 /// Pipeline audio is already mono 16kHz, which is what the VAD and every model
 /// want.
@@ -57,7 +57,7 @@ const MAX_BACKLOG_SAMPLES: usize = 30 * SAMPLE_RATE as usize;
 /// How a segment becomes text.
 pub enum Decoder {
     /// Local GGUF through transcribe.cpp.
-    Local { session: Session, run_options: RunOptions },
+    Local { session: Session, language: Option<String>, diarize: Diarize },
     /// Audio-capable LLM in the built-in sidecar.
     AudioLlm {
         handle: tokio::runtime::Handle,
@@ -84,8 +84,13 @@ pub struct DecodedTurn {
 impl Decoder {
     fn decode(&mut self, samples: &[f32]) -> Result<Vec<DecodedTurn>> {
         match self {
-            Decoder::Local { session, run_options } => {
-                let transcript = keep_partial_on_truncation(session.run(samples, run_options))?;
+            Decoder::Local { session, language, diarize } => {
+                let transcript = keep_partial_on_truncation(crate::transcribe_engine::options::run(
+                    session,
+                    samples,
+                    language.clone(),
+                    *diarize,
+                ))?;
                 // `None` when the family scores nothing, which is what `ports.rs:54` says the
                 // value means. `Some(mean_token_confidence(..))` was unconditional here, and for a
                 // family that leaves every `Token::p` at the zero sentinel it painted a red `0%` on

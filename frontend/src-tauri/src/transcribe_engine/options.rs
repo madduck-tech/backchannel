@@ -6,16 +6,20 @@
 //! "Download again" over the loaded model would do exactly that. `no_mmap: true` reads the file as
 //! the pin before v0.4.1 did. Mapping, and the download it needs, are #195.
 //!
-//! **Runs keep ITN off.** v0.4.1 turned inverse text normalisation on by default for sensevoice and
-//! fun-asr-mlt-nano, so their transcripts would gain capitals and punctuation. `Itn::Off` keeps the
-//! text the pin produced; the other families ignore the field. Adopting upstream's default is a
-//! visible change, decided separately.
+//! **Runs take upstream's ITN default, with one exception.** v0.4.1 turned inverse text normalisation
+//! on by default for sensevoice and fun-asr, so their transcripts gain capitals, punctuation and digits.
+//! The product owner chose that on 2026-10-25 (#169), except for fun-asr with a Chinese hint: there
+//! ITN made it write Traditional characters where it wrote Simplified without (measured on zh.wav), so
+//! that one combination keeps ITN off. Both live in [`itn_for`]; the other families ignore the field.
 //!
-//! Nothing else may load a model or build a `RunOptions`: `clippy.toml` forbids the loaders outside
-//! this module, and `no_run_options_outside_the_builder` forbids the literals.
+//! Nothing else may load a model or start a decode: `clippy.toml` forbids the loaders and
+//! `Session::run`, `run_batch` and `stream` outside this module. So a `RunOptions` built anywhere else
+//! has nothing to be given to, and every decode gets the same ITN setting. Clippy resolves a call by what it calls, so neither spelling, line
+//! breaks nor an inferred `&Default::default()` gets past it. The first version held the options by a
+//! text census, which those three shapes passed (#169's gate).
 
 use std::path::Path;
-use transcribe_cpp::{Backend, Diarize, Itn, Model, ModelOptions, RunOptions};
+use transcribe_cpp::{Backend, Diarize, Itn, Model, ModelOptions, RunOptions, Session, Stream, StreamOptions, Transcript};
 
 /// The options every model is loaded with. `backend` is a parameter so an instrument can pin the CPU.
 pub fn model_options(backend: Backend) -> ModelOptions {
@@ -28,9 +32,40 @@ pub fn load_model(path: impl AsRef<Path>, backend: Backend) -> transcribe_cpp::R
     Model::load_with(path, &model_options(backend))
 }
 
-/// The options every run and every stream is given.
-pub fn run_options(language: Option<String>, diarize: Diarize) -> RunOptions {
-    RunOptions { language, diarize, itn: Itn::Off, ..RunOptions::default() }
+/// The ITN setting for a model architecture and a language hint.
+fn itn_for(arch: &str, language: Option<&str>) -> Itn {
+    // `funasr_nano` covers both fun-asr rows. With `zh` and ITN on, fun-asr-mlt-nano wrote
+    // "開放時間早上九點至下午五點。"; with ITN off, "开放时间早上九点至下午五点。" (v0.4.1 and 553f109 alike).
+    if arch == "funasr_nano" && language == Some("zh") {
+        Itn::Off
+    } else {
+        Itn::Default
+    }
+}
+
+/// The options every run and every stream is given, for the model `session` holds.
+fn run_options(session: &Session, language: Option<String>, diarize: Diarize) -> RunOptions {
+    let itn = itn_for(&session.model().arch(), language.as_deref());
+    RunOptions { language, diarize, itn, ..RunOptions::default() }
+}
+
+/// Decode `pcm` whole, with [`run_options`].
+#[allow(clippy::disallowed_methods)]
+pub fn run(session: &mut Session, pcm: &[f32], language: Option<String>, diarize: Diarize) -> transcribe_cpp::Result<Transcript> {
+    let options = run_options(session, language, diarize);
+    session.run(pcm, &options)
+}
+
+/// Begin a stream with [`run_options`].
+#[allow(clippy::disallowed_methods)]
+pub fn stream<'s>(
+    session: &'s mut Session,
+    language: Option<String>,
+    diarize: Diarize,
+    options: &StreamOptions,
+) -> transcribe_cpp::Result<Stream<'s>> {
+    let run = run_options(session, language, diarize);
+    session.stream(&run, options)
 }
 
 #[cfg(test)]
@@ -44,13 +79,16 @@ mod tests {
         assert_eq!(model_options(Backend::Cpu).backend, Backend::Cpu, "the backend is the caller's");
     }
 
+    /// The product owner's choice, 2026-10-25 (#169): upstream's ITN default everywhere, except
+    /// fun-asr with a Chinese hint.
     #[test]
-    fn every_run_keeps_itn_off() {
-        let o = run_options(Some("en".into()), Diarize::On);
-        assert_eq!(o.itn, Itn::Off, "sensevoice and fun-asr-mlt-nano would gain capitals and punctuation");
-        assert_eq!(o.language.as_deref(), Some("en"));
-        assert_eq!(o.diarize, Diarize::On);
-        assert_eq!(run_options(None, Diarize::Default).itn, Itn::Off);
+    fn itn_follows_upstream_except_fun_asr_in_chinese() {
+        assert_eq!(itn_for("sensevoice", Some("zh")), Itn::Default);
+        assert_eq!(itn_for("sensevoice", None), Itn::Default);
+        assert_eq!(itn_for("funasr_nano", Some("en")), Itn::Default);
+        assert_eq!(itn_for("funasr_nano", None), Itn::Default, "with no hint it writes Traditional either way");
+        assert_eq!(itn_for("funasr_nano", Some("zh")), Itn::Off, "Simplified, as the hint asks");
+        assert_eq!(itn_for("parakeet", Some("zh")), Itn::Default);
     }
 
     /// Every `source` line `lock` gives `crate_name`.
@@ -87,43 +125,5 @@ mod tests {
         assert_eq!(lock_sources(two, "transcribe-cpp").len(), 2);
         assert!(!lock_sources(two, "transcribe-cpp")[0].contains(V0_4_1));
         assert!(lock_sources(two, "transcribe-cpp-sys").is_empty(), "a name is matched whole, not as a prefix");
-    }
-
-    /// A census: no `RunOptions` is built outside this module. Each pattern is one of the three
-    /// shapes that build one with ITN at its default; comments are not code and are skipped.
-    #[test]
-    fn no_run_options_outside_the_builder() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let here = Path::new(file!()).file_name().unwrap().to_owned();
-        let patterns = ["RunOptions {", "RunOptions::default()", ": RunOptions = Default::default()"];
-        let mut found = Vec::new();
-        let mut files = 0;
-        let mut stack = vec![src];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("src is readable").flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "rs") {
-                    continue;
-                }
-                files += 1;
-                if path.file_name() == Some(here.as_os_str()) && path.parent().is_some_and(|p| p.ends_with("transcribe_engine")) {
-                    continue;
-                }
-                let text = std::fs::read_to_string(&path).expect("a source file is readable");
-                for (n, line) in text.lines().enumerate() {
-                    let code = line.split("//").next().unwrap_or("");
-                    if patterns.iter().any(|p| code.contains(p)) {
-                        found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
-                    }
-                }
-            }
-        }
-        // A positive sentinel: a census that read nothing finds nothing.
-        assert!(files > 100, "the census read {files} files; it is not reading src/");
-        assert!(found.is_empty(), "RunOptions built outside the builder, with ITN at its default:\n{}", found.join("\n"));
     }
 }

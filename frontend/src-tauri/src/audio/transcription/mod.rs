@@ -99,17 +99,14 @@ pub fn start_transcription_task<R: Runtime>(
         // lives on a blocking thread rather than stalling the async reactor.
         let joined = tokio::task::spawn_blocking(move || {
             let mut session = session;
-            let run_options = crate::transcribe_engine::options::run_options(
-                language,
-                if diarizes { Diarize::On } else { Diarize::Default },
-            );
+            let diarize = if diarizes { Diarize::On } else { Diarize::Default };
             // One wrap here covers both decode paths below, because both reach
             // the user through this sink. Instrumentation belongs at the
             // composition root for the same reason adapter choice does.
             let sink = BenchSink::new(TauriSink::new(app.clone()));
 
             if streaming {
-                match session.stream(&run_options, &StreamOptions::default()) {
+                match crate::transcribe_engine::options::stream(&mut session, language, diarize, &StreamOptions::default()) {
                     // Only this path opts into the lag warning. The segmented
                     // adapter below already warns when its backlog cap starts
                     // dropping audio; the streaming path has no cap, so nothing
@@ -131,7 +128,7 @@ pub fn start_transcription_task<R: Runtime>(
                 }
             } else {
                 match SegmentedTranscriber::with_diarization(
-                    Decoder::Local { session, run_options },
+                    Decoder::Local { session, language, diarize },
                     diarizes,
                 ) {
                     Ok(transcriber) => service::run(transcriber, sink, receiver),

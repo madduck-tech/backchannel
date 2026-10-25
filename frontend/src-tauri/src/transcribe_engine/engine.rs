@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
-use super::options::{load_model, run_options};
+use super::options::{self, load_model};
 use transcribe_cpp::{Backend, Diarize, Model, Session, Transcript};
 
 use crate::config::{
@@ -331,10 +331,10 @@ impl TranscribeEngine {
             .as_deref()
             .is_some_and(crate::config::model_diarizes);
         let mut session = self.open_session().await?;
-        let options = run_options(language, if diarizes { Diarize::On } else { Diarize::Default });
+        let diarize = if diarizes { Diarize::On } else { Diarize::Default };
 
         let transcript = tokio::task::spawn_blocking(move || {
-            keep_partial_on_truncation(session.run(&audio, &options))
+            keep_partial_on_truncation(options::run(&mut session, &audio, language, diarize))
         })
             .await
             .map_err(|e| anyhow!("Transcription task panicked: {}", e))?
@@ -1100,8 +1100,7 @@ mod token_probability_measurement {
 
         let model = crate::transcribe_engine::options::load_model(&path, transcribe_cpp::Backend::Auto).expect("the model opens");
         let mut session = model.session().expect("a session opens");
-        let transcript = session
-            .run(&samples, &crate::transcribe_engine::options::run_options(None, Diarize::Default))
+        let transcript = crate::transcribe_engine::options::run(&mut session, &samples, None, Diarize::Default)
             .expect("the decode runs");
 
         eprintln!("text:   {}", transcript.text.trim());
@@ -1149,8 +1148,8 @@ mod token_probability_measurement {
                 .filter(|w| !w.is_empty())
                 .collect()
         };
-        let a = session.run(&clean, &crate::transcribe_engine::options::run_options(None, Diarize::Default)).expect("the clean decode runs");
-        let b = session.run(&interleaved, &crate::transcribe_engine::options::run_options(None, Diarize::Default)).expect("the interleaved decode runs");
+        let a = crate::transcribe_engine::options::run(&mut session, &clean, None, Diarize::Default).expect("the clean decode runs");
+        let b = crate::transcribe_engine::options::run(&mut session, &interleaved, None, Diarize::Default).expect("the interleaved decode runs");
         eprintln!("clean:       {}", a.text.trim());
         eprintln!("interleaved: {}", b.text.trim());
         eprintln!("same word sequence: {}", words(&a.text) == words(&b.text));

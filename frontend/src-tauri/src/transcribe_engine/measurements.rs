@@ -5,7 +5,7 @@
 //! They collect every failure before failing, so a control shows which check it turned red.
 
 use super::engine::{scored_confidence, TranscribeEngine};
-use super::options::{load_model, run_options};
+use super::options::{self, load_model};
 use crate::audio::transcription::adapters::streaming::StreamingTranscriber;
 use crate::audio::transcription::ports::{Channel, Transcriber};
 use crate::audio::transcription::service::tests::FakeSink;
@@ -66,13 +66,40 @@ fn check_rule(rule: Rule, text: &str) -> Result<(), String> {
     }
 }
 
+const CJK_PUNCTUATION: &str = "。，、？！：；“”‘’（）《》…—·";
+
 /// The ITN-off signature (`transcribe.h:557-560`): no uppercase letter and no punctuation.
 fn itn_off(text: &str) -> Result<(), String> {
     let bad: String = text
         .chars()
-        .filter(|c| c.is_uppercase() || c.is_ascii_punctuation() || "。，、？！：；“”‘’（）《》…—·".contains(*c))
+        .filter(|c| c.is_uppercase() || c.is_ascii_punctuation() || CJK_PUNCTUATION.contains(*c))
         .collect();
     if bad.is_empty() { Ok(()) } else { Err(format!("uppercase or punctuation found: {bad:?}")) }
+}
+
+/// The ITN-on signature: for a spaced language, an uppercase letter and punctuation; for Chinese, a
+/// sentence mark or a digit. Measured on v0.4.1 with ITN at its default: sensevoice and fun-asr-mlt-nano
+/// write "And so my fellow Americans …, ask … country." and close Chinese with `。`, sensevoice writing
+/// "9点" for "九点".
+fn itn_on(text: &str, han: bool) -> Result<(), String> {
+    let ok = if han {
+        text.contains('。') || text.chars().any(|c| c.is_ascii_digit())
+    } else {
+        text.chars().any(char::is_uppercase) && text.chars().any(|c| c.is_ascii_punctuation())
+    };
+    if ok { Ok(()) } else { Err(format!("no capitals and punctuation, or sentence mark or digit, in {text:?}")) }
+}
+
+/// What ITN changes, folded away, so the words before and after it can be compared: case,
+/// punctuation, and, for Chinese, a single digit back to its numeral. A number ITN writes with more
+/// than one digit is not folded, which these samples do not contain.
+fn fold(text: &str, han: bool) -> String {
+    const NUMERALS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+    text.chars()
+        .filter(|c| !(c.is_ascii_punctuation() || CJK_PUNCTUATION.contains(*c)))
+        .map(|c| if han && c.is_ascii_digit() { NUMERALS[c as usize - '0' as usize] } else { c })
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Similarity of two token sequences: 1 - edit distance / the longer length. Words for a spaced
@@ -101,9 +128,9 @@ fn tokens_for(text: &str, han: bool) -> Vec<String> {
     }
 }
 
-/// The words of a sensevoice or fun-asr-mlt-nano decode must match the `553f109` fixture this closely.
-/// Not equality: ggml 0.20.2 → 0.26.0 moves float order, and a changed word for that reason must not
-/// read as ITN, nor force the assertion to be relaxed to fit the change.
+/// The words of a sensevoice or fun-asr-mlt-nano decode, folded for what ITN changes, must match the
+/// `553f109` fixture this closely. Not equality: ggml 0.20.2 → 0.26.0 moves float order, and a changed
+/// word for that reason must not force the assertion to be relaxed to fit the change.
 const ITN_WORDS_FLOOR: f64 = 0.9;
 
 struct Row {
@@ -209,7 +236,7 @@ fn every_family_decodes_on_the_pinned_engine() {
         // The class needs the token rows, which `BatchResult` does not carry: the same loaded model,
         // the same options, through a session of its own.
         let transcript = rt.block_on(engine.open_session()).and_then(|mut s| {
-            s.run(&audio, &run_options(r.language.map(str::to_string), Diarize::Default)).map_err(|e| anyhow::anyhow!("{e}"))
+            options::run(&mut s, &audio, r.language.map(str::to_string), Diarize::Default).map_err(|e| anyhow::anyhow!("{e}"))
         });
         let class = transcript.as_ref().map(p_class);
         eprintln!(
@@ -231,15 +258,16 @@ fn every_family_decodes_on_the_pinned_engine() {
         }
         if let Some(file) = r.fixture {
             let before = fixture_text(file, r.language);
-            // The property holds where the pin's own output held it. With `zh`, fun-asr-mlt-nano closes
-            // with `。` on `553f109` too, so there the words, which include it, are the check.
+            let han = r.sample.starts_with("zh");
+            // ITN is on (the product owner's choice, #169). Its signature is required where it has
+            // something to change: where the pin's own output, with ITN off, carried none of it. With
+            // `zh`, fun-asr-mlt-nano closed with `。` on 553f109 already, so there the words are the check.
             if itn_off(&before).is_ok() {
-                if let Err(why) = itn_off(&batch.text) {
-                    failures.push(format!("{} on {}: ITN is on: {why}", r.name, r.sample));
+                if let Err(why) = itn_on(&batch.text, han) {
+                    failures.push(format!("{} on {}: ITN is off: {why}", r.name, r.sample));
                 }
             }
-            let han = r.sample.starts_with("zh");
-            let sim = similarity(&tokens_for(&before, han), &tokens_for(&batch.text, han));
+            let sim = similarity(&tokens_for(&fold(&before, han), han), &tokens_for(&fold(&batch.text, han), han));
             eprintln!("    against {file}: similarity {sim:.3} (floor {ITN_WORDS_FLOOR})");
             if sim < ITN_WORDS_FLOOR {
                 failures.push(format!("{} on {}: the words moved from {file}: similarity {sim:.3} under {ITN_WORDS_FLOOR}", r.name, r.sample));
@@ -263,8 +291,7 @@ fn a_stream_commits_append_only_and_finalize_emits_the_tail() {
         // until finalize (measured 2026-10-25), so finalize has a tail to emit. It is not a cut inside a
         // word, which nothing here locates.
         audio.truncate((7.3 * 16_000.0) as usize);
-        let stream = session
-            .stream(&run_options(Some("en".to_string()), Diarize::Default), &StreamOptions::default())
+        let stream = options::stream(&mut session, Some("en".to_string()), Diarize::Default, &StreamOptions::default())
             .expect("the stream begins");
         let mut transcriber = StreamingTranscriber::new(stream);
         let sink = FakeSink::default();
@@ -310,35 +337,44 @@ fn a_stream_commits_append_only_and_finalize_emits_the_tail() {
     assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
 }
 
-/// The August export of each repository whose bytes changed, on v0.4.1: does it load, and what does
-/// it decode. Any outcome is a result; the words are the positive sentinel. (#169 condition 9)
+/// The August export of each repository whose bytes changed, on v0.4.1: each must load and decode
+/// jfk.wav to its words. (#169 condition 9)
+///
+/// The first version printed what each did and asserted nothing, so a file that failed to load left
+/// it green (#169's gate). Whether `<unk>` appears is printed, not asserted: it is observed, not
+/// provoked.
 #[test]
 #[ignore = "needs about 8 GB of August exports in the measure dir's august/ (crate::measure); run by name, output pasted into #169's verdict"]
-fn what_the_august_exports_do_on_the_pinned_engine() {
+fn the_august_exports_load_and_decode_on_the_pinned_engine() {
     let dir = measure_model("moonshine-tiny-Q8_0.gguf").parent().unwrap().join("august");
     let audio = read_wav_mono_16k(&pinned_sample("jfk.wav"));
     let mut entries: Vec<_> = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())).flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "gguf")).collect();
     entries.sort();
     assert!(!entries.is_empty(), "no August exports in {}", dir.display());
+    let mut failures = Vec::new();
     for path in entries {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        match load_model(&path, Backend::Cpu) {
-            Err(e) => eprintln!("{name}: does not load: {e}"),
-            Ok(model) => {
-                let out = model.session().map_err(|e| e.to_string()).and_then(|mut s| {
-                    s.run(&audio, &run_options(Some("en".to_string()), Diarize::Default)).map_err(|e| e.to_string())
-                });
-                match out {
-                    Ok(t) => eprintln!(
-                        "{name}: loads; decodes {:?}{}",
-                        t.text.trim(),
-                        if t.text.contains("<unk>") { " (a literal <unk>)" } else { "" }
-                    ),
-                    Err(e) => eprintln!("{name}: loads; the decode fails: {e}"),
+        let model = match load_model(&path, Backend::Cpu) {
+            Ok(m) => m,
+            Err(e) => {
+                failures.push(format!("{name}: does not load: {e}"));
+                continue;
+            }
+        };
+        let out = model.session().map_err(|e| e.to_string()).and_then(|mut s| {
+            options::run(&mut s, &audio, Some("en".to_string()), Diarize::Default).map_err(|e| e.to_string())
+        });
+        match out {
+            Ok(t) => {
+                eprintln!("{name}: loads; decodes {:?}{}", t.text.trim(), if t.text.contains("<unk>") { " (a literal <unk>)" } else { "" });
+                if let Err(why) = check_rule(JFK, &t.text) {
+                    failures.push(format!("{name}: decodes, but not jfk.wav's words ({why}): {}", t.text.trim()));
                 }
             }
+            Err(e) => failures.push(format!("{name}: loads; the decode fails: {e}")),
         }
     }
+    assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
 }
 
 #[test]
@@ -352,6 +388,12 @@ fn the_instruments_own_rules_go_red_on_what_they_reject() {
     assert!(itn_off("And so, my fellow Americans.").is_err());
     assert!(itn_off("開放時間早上九點至下午五點").is_ok());
     assert!(itn_off("開放時間早上9點至下午5點。").is_err());
+    assert!(itn_on("And so, my fellow Americans.", false).is_ok());
+    assert!(itn_on("and so my fellow americans", false).is_err());
+    assert!(itn_on("开放时间早上9点至下午5点", true).is_ok());
+    assert!(itn_on("开放时间早上九点至下午五点", true).is_err());
+    assert_eq!(fold("开放时间早上9点至下午5点。", true), "开放时间早上九点至下午五点");
+    assert_eq!(fold("And so, my fellow Americans.", false), "and so my fellow americans");
     let a = tokens_for("ask not what your country", false);
     assert_eq!(similarity(&a, &a), 1.0);
     assert!(similarity(&a, &tokens_for("ask not what my country", false)) < 1.0);

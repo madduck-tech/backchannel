@@ -248,11 +248,10 @@ async fn measure(
     let sink_marks = marks.clone();
     let decoding = tokio::task::spawn_blocking(move || {
         let mut session = session;
-        let run_options = crate::transcribe_engine::options::run_options(language, Diarize::Default);
         // Semicolon load-bearing: without it the match is the closure's tail
         // expression, so its temporary `Result<Stream<'_>, _>` outlives
         // `session` — which the stream borrows.
-        match session.stream(&run_options, &StreamOptions::default()) {
+        match crate::transcribe_engine::options::stream(&mut session, language, Diarize::Default, &StreamOptions::default()) {
             Ok(stream) => service::run(StreamingTranscriber::new(stream), ProbeSink(sink_marks), rx),
             Err(e) => warn!("dictation probe: failed to begin stream: {e}"),
         };
