@@ -551,9 +551,19 @@ done
 
 # A summary that exists is not a summary that says anything: the panel renders its headings whether or
 # not the model wrote under them, so the assertion is on prose the model produced.
-BODY=$(printf '%s' "$SUMMARY" | sed -n '/Regenerate Summary/,$p' | tr '\n' ' ')
-LEN=$(printf '%s' "$BODY" | tr -d ' ' | wc -c)
-[ "$LEN" -ge 120 ] || die "the summary panel is on screen but holds only $LEN characters of text: '$BODY'"
+#
+# "Regenerate Summary" appears as soon as the summary's data arrives (`hasSummary={!!aiSummary}`), and the
+# editor parses the markdown into blocks after that. So its appearance is true before the text is on
+# screen: #171's gate read the panel at that moment and found 90 characters of controls, while the
+# summary had been written and stored. Wait for the prose itself, and fail only if it never comes.
+BODY=""; LEN=0
+for _ in $(seq 1 30); do
+  BODY=$(text | sed -n '/Regenerate Summary/,$p' | tr '\n' ' ')
+  LEN=$(printf '%s' "$BODY" | tr -d ' ' | wc -c)
+  [ "$LEN" -ge 120 ] && break
+  sleep 1
+done
+[ "$LEN" -ge 120 ] || die "the summary panel is on screen but holds only $LEN characters of text after 30 s: '$BODY'"
 say "a summary was written, $LEN characters: $(printf '%s' "$BODY" | cut -c1-200)"
 
 # --- what the summary's action items carry (#171) -------------------------------------------------
