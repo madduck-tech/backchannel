@@ -413,7 +413,9 @@ if [ "$MODE" = keeps ]; then
   # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the
   # note at the narrow block says: a `"` here reached the driver's JSON body bare, the body did not
   # parse, and this wait could never be true (#170's gate, measured on its first run).
-  await "document.querySelector('section[aria-label=$CHOSEN_ID]') !== null" "the download screen's row for $CHOSEN_ID" 30
+  # `CSS.escape`, because an unquoted value must be an identifier: the default's id, with its `.`,
+  # would not parse (#170's gate, round 2).
+  await "document.querySelector('section[aria-label=' + CSS.escape('$CHOSEN_ID') + ']') !== null" "the download screen's row for $CHOSEN_ID" 30
   FINAL_BYTES=35466912   # moonshine-tiny-Q8_0.gguf, the cached file's size
   N=0; INFLIGHT=0; INFLIGHT_DISABLED=0; INFLIGHT_ENABLED=0; OTHER=0
   while [ "$N" -lt 3000 ]; do
