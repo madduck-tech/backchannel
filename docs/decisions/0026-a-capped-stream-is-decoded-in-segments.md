@@ -25,7 +25,7 @@ The same GGUF metadata also says whether a stream is capped, so the cap can be r
 
 ## Consequences
 
-- These rows' live text arrives per segment (≈ 8 s), with no partials, and their rows carry a channel. They leave the stream path's lag warning behind: the segmented path has none that fires (#209). Measured on `dots-full.wav`, one channel, four cores:
+- These rows' live text arrives per segment (≈ 8 s), with no partials, and their rows carry a channel. Since #209 the segmented path warns about lag as the stream path does (ADR 0027). Measured on `dots-full.wav`, one channel, four cores:
   - tiny, small and medium keep 0.946, 0.950 and 0.950 of a per-30-s reference;
   - all three transcribe the sample's last 20 s;
   - they feed at 0.04, 0.09 and 0.13–0.14 × real time. The segmented path decodes each channel on its own, so a meeting with both sides speaking costs up to twice that.

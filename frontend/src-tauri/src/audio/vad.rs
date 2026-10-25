@@ -35,7 +35,7 @@ pub struct ContinuousVadProcessor {
 /// A segment normally closes on silence (`redemption_time`), which means a
 /// speaker who never pauses produces nothing at all: the live batch path decodes
 /// whole segments, so the transcript would stay empty until they stopped talking
-/// and then arrive in one lump — most of it discarded by the backlog cap.
+/// and then arrive in one lump, minutes behind.
 const MAX_UTTERANCE_SAMPLES: usize = crate::audio::common::LIVE_MAX_SEGMENT_SAMPLES;
 
 /// Upper bound on a VAD frame, so a frame can live on the stack. The frame is
@@ -495,7 +495,7 @@ mod tests {
     /// Regression: a segment only ever closed on VAD-detected silence, so a
     /// speaker who never pauses produced nothing at all until they stopped.
     /// Live transcription showed an empty screen for the whole utterance, and the
-    /// backlog cap then discarded most of it when it arrived in one lump.
+    /// whole utterance then arrived in one lump.
     ///
     /// Driven through the state directly: what needs testing is the cut policy,
     /// not whether Silero classifies a synthesized tone as speech.

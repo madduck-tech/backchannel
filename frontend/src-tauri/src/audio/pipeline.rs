@@ -13,6 +13,7 @@ use rubato::{Async, FixedAsync, Resampler, SincInterpolationParameters, SincInte
 
 use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
+use super::transcription::sent_clock::FeedSender;
 use super::audio_processing::{audio_to_mono, HighPassFilter, LoudnessNormalizer, NoiseSuppressionProcessor, StreamingDownsampler16k};
 
 /// Ring buffer for synchronized audio mixing
@@ -946,10 +947,9 @@ impl AudioCapture {
 /// Uses Voice Activity Detection to segment speech in real-time and send only speech to Whisper
 pub struct AudioPipeline {
     receiver: mpsc::UnboundedReceiver<AudioChunk>,
-    transcription_sender: mpsc::UnboundedSender<AudioChunk>,
-    // Audio forwarded to the transcription stream so far, in 16kHz samples.
-    // Drives recording-relative timestamps without a wall clock.
-    transcription_samples_sent: u64,
+    /// Also the transcription side's clock: it counts what it sends, one channel's samples per
+    /// window, and `BenchSink` reads lag from it (#209).
+    transcription_sender: FeedSender,
     // The same count for the recording file, at the pipeline's sample rate.
     mixed_samples_sent: u64,
     sample_rate: u32,
@@ -975,7 +975,7 @@ pub struct AudioPipeline {
 impl AudioPipeline {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<AudioChunk>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: FeedSender,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         mic_device_name: String,
@@ -1009,7 +1009,6 @@ impl AudioPipeline {
         Self {
             receiver,
             transcription_sender,
-            transcription_samples_sent: 0,
             mixed_samples_sent: 0,
             sample_rate,
             chunk_id_counter: 0,
@@ -1140,28 +1139,26 @@ impl AudioPipeline {
 
         // The timestamp is shared: both channels are the same window of the same meeting,
         // and giving them separate clocks would make rows from the two impossible to
-        // interleave in the transcript.
-        let timestamp = self.transcription_samples_sent as f64 / 16000.0;
-        let advance = mic_16k.len().max(sys_16k.len()) as u64;
-
-        for (data, device_type) in [
-            (mic_16k, DeviceType::Microphone),
-            (sys_16k, DeviceType::System),
-        ] {
-            if data.is_empty() {
-                continue;
-            }
-            let transcription_chunk = AudioChunk {
+        // interleave in the transcript. It is the sender's own clock, which advances by one
+        // channel's samples per window (#209).
+        let timestamp = self.transcription_sender.sent_samples() as f64 / 16000.0;
+        // Ids go to the chunks that are sent, consecutively, as they always have.
+        let chunks: Vec<AudioChunk> = [(mic_16k, DeviceType::Microphone), (sys_16k, DeviceType::System)]
+            .into_iter()
+            .filter(|(data, _)| !data.is_empty())
+            .enumerate()
+            .map(|(i, (data, device_type))| AudioChunk {
                 data,
                 sample_rate: 16000,
                 timestamp,
-                chunk_id: self.chunk_id_counter,
+                chunk_id: self.chunk_id_counter + i as u64,
                 device_type,
-                // Kept for the existing attribution heuristic, which stays until the
-                // channel it guesses at is carried by every decoder path.
-            };
+            })
+            .collect();
 
-            if let Err(e) = self.transcription_sender.send(transcription_chunk) {
+        match self.transcription_sender.send_window(chunks) {
+            Ok(sent) => self.chunk_id_counter += sent as u64,
+            Err(e) => {
                 // The receiver is gone for the rest of the meeting once the
                 // transcription task exits, and this fires on every mixing
                 // window — say it once, not twenty times a second.
@@ -1169,12 +1166,8 @@ impl AudioPipeline {
                     *transcription_dead = true;
                     warn!("Transcription stopped receiving audio ({}); recording continues without a live transcript", e);
                 }
-                break;
-            } else {
-                self.chunk_id_counter += 1;
             }
         }
-        self.transcription_samples_sent += advance;
 
         // The WAV file gets the same mixed audio, timestamped by how much mixed
         // audio has been produced. It used to carry whichever input chunk
@@ -1215,7 +1208,7 @@ impl AudioPipeline {
         info!(
             "Flushed remaining audio from pipeline (processed {} chunks, {:.1}s sent for transcription)",
             self.processed_chunks,
-            self.transcription_samples_sent as f64 / 16000.0
+            self.transcription_sender.sent_samples() as f64 / 16000.0
         );
         Ok(())
     }
@@ -1240,7 +1233,7 @@ impl AudioPipelineManager {
     pub fn start(
         &mut self,
         state: Arc<RecordingState>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: FeedSender,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
@@ -1463,9 +1456,21 @@ mod tests {
         mpsc::UnboundedReceiver<AudioChunk>,
         mpsc::UnboundedReceiver<AudioChunk>,
     ) {
+        let (pipeline, transcription, recording, _clock) = pipeline_with_clock();
+        (pipeline, transcription, recording)
+    }
+
+    /// The same, with the clock the transcription channel keeps (#209).
+    pub(super) fn pipeline_with_clock() -> (
+        AudioPipeline,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        crate::audio::transcription::sent_clock::SentClock,
+    ) {
         use super::super::device_detection::InputDeviceKind;
         let (_audio_tx, audio_rx) = mpsc::unbounded_channel();
-        let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
+        let (transcription_tx, transcription_rx) = crate::audio::transcription::sent_clock::feed_channel();
+        let (transcription_rx, clock) = transcription_rx.into_parts();
         let (recording_tx, recording_rx) = mpsc::unbounded_channel();
         let mut pipeline = AudioPipeline::new(
             audio_rx,
@@ -1478,7 +1483,7 @@ mod tests {
             InputDeviceKind::Wired,
         );
         pipeline.recording_sender_for_mixed = Some(recording_tx);
-        (pipeline, transcription_rx, recording_rx)
+        (pipeline, transcription_rx, recording_rx, clock)
     }
 
     /// Two distinguishable windows: a constant each, so a chunk can be
@@ -1494,6 +1499,32 @@ mod tests {
             out.push(chunk);
         }
         out
+    }
+
+    /// The clock live lag is read from advances by one channel's samples per window, as the
+    /// timestamps do, however the window is sent (#209). Sent chunk by chunk, it would count both
+    /// channels and read every healthy recording as falling behind. A `tokio::test` for the reason
+    /// given on the next test.
+    #[tokio::test]
+    async fn the_transcription_clock_advances_by_one_channel_per_window() {
+        let (mut pipeline, mut transcription, _recording, clock) = pipeline_with_clock();
+        let mut dead = false;
+
+        for _ in 0..10 {
+            pipeline.forward_mixed(&[MIC_LEVEL; 1600], &[SYS_LEVEL; 1600], &mut dead);
+        }
+
+        let chunks = drain(&mut transcription);
+        let mic: u64 = chunks.iter().filter(|c| c.device_type == DeviceType::Microphone).map(|c| c.data.len() as u64).sum();
+        let sys: u64 = chunks.iter().filter(|c| c.device_type == DeviceType::System).map(|c| c.data.len() as u64).sum();
+        assert!(mic > 0 && mic == sys, "both channels carry the same windows: {mic} and {sys} samples");
+        assert_eq!(clock.samples(), mic, "the clock is one channel's samples, not both channels' ({})", mic + sys);
+        let last = chunks.last().expect("chunks were sent");
+        assert_eq!(
+            (last.timestamp * 16_000.0).round() as u64,
+            mic - last.data.len() as u64,
+            "the last window's timestamp is the clock before it"
+        );
     }
 
     // `tokio::test`, not `test`: `AudioPipeline::new` builds an

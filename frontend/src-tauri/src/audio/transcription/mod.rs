@@ -14,6 +14,7 @@
 // and the bugs that mattered were the ones only a user could find.
 
 pub mod adapters;
+pub mod sent_clock;
 pub mod ports;
 pub mod service;
 
@@ -64,14 +65,16 @@ pub fn live_path(capabilities: Option<&transcribe_cpp::Capabilities>) -> LivePat
 ///     `streaming` field only labels rows in the picker before download.
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    receiver: sent_clock::FeedReceiver,
 ) -> tokio::task::JoinHandle<()> {
+    // The channel, and the clock its sender keeps, which `BenchSink` measures lag against.
+    let (receiver, sent) = receiver.into_parts();
     tokio::spawn(async move {
         reset_speech_detected_flag();
 
         if let Some((provider, model)) = transcript_provider_config(&app).await {
             if crate::config::is_builtin_transcript_provider(&provider) {
-                run_builtin_audio_llm(app, receiver, model).await;
+                run_builtin_audio_llm(app, receiver, sent, model).await;
                 return;
             }
         }
@@ -126,15 +129,10 @@ pub fn start_transcription_task<R: Runtime>(
             // One wrap here covers both decode paths below, because both reach
             // the user through this sink. Instrumentation belongs at the
             // composition root for the same reason adapter choice does.
-            let sink = BenchSink::new(TauriSink::new(app.clone()));
+            let sink = BenchSink::new(TauriSink::new(app.clone()), sent);
 
             if streaming {
                 match crate::transcribe_engine::options::stream(&mut session, language, diarize, &StreamOptions::default()) {
-                    // Only this path opts into the lag warning. The segmented
-                    // adapter below already warns when its backlog cap starts
-                    // dropping audio; the streaming path has no cap, so nothing
-                    // otherwise tells a user that the transcript has quietly
-                    // drifted half a minute behind them.
                     // Wrapped, because one open stream cannot take two
                     // channels: it would hear the same second of the meeting
                     // twice, in series. ADR 0003's per-channel instance needs a
@@ -142,7 +140,7 @@ pub fn start_transcription_task<R: Runtime>(
                     // this path gets the mix and its rows carry no channel.
                     Ok(stream) => service::run(
                         SumChannels::new(StreamingTranscriber::new(stream)),
-                        sink.warn_when_behind(),
+                        sink,
                         receiver,
                     ),
                     Err(e) => {
@@ -180,11 +178,12 @@ async fn transcript_provider_config<R: Runtime>(app: &AppHandle<R>) -> Option<(S
 /// Live transcription through an audio-capable LLM in the built-in sidecar.
 ///
 /// Uses the same segmented adapter as a local batch model: an LLM decode per
-/// utterance needs exactly the same VAD segmentation, backlog cap and emit
-/// path. Only the call that turns samples into a string differs.
+/// utterance needs exactly the same VAD segmentation and emit path. Only the
+/// call that turns samples into a string differs.
 async fn run_builtin_audio_llm<R: Runtime>(
     app: AppHandle<R>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    sent: sent_clock::SentClock,
     model: String,
 ) {
     use crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL;
@@ -235,7 +234,7 @@ async fn run_builtin_audio_llm<R: Runtime>(
     // the handle rather than the whole loop becoming async.
     let handle = tokio::runtime::Handle::current();
     let joined = tokio::task::spawn_blocking(move || {
-        let sink = BenchSink::new(TauriSink::new(app.clone()));
+        let sink = BenchSink::new(TauriSink::new(app.clone()), sent);
         let decoder = Decoder::AudioLlm { handle, app_data_dir, model };
         match SegmentedTranscriber::new(decoder) {
             Ok(transcriber) => service::run(transcriber, sink, receiver),
@@ -281,5 +280,137 @@ mod live_path_tests {
     fn a_batch_model_is_segmented_and_so_is_an_unread_one() {
         assert_eq!(live_path(Some(&caps(false, 0))), LivePath::Segmented);
         assert_eq!(live_path(None), LivePath::Segmented);
+    }
+}
+
+#[cfg(test)]
+mod falling_behind {
+    //! A model slower than real time, through the live path as it is built. (#209)
+    //!
+    //! The real `service::run`, the real `SegmentedTranscriber` with its Silero VAD, the counting
+    //! channel the pipeline sends into, and `BenchSink` as the composition root builds it. Only the
+    //! decoder is a fake: it sleeps `K` seconds per second of segment, scaled by `SCALE`, and the
+    //! sender paces windows on the same scale, so the run takes a tenth of the audio's length and
+    //! lag, counted in samples, is exact whatever the scale.
+    use super::adapters::bench_sink::BenchSink;
+    use super::adapters::segmented::{Decoder, SegmentedTranscriber};
+    use super::ports::{Channel, TranscriptSink, Transcriber};
+    use super::sent_clock::{feed_channel, tests::window};
+    use super::service::{self, tests::FakeSink};
+    use crate::measure::{pinned_sample, read_wav_mono_16k};
+    use anyhow::Result;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// Seconds of decoding per second of segment.
+    const K: f64 = 2.0;
+    /// Wall seconds are audio seconds over this. Bounded at 10. Silero's own time is not scaled; it
+    /// is measured on the reference run and counted in the printed prediction, which is a reading,
+    /// not a check (see the bound on depth below).
+    const SCALE: f64 = 10.0;
+    /// Seconds of `dots-full.wav` sent.
+    const T: f64 = 120.0;
+
+    /// Counts the samples the service actually fed on `you`: depth is what was sent minus this.
+    struct Counting<X> {
+        inner: X,
+        fed: Arc<AtomicU64>,
+    }
+
+    impl<X: Transcriber> Transcriber for Counting<X> {
+        fn feed(&mut self, channel: Channel, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
+            if channel == Channel::You {
+                self.fed.fetch_add(pcm_16k.len() as u64, Ordering::Relaxed);
+            }
+            self.inner.feed(channel, pcm_16k, sink)
+        }
+        fn finish(&mut self, sink: &mut dyn TranscriptSink) -> Result<()> {
+            self.inner.finish(sink)
+        }
+    }
+
+    /// The segments the adapter cuts from `audio`, decoded instantly: what a model that keeps up
+    /// would commit, to hold the slow run's commits against.
+    ///
+    /// The reference goes through the same adapter, so a loss that happens whatever the speed is
+    /// invisible here; what this proves is that **being slow loses nothing**, which is the claim:
+    /// the dropping it replaces fired only on a model that had fallen behind. Its control drops
+    /// segments only when the decoder is slow. Since that dropping could never fire, this check
+    /// held at the previous commit too: it guards against a speed-dependent loss coming back.
+    ///
+    /// `BenchSink` is built here by hand, as `start_transcription_task` builds it on both of its
+    /// branches; that both branches do is read from source, not driven.
+    fn segments_of(audio: &[f32]) -> Vec<String> {
+        let sink = FakeSink::default();
+        let recorded = sink.0.clone();
+        let mut t = SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0, seconds_per_second: 0.0 }).unwrap();
+        let mut sink = sink;
+        for w in audio.chunks(800) {
+            t.feed(Channel::You, w, &mut sink).unwrap();
+            t.feed(Channel::Others, &vec![0.0; w.len()], &mut sink).unwrap();
+        }
+        t.finish(&mut sink).unwrap();
+        let committed = recorded.lock().unwrap().committed.clone();
+        committed
+    }
+
+    #[test]
+    fn a_segmented_model_slower_than_real_time_is_warned_about_and_loses_nothing() {
+        let all = read_wav_mono_16k(&pinned_sample("dots-full.wav"));
+        let audio = &all[..(T * 16_000.0) as usize];
+        // The adapter's own cost per second of audio (Silero, mostly), decoding instantly.
+        let timed = Instant::now();
+        let expected_rows = segments_of(audio);
+        let c = timed.elapsed().as_secs_f64() / T;
+        let speech: u64 = expected_rows.iter().map(|r| r.trim_end_matches(" samples").parse::<u64>().unwrap()).sum();
+        let f = speech as f64 / audio.len() as f64;
+        assert!(K * f >= 1.5, "inconclusive: k·f = {:.2} (f = {f:.2}), under 1.5, so this run cannot fall behind enough to mean anything", K * f);
+
+        let (tx, rx) = feed_channel();
+        let (rx, clock) = rx.into_parts();
+        let fake = FakeSink::default();
+        let recorded = fake.0.clone();
+        // As the composition root builds every live sink.
+        let sink = BenchSink::new(fake, clock.clone());
+        let fed = Arc::new(AtomicU64::new(0));
+        let transcriber = Counting {
+            inner: SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0, seconds_per_second: K / SCALE }).unwrap(),
+            fed: fed.clone(),
+        };
+        let consumer = std::thread::spawn(move || service::run(transcriber, sink, rx));
+
+        let start = Instant::now();
+        for (i, w) in audio.chunks(800).enumerate() {
+            let due = start + Duration::from_secs_f64(i as f64 * 0.05 / SCALE);
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            tx.send_window(window(w.to_vec(), tx.sent_samples())).unwrap();
+        }
+        let depth = (clock.samples() - fed.load(Ordering::Relaxed)) as f64 / 16_000.0;
+        drop(tx);
+        consumer.join().unwrap();
+
+        let log = recorded.lock().unwrap();
+        // Per second of audio the consumer spends c on the adapter plus K·f/SCALE asleep, against
+        // the sender's 1/SCALE, so it runs at K·f + c·SCALE times the sender's pace.
+        let effective = K * f + c * SCALE;
+        let predicted = T * (1.0 - 1.0 / effective);
+        eprintln!(
+            "f {f:.3}, k·f {:.2}, adapter {c:.4} s per audio s, effective {effective:.2}; depth when sending ended {depth:.1} s, predicted {predicted:.1} s; {} rows of {} expected; warnings {:?}",
+            K * f, log.committed.len(), expected_rows.len(), log.warnings
+        );
+        assert!(depth >= 30.0, "the run fell only {depth:.1} s behind, so it says nothing about a backlog");
+        // Bounded by what was sent, whatever the machine's load: a clock counting both channels reads
+        // about 2T - fed. The prediction above is printed, not asserted: it moved with the load on
+        // CI runners (Linux measured the adapter at 0.105 s per audio second in a full parallel
+        // `cargo test`, and predicted 80.5 s against 71.2), and the clock's exact rate is held by
+        // `the_transcription_clock_advances_by_one_channel_per_window` instead.
+        assert!(depth <= T, "depth {depth:.1} s is more than the {T} s sent: the clock counts more than one channel");
+        assert_eq!(log.committed, expected_rows, "every segment committed, in order, none shed");
+        assert!(!log.warnings.iter().any(|w| w.contains("skipped")), "audio was shed: {:?}", log.warnings);
+        let behind: Vec<&String> = log.warnings.iter().filter(|w| w.contains("behind what you are saying")).collect();
+        assert_eq!(behind.len(), 1, "one warning that the transcript is behind: {:?}", log.warnings);
     }
 }

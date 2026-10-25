@@ -21,12 +21,21 @@ pub fn pinned_engine_revision() -> String {
     rev
 }
 
+/// The user's home directory: `HOME`, or `USERPROFILE` where Windows sets no `HOME` (windows-latest
+/// does not, #209).
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .expect("HOME or USERPROFILE is set")
+}
+
 /// `samples/<name>` in the checkout of the pinned revision. Cargo names a checkout by the first seven
-/// digits of its revision.
+/// digits of its revision, under `CARGO_HOME` when it is set, as cargo itself reads it.
 pub fn pinned_sample(name: &str) -> PathBuf {
     let short = &pinned_engine_revision()[..7];
-    let home = std::env::var("HOME").expect("HOME is set");
-    let checkouts = Path::new(&home).join(".cargo/git/checkouts");
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home_dir().join(".cargo"));
+    let checkouts = cargo_home.join("git").join("checkouts");
     let found = std::fs::read_dir(&checkouts)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", checkouts.display()))
         .filter_map(|d| d.ok())
@@ -39,7 +48,7 @@ pub fn pinned_sample(name: &str) -> PathBuf {
 /// A model file by its catalogue filename, from the stated directory.
 pub fn measure_model(filename: &str) -> PathBuf {
     let dir = std::env::var("BC_MEASURE_MODELS").map(PathBuf::from).unwrap_or_else(|_| {
-        Path::new(&std::env::var("HOME").expect("HOME is set")).join(".cache/backchannel-measure-models")
+        home_dir().join(".cache").join("backchannel-measure-models")
     });
     let path = dir.join(filename);
     assert!(path.is_file(), "{} is not on disk; put the model there or set BC_MEASURE_MODELS", path.display());
