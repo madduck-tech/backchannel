@@ -32,6 +32,18 @@ const ROWS = [...catalogue.matchAll(/TranscribeModel \{([\s\S]*?)\n    \}/g)]
   }));
 assert.equal(ROWS.length, 3, `precondition: the catalogue lists ${ROWS.length} moonshine_streaming rows, expected 3`);
 
+// Settings renders the catalogue in file order (`sortModels('catalog')` returns it unchanged). The
+// generator sorted by `streaming`, so relabelling these rows moved them from rows 1-3 to 39-41 of 86, a
+// change nobody decided (#200's gate). They keep their place among the natively streaming rows, ahead
+// of every batch row; `canary-180m-flash-q8` is the first batch row by name.
+const ORDER = [...catalogue.matchAll(/TranscribeModel \{([\s\S]*?)\n    \}/g)].map((m) => m[1].match(/name: "([^"]+)"/)[1]);
+assert.equal(ORDER.length, 86, `precondition: the catalogue has ${ORDER.length} rows, expected 86`);
+const firstBatch = ORDER.indexOf('canary-180m-flash-q8');
+assert.ok(firstBatch > 0, 'precondition: canary-180m-flash-q8 is in the catalogue');
+for (const row of ROWS) {
+  assert.ok(ORDER.indexOf(row.name) < firstBatch, `${row.name} is row ${ORDER.indexOf(row.name) + 1} of ${ORDER.length}, after the first batch row (${firstBatch + 1}): Settings would show it among the batch models`);
+}
+
 const model = (r) => ({
   path: `/m/${r.name}.gguf`, accuracy: 'Good', wer: 3, wer_set: 'LibriSpeech test-clean', speed: 'Very Fast', status: 'Missing',
   description: r.family, languages: ['en'], recommended: true, diarizes: false, ...r,

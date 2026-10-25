@@ -65,8 +65,9 @@ STREAMING = {
 # Rows that stream natively but whose stream is capped (`max_audio_ms` 81 920 for
 # moonshine_streaming), so the application decodes them in VAD segments and the
 # `streaming` field, which labels how text arrives, is false for them (#200).
-# Their speed label still reads the native streaming above: a speed change was
-# nobody's decision. `live_path` reads the cap from the GGUF, and the drift
+# Their speed label and their place in the file (which Settings renders in
+# order) still read the native streaming above: neither change was anybody's
+# decision. `live_path` reads the cap from the GGUF, and the drift
 # guard in `transcribe_engine::measurements` holds the two in agreement.
 CAPPED_STREAMS = {
     "moonshine-streaming-tiny",
@@ -350,6 +351,7 @@ def entries_for(quants):
                 "wer_set": wer_set if wer is not None else "",
                 "speed": speed_of(size_mb, native),
                 "streaming": streaming,
+                "native": native,
                 "languages": gguf_languages(repo, filename),
                 "description": f"{family}{note}",
             }
@@ -402,7 +404,7 @@ def main():
     for card in cards:
         entries.extend(entries_for(parse_card(card)))
     # Recommended-first ordering is a UI concern; keep the file deterministic.
-    entries.sort(key=lambda e: (not e["streaming"], e["name"]))
+    entries.sort(key=lambda e: (not e["native"], e["name"]))
 
     source = CONFIG_RS.read_text(encoding="utf-8")
     start, end = source.index(BEGIN), source.index(END) + len(END)

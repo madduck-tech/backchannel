@@ -58,6 +58,8 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 #             catalogue, not on the recommended list it also sits on, and the pass does not summarise.
 #             What it leaves alone: small only (tiny and medium reach first run through the instrument
 #             `a_capped_stream_keeps_the_whole_meeting`), the CPU, and the same sample on both channels.
+#             What its seeding hides: the first-run download of the 189 MB row, which is on disk before
+#             first run starts.
 #   empty     moonshine-tiny-q8 (34 MB). The **larger** half of #162 and the one the other two cannot
 #             reach: both of them build token rows, so reverting the `tokens.is_empty()` guard turns
 #             neither red. 53 of the catalogue's 86 rows come from an architecture that builds none,
