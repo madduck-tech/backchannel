@@ -550,21 +550,31 @@ done
 [ -n "$SUMMARY" ] || die "no summary after $((${BC_CORE_SUMMARY_SECONDS:-420}))s; the screen ends: $(text | tail -c 300 | tr '\n' ' ')"
 
 # A summary that exists is not a summary that says anything: the panel renders its headings whether or
-# not the model wrote under them, so the assertion is on prose the model produced.
+# not the model wrote under them, so the assertion is on prose the model produced. Counted from the
+# editor's blocks, without headings, without the template's section titles (bold paragraphs, not
+# headings) and without "None noted in this section", so a summary of titles alone stays under the bar.
+# Before #171's second round this counted the panel's whole text, controls and titles included: 90
+# characters of controls plus 50 of titles passed a bar of 120 with no prose at all.
 #
 # "Regenerate Summary" appears as soon as the summary's data arrives (`hasSummary={!!aiSummary}`), and the
 # editor parses the markdown into blocks after that. So its appearance is true before the text is on
 # screen: #171's gate read the panel at that moment and found 90 characters of controls, while the
 # summary had been written and stored. Wait for the prose itself, and fail only if it never comes.
+PROSE_JS='"return [...document.querySelectorAll(\"[data-content-type]\")].filter(b => b.getAttribute(\"data-content-type\") !== \"heading\").map(b => (b.textContent || \"\").trim()).filter(t => t && ![\"Summary\", \"Key Decisions\", \"Action Items\", \"Discussion Highlights\"].includes(t) && !/^None noted/i.test(t)).join(\" \")"'
 BODY=""; LEN=0
 for _ in $(seq 1 30); do
-  BODY=$(text | sed -n '/Regenerate Summary/,$p' | tr '\n' ' ')
-  LEN=$(printf '%s' "$BODY" | tr -d ' ' | wc -c)
+  # `js` prints the driver's value as JSON. Only a string is prose: an error object is longer than the
+  # bar, and a driver's refusal is a result (#160), not text.
+  RAW=$(js "$PROSE_JS")
+  BODY=$(python3 -I -c 'import json,sys
+v = json.loads(sys.argv[1])
+sys.exit(3) if not isinstance(v, str) else print(v)' "$RAW") || die "the driver did not return the summary's prose: $(printf '%s' "$RAW" | cut -c1-300)"
+  LEN=$(printf '%s' "$BODY" | tr -d '[:space:]' | wc -c)
   [ "$LEN" -ge 120 ] && break
   sleep 1
 done
-[ "$LEN" -ge 120 ] || die "the summary panel is on screen but holds only $LEN characters of text after 30 s: '$BODY'"
-say "a summary was written, $LEN characters: $(printf '%s' "$BODY" | cut -c1-200)"
+[ "$LEN" -ge 120 ] || die "the summary panel is on screen but its blocks hold only $LEN characters of prose after 30 s: '$BODY'"
+say "a summary was written, $LEN characters of prose: $(printf '%s' "$BODY" | cut -c1-200)"
 
 # --- what the summary's action items carry (#171) -------------------------------------------------
 #
@@ -595,8 +605,10 @@ except Exception:
   READING=$(printf '%s' "$MD" | (cd "$(dirname "$0")/../frontend/src-tauri" && cargo run -q --example due_slots -- no-date)) \
     || die "the counter's example did not run over the stored summary"
   say "the stored summary's action items, counted with no stated date: $READING"
+  # The markdown itself, so the record holds what was counted (the first conclusive draw did not).
+  printf '%s\n' "--- the stored summary's markdown ---" "$MD" "---"
   field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$READING" "$1"; }
-  ITEMS=$(field items); HITS=$(field hits); CONCLUSIVE=$(field conclusive)
+  ITEMS=$(field items); HITS=$(field hits); CONCLUSIVE=$(field conclusive); HEADERLESS=$(field headerless_rows)
   # The page's list blocks between the Action Items title and the next section's title, as a
   # cross-check that the counter and the person see the same items. Block types read from
   # BlockNote 0.53.0's `data-content-type`.
@@ -604,10 +616,11 @@ except Exception:
   say "the page shows $DOM_ITEMS list blocks under Action Items"
   [ "$DOM_ITEMS" = "$ITEMS" ] || die "the counter read $ITEMS action items in the stored markdown and the page shows $DOM_ITEMS"
   if [ "$CONCLUSIVE" != True ]; then
-    DUE_NOTE="; due slots inconclusive, the summary has no action items"
-    say "due slots: inconclusive -- the summary has no action items, so this draw says nothing about them"
+    if [ "$ITEMS" = 0 ]; then WHY="the summary has no action items"; else WHY="$HEADERLESS table rows have no header, so no cell is known to be the due date"; fi
+    DUE_NOTE="; due slots INCONCLUSIVE ($WHY), not a result"
+    say "due slots: INCONCLUSIVE -- $WHY, so this draw says nothing about them"
   else
-    [ "$HITS" = 0 ] || die "$HITS of $ITEMS action items carry a due slot the recording never stated: $(printf '%s' "$MD" | grep -iE '(due|deadline)[^:]*:' | head -3 | tr '\n' ' ')"
+    [ "$HITS" = 0 ] || die "$HITS of $ITEMS action items carry a due slot or a date the recording never stated (the markdown is printed above)"
     DUE_NOTE="; no action item carries a due slot"
     say "due slots: none of $ITEMS action items carries one"
   fi

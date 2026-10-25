@@ -8,14 +8,25 @@
 //! heading (`**Action Items**` or `## Action Items`) and the next heading. The Summary and Discussion
 //! sections mention the same tasks in prose and are never read.
 //!
-//! **A slot** is a labelled value: `due:`, `due date:` or `deadline:`, case-insensitive, in a list item
-//! outside its `ref: "…"` quote; or the Due Date cell of a table row. The bare word is never a slot,
-//! so "postponed due to rain" is not one. A filler under any other label is missed.
+//! **A slot** is a labelled value: `due:`, `due date:` or `deadline:`, case-insensitive and with any
+//! `*`/`_` emphasis around it, in a list item outside its quotes; or the Due Date (or Due, or
+//! Deadline) cell of a table row. The bare word is never a slot, so "postponed due to rain" is not
+//! one. A filler under any other label is missed, and so is a label with no colon (`(due TBD)`).
 //!
 //! **A list item may carry its date in the task text.** The product owner chose "Send the budget by
 //! November 7" over a separate `(due: …)` field on 2026-10-25 (#171). So in a list item, the stated
-//! date anywhere outside the ref quote is kept, and any date outside it on an undated item is a hit,
-//! as a filled slot is. A table keeps its Due Date column, and there the cell is what counts.
+//! date anywhere outside its quotes is kept, and on an undated item any slot at all, whatever it holds,
+//! or any date or deadline outside the quotes, is a hit: the format has no slot, so `(due: —)` is one
+//! the model wrote. A deadline is read in relative words too ("by Friday", "next week", "within 3
+//! days"). A table keeps its Due Date column, and there the cell is what counts.
+//!
+//! **Quotes are the transcript's text**, straight or curly, with or without `ref:` and a timestamp
+//! before them, and are never read for a date. An unquoted reference is read as the item's own text.
+//!
+//! **Not read**, so missed: a table whose rows have no delimiter row under a header (the run is
+//! inconclusive instead, because no cell is known to be the due date), and an item under a bold
+//! sub-heading inside Action Items, which ends the section. Both fail toward "inconclusive" or toward
+//! Stage 2's DOM cross-check, not toward a pass.
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -47,6 +58,8 @@ pub struct Reading {
     pub invented_year: bool,
     /// Table cells left empty instead of carrying the agreed blank.
     pub nonconforming_blanks: usize,
+    /// Table rows with no header row above them, so no cell is known to be the due date.
+    pub headerless_rows: usize,
     /// Whether this run says anything: keyword mode needs a budget item and a venue item, and no item
     /// holding both; no-date mode needs at least one item.
     pub conclusive: bool,
@@ -54,41 +67,73 @@ pub struct Reading {
 
 static SLOT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(?:due date|due|deadline)\s*:\s*([^)—]*)").unwrap());
-static REF_QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\bref:\s*"[^"]*""#).unwrap());
+/// A `ref:` label with the timestamp that may follow it, and every quoted span, straight or curly.
+static QUOTES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\bref:\s*(?:\[[^\]]*\]\s*)?|"[^"]*"|“[^”]*”"#).unwrap());
 static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:#{1,6}\s+.+|\*\*[^*]+\*\*\s*)$").unwrap());
 static ACTION_HEADING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^\s*(?:#{1,6}\s+action items\s*|\*\*action items\*\*\s*)$").unwrap());
-static BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?").unwrap());
+static BULLET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?").unwrap());
 static MONTH: &str = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+/// Full month names for a month standing alone ("in December"). `May` only capitalised, so the verb
+/// is not read as one.
+static FULL_MONTH: &str = r"(?:january|february|march|april|(?-i:May)|june|july|august|september|october|november|december)";
 static STATED_DATE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:nov(?:ember)?\.?\s+0?7(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?|0?7(?:st|nd|rd|th)?\s+nov(?:ember)?\.?(?:,?\s+(\d{4}))?|11/0?7(?:/(\d{2,4}))?)\b").unwrap()
+    Regex::new(r"(?i)\b(?:nov(?:ember)?\.?\s+0?7(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?|0?7(?:st|nd|rd|th)?\s+nov(?:ember)?\.?(?:,?\s+(\d{4}))?|11/0?7(?:/(\d{2,4}))?|(?:the\s+)?0?7(?:st|nd|rd|th)?\s+of\s+nov(?:ember)?\.?(?:,?\s+(\d{4}))?|nov(?:ember)?\.?\s+the\s+0?7(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?)\b").unwrap()
 });
+/// Every date form read. Order matters (leftmost-first): a bare year is tried last, so it never takes
+/// the year off an ISO or a numeric date, and a month after `by`/`in` takes its day with it, so "by
+/// November 7" is read whole and is the stated date.
 static ANY_DATE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
-        r"(?i)\b(?:{MONTH}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{1,2}}(?:st|nd|rd|th)?\s+{MONTH}\.?(?:,?\s+\d{{4}})?|\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?)\b"
+        r"(?i)\b(?:(?:the\s+)?\d{{1,2}}(?:st|nd|rd|th)?\s+of\s+{MONTH}\.?(?:,?\s+\d{{4}})?|{MONTH}\.?\s+the\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|{MONTH}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{1,2}}(?:st|nd|rd|th)?\s+{MONTH}\.?(?:,?\s+\d{{4}})?|\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?|{FULL_MONTH}\s+\d{{4}}|(?:by|in|before|until|end\s+of)\s+{FULL_MONTH}(?:\s+(?:the\s+)?\d{{1,2}}(?:st|nd|rd|th)?)?(?:,?\s+\d{{4}})?|(?:19|20)\d{{2}})\b"
     ))
     .unwrap()
+});
+/// A deadline in relative words, read in list items only: a standup is about today and yesterday.
+static RELATIVE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tonight|tomorrow|next\s+(?:week|month|year|quarter|sprint)|this\s+(?:week|month|weekend|sprint)|end\s+of\s+(?:the\s+)?(?:day|week|month|year|quarter|sprint)|eod|eow|(?:within|in)\s+(?:a|an|one|two|three|four|five|\d+)\s+(?:hours?|days?|weeks?|months?))\b").unwrap()
 });
 
 /// The stated date, November 7, in an accepted form, and whether a year came with it.
 fn stated_date(text: &str) -> Option<bool> {
-    STATED_DATE.captures(text).map(|c| c.get(1).or(c.get(2)).or(c.get(3)).is_some())
+    STATED_DATE.captures(text).map(|c| (1..=5).any(|i| c.get(i).is_some()))
+}
+
+/// A line with its `*` and `_` emphasis removed, so `**Due date**:` reads as `Due date:`.
+fn plain(text: &str) -> String {
+    text.replace(['*', '_'], "")
+}
+
+fn cells(line: &str) -> Vec<String> {
+    line.trim().trim_matches('|').split('|').map(|c| c.trim().to_string()).collect()
+}
+
+fn is_delimiter(line: &str) -> bool {
+    cells(line).iter().all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':'))
 }
 
 /// An action item: the text a slot is read from, and the text the keywords are read from.
 enum Item {
     List(String),
-    Row { cells: Vec<String>, due: Option<usize> },
+    /// `due` is the due column, when a header names one; `headed` is false for a row with no header.
+    Row { cells: Vec<String>, due: Option<usize>, headed: bool },
 }
 
 fn action_items(markdown: &str) -> Vec<Item> {
+    let lines: Vec<&str> = markdown.lines().collect();
     let mut items = Vec::new();
     let mut inside = false;
-    let mut due_column: Option<Option<usize>> = None;
-    for line in markdown.lines() {
+    // The indent of the list item that later, deeper lines belong to.
+    let mut item_indent: Option<usize> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        i += 1;
         if ACTION_HEADING.is_match(line) {
             inside = true;
-            due_column = None;
+            item_indent = None;
             continue;
         }
         if inside && HEADING.is_match(line) {
@@ -99,20 +144,40 @@ fn action_items(markdown: &str) -> Vec<Item> {
             continue;
         }
         let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
         if trimmed.starts_with('|') {
-            let cells: Vec<String> = trimmed.trim_matches('|').split('|').map(|c| c.trim().to_string()).collect();
-            if cells.iter().all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':')) {
-                continue; // the separator row
+            item_indent = None;
+            // The whole table: a header only when a delimiter row follows it (GFM).
+            let mut block = vec![line];
+            while i < lines.len() && lines[i].trim().starts_with('|') {
+                block.push(lines[i]);
+                i += 1;
             }
-            match due_column {
-                None => {
-                    // The header row names the columns.
-                    due_column = Some(cells.iter().position(|c| c.trim_matches('*').trim().eq_ignore_ascii_case("due date")));
-                }
-                Some(due) => items.push(Item::Row { cells, due }),
+            let headed = block.len() > 1 && is_delimiter(block[1]);
+            let due = headed
+                .then(|| {
+                    cells(block[0]).iter().position(|c| {
+                        let c = plain(c);
+                        let c = c.trim();
+                        ["due date", "due", "deadline"].iter().any(|l| c.eq_ignore_ascii_case(l))
+                    })
+                })
+                .flatten();
+            let rows = if headed { &block[2..] } else { &block[..] };
+            for row in rows.iter().filter(|r| !is_delimiter(r)) {
+                items.push(Item::Row { cells: cells(row), due, headed });
             }
-        } else if BULLET.is_match(line) {
+        } else if BULLET.is_match(line) && item_indent.is_none_or(|parent| indent <= parent) {
+            item_indent = Some(indent);
             items.push(Item::List(BULLET.replace(line, "").to_string()));
+        } else if !trimmed.is_empty() && item_indent.is_some_and(|parent| indent > parent) {
+            // A nested bullet or a continuation line: part of the item above it.
+            if let Some(Item::List(text)) = items.last_mut() {
+                text.push(' ');
+                text.push_str(&BULLET.replace(line, ""));
+            }
+        } else if !trimmed.is_empty() {
+            item_indent = None;
         }
     }
     items
@@ -122,7 +187,7 @@ impl Item {
     fn text(&self) -> String {
         match self {
             Item::List(t) => t.clone(),
-            Item::Row { cells, due } => cells
+            Item::Row { cells, due, .. } => cells
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| Some(*i) != *due)
@@ -132,27 +197,43 @@ impl Item {
         }
     }
 
-    /// A list item's text outside its `ref: "…"` quote; a table row's cells other than Due Date.
+    /// A list item's text outside its quotes; a table row's cells other than Due Date.
     fn own_text(&self) -> String {
         match self {
-            Item::List(t) => REF_QUOTE.replace_all(t, "").to_string(),
+            Item::List(t) => QUOTES.replace_all(t, "").to_string(),
             Item::Row { .. } => self.text(),
         }
     }
 
-    /// A date in the item's own text, for a list item: the product owner's format puts it there.
+    /// A date or a deadline in the item's own text, for a list item: the product owner's format puts
+    /// it there.
     fn dates_in_text(&self) -> bool {
-        matches!(self, Item::List(_)) && ANY_DATE.is_match(&self.own_text())
+        matches!(self, Item::List(_)) && {
+            let own = self.own_text();
+            ANY_DATE.is_match(&own) || RELATIVE.is_match(&own)
+        }
     }
 
     /// What the due slot holds: `Some("")` for an empty table cell, `None` with no slot at all.
     fn slot(&self) -> Option<String> {
         match self {
-            Item::List(t) => {
-                let outside = REF_QUOTE.replace_all(t, "");
-                SLOT.captures(&outside).map(|c| c[1].trim().to_string())
+            Item::List(_) => SLOT.captures(&plain(&self.own_text())).map(|c| c[1].trim().to_string()),
+            Item::Row { cells, due, .. } => due.and_then(|i| cells.get(i)).map(|c| c.trim().to_string()),
+        }
+    }
+
+    /// Whether an undated item carries a value the meeting did not state. A list item's slot is one
+    /// whatever it holds; a table cell is one unless it holds the agreed blank.
+    fn hit(&self, r: &mut Reading) -> bool {
+        match (self, self.slot().as_deref()) {
+            (Item::List(_), Some(_)) => true,
+            (Item::List(_), None) => self.dates_in_text(),
+            (Item::Row { .. }, Some("")) => {
+                r.nonconforming_blanks += 1;
+                false
             }
-            Item::Row { cells, due } => due.and_then(|i| cells.get(i)).map(|c| c.trim().to_string()),
+            (Item::Row { .. }, Some(v)) => v != BLANK,
+            (Item::Row { .. }, None) => false,
         }
     }
 }
@@ -161,17 +242,14 @@ impl Item {
 pub fn read(markdown: &str, mode: Mode) -> Reading {
     let items = action_items(markdown);
     let mut r = Reading { items: items.len(), ..Reading::default() };
+    r.headerless_rows = items.iter().filter(|i| matches!(i, Item::Row { headed: false, .. })).count();
     let has = |item: &Item, word: &str| item.text().to_lowercase().contains(word);
     match mode {
         Mode::NoDate => {
-            r.conclusive = !items.is_empty();
+            r.conclusive = !items.is_empty() && r.headerless_rows == 0;
             for item in &items {
-                match item.slot().as_deref() {
-                    None if item.dates_in_text() => r.hits += 1,
-                    None => {}
-                    Some("") => r.nonconforming_blanks += 1,
-                    Some(v) if v == BLANK => {}
-                    Some(_) => r.hits += 1,
+                if item.hit(&mut r) {
+                    r.hits += 1;
                 }
             }
         }
@@ -179,14 +257,10 @@ pub fn read(markdown: &str, mode: Mode) -> Reading {
             let budget: Vec<&Item> = items.iter().filter(|i| has(i, "budget")).collect();
             let venue: Vec<&Item> = items.iter().filter(|i| has(i, "venue")).collect();
             let both = items.iter().any(|i| has(i, "budget") && has(i, "venue"));
-            r.conclusive = !budget.is_empty() && !venue.is_empty() && !both;
+            r.conclusive = !budget.is_empty() && !venue.is_empty() && !both && r.headerless_rows == 0;
             for item in &venue {
-                match item.slot().as_deref() {
-                    None if item.dates_in_text() => r.hits += 1,
-                    None => {}
-                    Some("") => r.nonconforming_blanks += 1,
-                    Some(v) if v == BLANK => {}
-                    Some(_) => r.hits += 1,
+                if item.hit(&mut r) {
+                    r.hits += 1;
                 }
             }
             let mut kept = false;
@@ -340,6 +414,109 @@ mod tests {
         assert_eq!((r.items, r.conclusive), (0, false), "{r:?}");
     }
 
+    // Cases 13 to 22 are the shapes the gate's adversary fed the counter at `0e8b8a3`, every one of
+    // which it read wrong. Each was red before the counter changed.
+    const VENUE_QUOTE: &str = "ref: \"Someone should look at the venue.\" [00:12]";
+
+    /// A list item's slot is a hit whatever it holds: the format omits the slot, so the agreed blank,
+    /// or nothing, is still a slot the model wrote.
+    #[test]
+    fn case_13_any_slot_on_a_list_item_is_a_hit() {
+        for slot in ["(due: —)", "(due: )", "(deadline: TBD)"] {
+            let item = format!("- [ ] Look at the venue {slot} — {VENUE_QUOTE}");
+            let r = read(&list(&[BUDGET_DATED, &item]), Mode::Keyword);
+            assert_eq!((r.hits, r.conclusive), (1, true), "{slot}: {r:?}");
+            assert_eq!(read(&list(&[&item]), Mode::NoDate).hits, 1, "{slot} in no-date mode");
+        }
+    }
+
+    #[test]
+    fn case_14_emphasis_around_the_label_is_still_a_slot() {
+        for item in ["- [ ] Look at the venue — **Due date**: None", "- [ ] Look at the venue (*Due*: TBD)", "- [ ] Look at the venue (__deadline__: unknown)"] {
+            assert_eq!(read(&list(&[BUDGET_DATED, item]), Mode::Keyword).hits, 1, "{item}");
+        }
+    }
+
+    #[test]
+    fn case_15_a_deadline_column_is_the_due_column() {
+        let md = "**Action Items**\n\n| Owner | Task | Deadline |\n| --- | --- | --- |\n| Anna | Send the budget | November 7 |\n| Someone | Look at the venue | None |\n";
+        let r = read(md, Mode::Keyword);
+        assert_eq!((r.hits, r.kept, r.conclusive), (1, Some(true), true), "{r:?}");
+    }
+
+    /// A table with no delimiter row has no header, so no cell can be told to be the due date. Read
+    /// in v1's retrospective run 1, where the first row was taken for a header.
+    #[test]
+    fn case_16_a_table_without_a_header_is_inconclusive() {
+        let md = "**Action Items**\n\n| **Anna** | Send the budget | November 7 | — |\n| **Others** | Look at the venue | None | — |\n| Sam | Book the venue | None | — |\n";
+        for mode in [Mode::Keyword, Mode::NoDate] {
+            let r = read(md, mode);
+            assert_eq!((r.items, r.headerless_rows, r.conclusive), (3, 3, false), "{mode:?}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn case_17_a_nested_line_belongs_to_its_item() {
+        let md = list(&[BUDGET_DATED, "- [ ] Look at the venue", "  - Due: None"]);
+        let r = read(&md, Mode::Keyword);
+        assert_eq!((r.items, r.hits), (2, 1), "{r:?}");
+    }
+
+    #[test]
+    fn case_18_numbered_and_plus_items_are_items() {
+        for item in ["1. Look at the venue (due: None)", "2) Look at the venue (due: None)", "+ Look at the venue (due: None)"] {
+            let r = read(&list(&[BUDGET_DATED, item]), Mode::Keyword);
+            assert_eq!((r.items, r.hits), (2, 1), "{item}: {r:?}");
+        }
+    }
+
+    /// The product owner's format lets a date live in the task text, so an invented one can too: a
+    /// relative deadline on an undated item is a hit.
+    #[test]
+    fn case_19_a_relative_deadline_on_an_undated_item_is_a_hit() {
+        for when in ["by Friday", "by next week", "by the end of the month", "tomorrow", "within 3 days", "today", "this week"] {
+            let item = format!("- [ ] Look at the venue {when} — {VENUE_QUOTE}");
+            let r = read(&list(&[BUDGET_DATED, &item]), Mode::Keyword);
+            assert_eq!((r.hits, r.conclusive), (1, true), "{when}: {r:?}");
+            assert_eq!(read(&list(&[&item]), Mode::NoDate).hits, 1, "{when} in no-date mode");
+        }
+    }
+
+    #[test]
+    fn case_20_other_date_forms_are_dates() {
+        for when in ["by the 9th of November", "by November the 9th", "in December", "by October 2025", "in 2026"] {
+            let item = format!("- [ ] Look at the venue {when}");
+            assert_eq!(read(&list(&[BUDGET_DATED, &item]), Mode::Keyword).hits, 1, "{when}");
+        }
+        for stated in ["by the 7th of November", "by November the 7th"] {
+            let item = format!("- [ ] Send the budget {stated}");
+            assert_eq!(read(&list(&[&item, "- [ ] Look at the venue"]), Mode::Keyword).kept, Some(true), "{stated}");
+        }
+        let may = list(&[BUDGET_DATED, "- [ ] Someone may look at the venue"]);
+        assert_eq!(read(&may, Mode::Keyword).hits, 0, "the verb `may` is not a month");
+    }
+
+    /// The quote is the transcript's text, in whatever form the model writes it.
+    #[test]
+    fn case_21_a_quote_in_any_form_is_the_transcripts() {
+        for quote in ["ref: “Anna will send the budget by November 7.”", "ref: [00:05] \"Anna will send the budget by November 7.\"", "\"Anna will send the budget by November 7.\" [00:05]"] {
+            let item = format!("- [ ] Send the budget — {quote}");
+            assert_eq!(read(&list(&[&item, "- [ ] Look at the venue"]), Mode::Keyword).kept, Some(false), "{quote}");
+        }
+        let curly = list(&[BUDGET_DATED, "- [ ] Look at the venue — ref: “we met on November 9”"]);
+        assert_eq!(read(&curly, Mode::Keyword).hits, 0, "a date inside a curly quote is the transcript's");
+    }
+
+    #[test]
+    fn case_22_a_standup_reads_more_date_forms() {
+        let r = read_standup("**Today**\n\n- Send the budget by the 7th of November\n");
+        assert_eq!((r.conclusive, r.invented.len()), (true, 0), "{r:?}");
+        for text in ["- Send the budget by November 7, before October 2025", "- Send the budget by November 7 (Monday, 2024)"] {
+            let r = read_standup(text);
+            assert!(r.conclusive && !r.invented.is_empty(), "{text}: {r:?}");
+        }
+    }
+
     #[test]
     fn case_7_a_date_in_the_task_cell_is_not_kept() {
         let r = read(&table(&["| Anna | Send the budget by November 7 | — | — |", "| Someone | Look at the venue | — | — |"]), Mode::Keyword);
@@ -429,7 +606,7 @@ mod instrument {
         for (arm, path) in &arms {
             let t = template(path);
             let id = path.file_stem().unwrap().to_string_lossy().to_string();
-            let (mut conclusive, mut runs, mut hits, mut kept, mut years, mut blanks) = (0, 0, 0, 0, 0, 0);
+            let (mut conclusive, mut runs, mut hits, mut kept, mut years, mut blanks, mut headerless) = (0, 0, 0, 0, 0, 0, 0);
             let mut standup_invented: Vec<String> = Vec::new();
             while conclusive < 10 && runs < 15 {
                 runs += 1;
@@ -458,6 +635,7 @@ mod instrument {
                     let r = read(&markdown, Mode::Keyword);
                     eprintln!("{arm} run {runs}: {r:?}");
                     blanks += r.nonconforming_blanks;
+                    headerless += r.headerless_rows;
                     if r.conclusive {
                         conclusive += 1;
                         hits += usize::from(r.hits > 0);
@@ -465,13 +643,13 @@ mod instrument {
                         years += usize::from(r.invented_year);
                     }
                 }
-                if runs <= 2 {
-                    eprintln!("--- {arm} run {runs} markdown ---\n{markdown}\n---");
-                }
+                // Every run's markdown, so each reading can be checked against what the model wrote (the
+                // gate's adversary could check 2 of v3's 10).
+                eprintln!("--- {arm} run {runs} markdown ---\n{markdown}\n---");
             }
             let measured = runs - conclusive <= 5 && conclusive >= 10;
             eprintln!(
-                "== {arm}: {conclusive} conclusive of {runs} runs; runs with a hit {hits}; dated item kept {kept}; invented years {years}; non-compliant blanks {blanks}{}{}",
+                "== {arm}: {conclusive} conclusive of {runs} runs; runs with a hit {hits}; dated item kept {kept}; invented years {years}; non-compliant blanks {blanks}; headerless table rows {headerless}{}{}",
                 if measured { "" } else { " — NOT MEASURED (more than 5 inconclusive)" },
                 if standup_invented.is_empty() { String::new() } else { format!("; dates invented: {standup_invented:?}") }
             );

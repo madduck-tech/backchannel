@@ -21,7 +21,12 @@ fn main() {
     std::io::stdin().read_to_string(&mut markdown).expect("markdown on stdin");
     let r = read(&markdown, mode);
     println!(
-        "{{\"items\":{},\"hits\":{},\"conclusive\":{},\"nonconforming_blanks\":{}}}",
-        r.items, r.hits, r.conclusive, r.nonconforming_blanks
+        "{{\"items\":{},\"hits\":{},\"conclusive\":{},\"nonconforming_blanks\":{},\"headerless_rows\":{},\"kept\":{}}}",
+        r.items,
+        r.hits,
+        r.conclusive,
+        r.nonconforming_blanks,
+        r.headerless_rows,
+        r.kept.map_or("null".to_string(), |k| k.to_string())
     );
 }
