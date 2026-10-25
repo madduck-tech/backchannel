@@ -14,6 +14,7 @@
 // and the bugs that mattered were the ones only a user could find.
 
 pub mod adapters;
+pub mod sent_clock;
 pub mod ports;
 pub mod service;
 
@@ -64,14 +65,16 @@ pub fn live_path(capabilities: Option<&transcribe_cpp::Capabilities>) -> LivePat
 ///     `streaming` field only labels rows in the picker before download.
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    receiver: sent_clock::FeedReceiver,
 ) -> tokio::task::JoinHandle<()> {
+    // The channel, and the clock its sender keeps, which `BenchSink` measures lag against.
+    let (receiver, sent) = receiver.into_parts();
     tokio::spawn(async move {
         reset_speech_detected_flag();
 
         if let Some((provider, model)) = transcript_provider_config(&app).await {
             if crate::config::is_builtin_transcript_provider(&provider) {
-                run_builtin_audio_llm(app, receiver, model).await;
+                run_builtin_audio_llm(app, receiver, sent, model).await;
                 return;
             }
         }
@@ -126,7 +129,7 @@ pub fn start_transcription_task<R: Runtime>(
             // One wrap here covers both decode paths below, because both reach
             // the user through this sink. Instrumentation belongs at the
             // composition root for the same reason adapter choice does.
-            let sink = BenchSink::new(TauriSink::new(app.clone()));
+            let sink = BenchSink::new(TauriSink::new(app.clone()), sent);
 
             if streaming {
                 match crate::transcribe_engine::options::stream(&mut session, language, diarize, &StreamOptions::default()) {
@@ -185,6 +188,7 @@ async fn transcript_provider_config<R: Runtime>(app: &AppHandle<R>) -> Option<(S
 async fn run_builtin_audio_llm<R: Runtime>(
     app: AppHandle<R>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    sent: sent_clock::SentClock,
     model: String,
 ) {
     use crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL;
@@ -235,7 +239,7 @@ async fn run_builtin_audio_llm<R: Runtime>(
     // the handle rather than the whole loop becoming async.
     let handle = tokio::runtime::Handle::current();
     let joined = tokio::task::spawn_blocking(move || {
-        let sink = BenchSink::new(TauriSink::new(app.clone()));
+        let sink = BenchSink::new(TauriSink::new(app.clone()), sent);
         let decoder = Decoder::AudioLlm { handle, app_data_dir, model };
         match SegmentedTranscriber::new(decoder) {
             Ok(transcriber) => service::run(transcriber, sink, receiver),
