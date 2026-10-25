@@ -237,7 +237,11 @@ async fn measure(
         .open_session()
         .await
         .map_err(|e| format!("Failed to open transcription session: {e}"))?;
-    if !session.model().capabilities().is_ok_and(|c| c.supports_streaming) {
+    // The live path's own rule (#200): a capped stream is not streamed, so the probe would time
+    // a path recording never takes.
+    if crate::audio::transcription::live_path(session.model().capabilities().ok().as_ref())
+        != crate::audio::transcription::LivePath::Stream
+    {
         return Err("The loaded model does not stream. The probe times first *committed* text, \
                     and the VAD + batch path's latency floor is its 8s segment length, which \
                     would measure the segmenter rather than the capture path."

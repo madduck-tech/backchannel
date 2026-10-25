@@ -61,8 +61,8 @@ pub struct ModelInfo {
     pub speed: String,
     pub status: ModelStatus,
     pub description: String,
-    /// Whether the picker may offer this model for live recording without the
-    /// VAD-segmented fallback. Catalog metadata, so it is known before download.
+    /// Whether the application streams this model live rather than in VAD segments. Catalog
+    /// metadata, so it is known before download; `live_path` decides from the loaded model (#200).
     pub streaming: bool,
     /// The model's own advertised language codes, from the catalog's harvest of
     /// `general.languages`. The UI renders names from these and filters on them.
@@ -899,17 +899,22 @@ mod tests {
             TRANSCRIBE_MODEL_CATALOG.iter().any(|e| e.streaming),
             "no live-capable model left in the catalog"
         );
-        // The default is the one deliberate exception: it trades streaming for
-        // WER. Every other recommendation still has to stream, so a batch-only
-        // row cannot pick up the label by accident.
+        // Each recommendation streams, or is a named segment-mode row, so a batch-only row cannot
+        // pick up the label by accident. Before #200 this read "every other recommendation still
+        // has to stream", with the default as the one exception; the moonshine_streaming rows now
+        // decode in segments and are named instead.
         for name in RECOMMENDED_LIVE_MODELS {
             let m = transcribe_model(name).expect("recommended live model not in catalog");
             assert!(
-                m.streaming || *name == DEFAULT_TRANSCRIBE_MODEL,
-                "{} is recommended for live but cannot stream",
+                m.streaming || crate::config::SEGMENTED_LIVE_RECOMMENDATIONS.contains(name),
+                "{} is recommended for live but neither streams nor is a named segment-mode row",
                 name
             );
         }
+        assert!(
+            crate::config::SEGMENTED_LIVE_RECOMMENDATIONS.contains(&DEFAULT_TRANSCRIBE_MODEL),
+            "the default decodes in segments and must be named as such"
+        );
         for name in RECOMMENDED_IMPORT_MODELS {
             assert!(
                 transcribe_model(name).is_some(),

@@ -38,9 +38,11 @@ export const RECOMMENDED_TRANSCRIBE_MODELS: RecommendedTranscribeModel[] = [
     languages: '32 languages, including Chinese, Japanese, Korean, Arabic and Hindi',
   },
   {
+    // A streaming family, decoded in segments: its stream is capped at 81.9 s and kept only a
+    // meeting's first seconds (#200). The product owner kept it in the four, labelled honestly.
     id: 'moonshine-streaming-small-q8',
     mb: 189,
-    decode: 'streaming',
+    decode: 'batch',
     wer: 2.54,
     languages: 'English only',
   },

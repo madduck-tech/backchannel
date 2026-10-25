@@ -25,7 +25,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 say() { printf 'stage2-core: %s\n' "$*"; }
 die() { printf 'stage2-core: %s\n' "$*" >&2; exit 1; }
 
-APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty]"
+APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty|long]"
 MODE="${2:-scores}"
 PORT="${BC_CORE_PORT:-4448}"; NATIVE_PORT="${BC_CORE_NATIVE_PORT:-4449}"
 CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
@@ -49,6 +49,17 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 #             that fix is reverted. Russian-only, so the English sample comes back as phonetic
 #             Cyrillic -- correct behaviour of that model, and why this mode asserts that rows
 #             arrived rather than what they say.
+#   long      moonshine-streaming-small-q8 (189 MB), one of first run's four, over dots-full.wav (305 s)
+#             for about 150 s of recording. **#200's run.** That family streams natively, but one stream
+#             holds at most 81.9 s and committed only a meeting's first seconds, so the application
+#             decodes it in VAD segments. The oracle: rows whose recording-relative audio starts past
+#             100 s carry words, and the rows carry a channel, `you` among them, which only the
+#             segmented path writes (`streaming.rs` sets `channel: None`). The row is chosen in the
+#             catalogue, not on the recommended list it also sits on, and the pass does not summarise.
+#             What it leaves alone: small only (tiny and medium reach first run through the instrument
+#             `a_capped_stream_keeps_the_whole_meeting`), the CPU, and the same sample on both channels.
+#             What its seeding hides: the first-run download of the 189 MB row, which is on disk before
+#             first run starts.
 #   empty     moonshine-tiny-q8 (34 MB). The **larger** half of #162 and the one the other two cannot
 #             reach: both of them build token rows, so reverting the `tokens.is_empty()` guard turns
 #             neither red. 53 of the catalogue's 86 rows come from an architecture that builds none,
@@ -65,9 +76,18 @@ case "$MODE" in
   scores)   MODEL_ID="${BC_CORE_MODEL:-parakeet-tdt-0.6b-v3-q4}"; WORDS=(country "ask what you can do") ;;
   unscored) MODEL_ID="${BC_CORE_MODEL:-gigaam-v3-ctc-q8}";        WORDS=() ;;
   empty)    MODEL_ID="${BC_CORE_MODEL:-moonshine-tiny-q8}";       WORDS=(country "ask what you can do") ;;
-  *) die "unknown mode '$MODE' (scores|unscored|empty)" ;;
+  # No vocabulary: which words fall inside the recording depends on how long first run took to reach it.
+  long)     MODEL_ID="${BC_CORE_MODEL:-moonshine-streaming-small-q8}"; WORDS=() ;;
+  *) die "unknown mode '$MODE' (scores|unscored|empty|long)" ;;
 esac
-SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
+if [ "$MODE" = long ]; then
+  SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/dots-full.wav 2>/dev/null | head -1)}"
+  [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no dots-full.wav sample to play"
+  ls "$CACHE"/models/moonshine-streaming-small-Q8_0.gguf >/dev/null 2>&1 \
+    || die "no moonshine-streaming-small-Q8_0.gguf in $CACHE/models; this pass seeds its model and will not download inside a gate"
+else
+  SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
+fi
 
 [ -d "$CACHE/models/summary" ] || die "no summary model in $CACHE/models/summary; this pass summarises and will not download 2.7 GB inside a gate"
 [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample to play"
@@ -164,7 +184,7 @@ await "document.body.innerText.includes('Choose a transcription model')" "the fi
 # The recommended list is short and `gigaam` is not on it; the catalogue is where every family lives.
 # Opening it is also the only way this pass can reach a family that scores nothing, which is the whole
 # point of the `unscored` mode.
-if ! printf '%s' "$(text)" | grep -q -- "$MODEL_ID"; then
+if [ "$MODE" = long ] || ! printf '%s' "$(text)" | grep -q -- "$MODEL_ID"; then
   CAT=$(by_text "Browse every model")
   [ -n "$CAT" ] || die "$MODEL_ID is not among the recommended options and there is no 'Browse every model' button"
   click "$CAT" "the catalogue button"
@@ -394,8 +414,9 @@ R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording control"
 click "$R" "Start recording"
 await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
       'the recording to start' 30
-say "recording for ${BC_CORE_SECONDS:-70}s"
-sleep "${BC_CORE_SECONDS:-70}"
+RECORD_S="${BC_CORE_SECONDS:-$([ "$MODE" = long ] && echo 150 || echo 70)}"
+say "recording for ${RECORD_S}s"
+sleep "$RECORD_S"
 
 # --- the transcript, on screen ---------------------------------------------------------------------
 SCREEN=$(text)
@@ -488,6 +509,32 @@ sys.exit(0 if 0.0 <= lo <= hi <= 1.0 else 1)' "$CONF_MIN" "$CONF_MAX" \
       || die "the confidences in transcripts.json run $CONF_MIN..$CONF_MAX, which is not a probability"
     say "the sentinel holds: a real confidence is producible, and $WITH_CONF of $ROWS_JSON rows carry one"
     ;;
+  long)
+    # Before #200 the stream path held one stream for the whole meeting: past its 81.9 s cap it took
+    # nothing more, so no row started past 100 s, and every row carried `channel: None`.
+    python3 -I - "$STOPPED_JSON" <<'PY' || die "$MODEL_ID did not transcribe the whole recording (#200); the rows are above"
+import json, sys
+rows = json.load(open(sys.argv[1]))
+rows = rows if isinstance(rows, list) else rows.get("transcripts", rows.get("segments", []))
+late = [r for r in rows if (r.get("audio_start_time") or 0) > 100]
+late_words = sum(len((r.get("text") or "").split()) for r in late)
+channels = sorted({str(r.get("channel")) for r in rows})
+for r in rows[-6:]:
+    print(f"    {r.get('audio_start_time')!s:>8}s [{r.get('channel')}] {(r.get('text') or '')[:70]}")
+print(f"    {len(rows)} rows; {len(late)} start past 100 s, holding {late_words} words; channels {channels}")
+problems = []
+if late_words < 10:
+    problems.append(f"rows past 100 s hold {late_words} words; at least 10 are required")
+if any(r.get("channel") is None for r in rows):
+    problems.append("a row carries no channel, which only the stream path writes")
+if not any(r.get("channel") == "you" for r in rows):
+    problems.append("no row carries the `you` channel, the sentinel that the segmented path ran")
+for p in problems:
+    print("    FAILED: " + p)
+sys.exit(1 if problems else 0)
+PY
+    say "the whole recording was transcribed: rows past 100 s carry words, on the segmented path"
+    ;;
   unscored | empty)
     [ "$WITH_CONF" -eq 0 ] \
       || die "$WITH_CONF of $ROWS_JSON rows were persisted with a confidence, and $MODEL_ID scores nothing: a number nobody computed reached the disk (#162)"
@@ -525,6 +572,12 @@ python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) e
   || die "at $(bar room)px of room the bar must render Retranscribe, Speakers and Open folder; it renders [$(bar three)]"
 [ "$(bar trigger)" = False ] || die "at $(bar room)px of room the bar must render no \`•••\`; it does"
 say "the action bar is one row that fits, in the wide arrangement, in the application"
+
+if [ "$MODE" = long ]; then
+  PASSED=1
+  say "PASS (long) - $MODEL_ID chosen in first run's catalogue, and a ${RECORD_S}s recording of dots-full.wav was transcribed past its first 100 s, on the segmented path"
+  exit 0
+fi
 
 # --- the summary ------------------------------------------------------------------------------------
 # Waited for, not assumed. After Stop the meeting page renders a moment later, and the lookup used to
