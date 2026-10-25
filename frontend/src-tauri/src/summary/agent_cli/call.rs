@@ -794,9 +794,17 @@ mod tests {
     /// is still in the group and is killed with it, which closed the pipe and made the cancel test
     /// return `Empty` once in four full runs (measured).
     #[cfg(unix)]
+    ///
+    /// Through `perl`'s `setsid`, not the `setsid` command, which macOS does not have: there the loop
+    /// waited for a process that never started until the run's 300 s limit (CI, measured). If the
+    /// detached process does not come up within 5 s the fake exits 3, so a test cannot pass on a CLI
+    /// that left nothing behind.
     fn detached(dir: &Path) -> String {
         let up = dir.join("detached-up");
-        format!("setsid sh -c 'touch {u}; sleep 20' & while [ ! -e {u} ]; do sleep 0.05; done", u = up.display())
+        format!(
+            "perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c 'touch {u}; sleep 20' & i=0; while [ ! -e {u} ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; [ -e {u} ] || exit 3",
+            u = up.display()
+        )
     }
 
     /// The adversary's case (#212 round 3): the CLI answers and exits at once, leaving a process in
@@ -834,14 +842,18 @@ mod tests {
     async fn a_cancel_after_the_cli_exits_still_ends_the_wait() {
         let t = tempfile::tempdir().unwrap();
         let rec = t.path().join("rec");
-        let cli = fake_cli(t.path(), &rec, "", 0, &detached(t.path()));
-        // Cancelled after the CLI has exited and while its detached child still holds the output:
-        // a token cancelled before the run lets the first wait take it, which is not this case
-        // (measured: that version stayed green with the drain's cancel removed).
+        let exited = t.path().join("cli-exited");
+        let cli = fake_cli(t.path(), &rec, "", 0, &format!("{}; touch {}", detached(t.path()), exited.display()));
+        // Cancelled once the CLI has exited, while its detached child still holds the output. A token
+        // cancelled before the run lets the first wait take it (measured: that version stayed green
+        // with the drain's cancel removed), and one cancelled on a timer did the same wherever the
+        // detached child was slow to start (measured on a fake with no detached child at all).
         let token = CancellationToken::new();
         let t2 = token.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            while !exited.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
             t2.cancel();
         });
         let started = std::time::Instant::now();

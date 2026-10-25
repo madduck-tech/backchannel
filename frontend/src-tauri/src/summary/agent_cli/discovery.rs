@@ -198,8 +198,9 @@ mod tests {
         assert_eq!(found, None);
     }
 
+    /// `name` as the platform keeps it on disk (`claude.exe` on Windows), as `find` looks for it.
     fn exe(dir: &Path, name: &str, executable: bool) -> PathBuf {
-        let p = dir.join(name);
+        let p = dir.join(file_name(name));
         let mut f = std::fs::File::create(&p).unwrap();
         writeln!(f, "#!/bin/sh\nexit 0").unwrap();
         #[cfg(unix)]

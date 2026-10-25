@@ -205,6 +205,8 @@ mod tests {
         assert_eq!(v, serde_json::json!({"id": "codex", "found": "~/.local/bin/codex", "source": "LoginShell", "loggedIn": false}));
     }
 
+    /// Unix only: a login shell and a `:`-separated `PATH` are what it is about (Windows has neither).
+    #[cfg(unix)]
     #[test]
     fn the_childs_path_starts_with_the_binarys_directory_then_the_login_shells() {
         let p = child_path(std::path::Path::new("/home/u/.local/bin/claude"), Some("/home/u/.nvm/bin:/usr/bin"), Some(std::ffi::OsStr::new("/usr/bin")));
