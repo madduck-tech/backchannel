@@ -492,7 +492,8 @@ mod tests {
             let item = format!("- [ ] Send the budget {stated}");
             assert_eq!(read(&list(&[&item, "- [ ] Look at the venue"]), Mode::Keyword).kept, Some(true), "{stated}");
         }
-        let may = list(&[BUDGET_DATED, "- [ ] Someone may look at the venue"]);
+        // After `in`, where a month-alone reading would take it: the guard is what keeps the verb out.
+        let may = list(&[BUDGET_DATED, "- [ ] Check whether the venue we book in may change"]);
         assert_eq!(read(&may, Mode::Keyword).hits, 0, "the verb `may` is not a month");
     }
 

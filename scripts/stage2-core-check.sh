@@ -550,31 +550,36 @@ done
 [ -n "$SUMMARY" ] || die "no summary after $((${BC_CORE_SUMMARY_SECONDS:-420}))s; the screen ends: $(text | tail -c 300 | tr '\n' ' ')"
 
 # A summary that exists is not a summary that says anything: the panel renders its headings whether or
-# not the model wrote under them, so the assertion is on prose the model produced. Counted from the
-# editor's blocks, without headings, without the template's section titles (bold paragraphs, not
-# headings) and without "None noted in this section", so a summary of titles alone stays under the bar.
-# Before #171's second round this counted the panel's whole text, controls and titles included: 90
-# characters of controls plus 50 of titles passed a bar of 120 with no prose at all.
+# not the model wrote under them, so the assertion is on prose the model produced. `lib/summary-prose.js`
+# says what prose is (no headings, no all-bold titles in any language, no repeated placeholder) and
+# counts characters, not bytes; `summary-prose-oracle.test.mjs` runs the same file in jsdom. Its count
+# of titles is printed, as the sentinel that the titles were found in this build's editor at all.
+#
+# History: until #171 this counted the panel's whole text, so 90 characters of controls plus 50 of
+# titles passed a bar of 120 with no prose. #171's first fix filtered the four English titles and
+# counted bytes, which passed four translated titles alone in `unscored` (126 bytes, 63 letters).
 #
 # "Regenerate Summary" appears as soon as the summary's data arrives (`hasSummary={!!aiSummary}`), and the
 # editor parses the markdown into blocks after that. So its appearance is true before the text is on
 # screen: #171's gate read the panel at that moment and found 90 characters of controls, while the
 # summary had been written and stored. Wait for the prose itself, and fail only if it never comes.
-PROSE_JS='"return [...document.querySelectorAll(\"[data-content-type]\")].filter(b => b.getAttribute(\"data-content-type\") !== \"heading\").map(b => (b.textContent || \"\").trim()).filter(t => t && ![\"Summary\", \"Key Decisions\", \"Action Items\", \"Discussion Highlights\"].includes(t) && !/^None noted/i.test(t)).join(\" \")"'
-BODY=""; LEN=0
+PROSE_REQ=$(python3 -I -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/summary-prose.js)
+PROSE=""; LEN=0
 for _ in $(seq 1 30); do
-  # `js` prints the driver's value as JSON. Only a string is prose: an error object is longer than the
-  # bar, and a driver's refusal is a result (#160), not text.
-  RAW=$(js "$PROSE_JS")
-  BODY=$(python3 -I -c 'import json,sys
-v = json.loads(sys.argv[1])
-sys.exit(3) if not isinstance(v, str) else print(v)' "$RAW") || die "the driver did not return the summary's prose: $(printf '%s' "$RAW" | cut -c1-300)"
-  LEN=$(printf '%s' "$BODY" | tr -d '[:space:]' | wc -c)
+  # Only a JSON string from the script is an answer: an error object is longer than the bar, and a
+  # driver's refusal is a result (#160), not text.
+  PROSE=$(printf '%s' "$PROSE_REQ" | curl -s -m 30 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d @- \
+    | python3 -I -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+sys.exit(3) if not isinstance(v, str) else print(v)') || die "the driver did not return the summary's prose"
+  LEN=$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["chars"])' "$PROSE")
   [ "$LEN" -ge 120 ] && break
   sleep 1
 done
-[ "$LEN" -ge 120 ] || die "the summary panel is on screen but its blocks hold only $LEN characters of prose after 30 s: '$BODY'"
-say "a summary was written, $LEN characters of prose: $(printf '%s' "$BODY" | cut -c1-200)"
+prose() { python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$PROSE" "$1"; }
+[ "$LEN" -ge 120 ] || die "the summary panel is on screen but its blocks hold only $LEN characters of prose after 30 s ($(prose titles) titles, $(prose repeats) repeated blocks, $(prose blocks) blocks): '$(prose prose | cut -c1-300)'"
+say "a summary was written, $LEN characters of prose; $(prose titles) title blocks and $(prose repeats) repeated blocks left out of $(prose blocks): $(prose prose | cut -c1-200)"
 
 # --- what the summary's action items carry (#171) -------------------------------------------------
 #
@@ -609,14 +614,22 @@ except Exception:
   printf '%s\n' "--- the stored summary's markdown ---" "$MD" "---"
   field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$READING" "$1"; }
   ITEMS=$(field items); HITS=$(field hits); CONCLUSIVE=$(field conclusive); HEADERLESS=$(field headerless_rows)
-  # The page's list blocks between the Action Items title and the next section's title, as a
-  # cross-check that the counter and the person see the same items. Block types read from
-  # BlockNote 0.53.0's `data-content-type`.
-  DOM_ITEMS=$(js '"return (() => { const titles = [\"Summary\", \"Key Decisions\", \"Action Items\", \"Discussion Highlights\"]; const blocks = [...document.querySelectorAll(\"[data-content-type]\")]; let inside = false, n = 0; for (const b of blocks) { const t = (b.textContent || \"\").trim(); const type = b.getAttribute(\"data-content-type\"); if (titles.includes(t) && !/ListItem$/.test(type)) { inside = (t === \"Action Items\"); continue; } if (inside && /^(checkListItem|bulletListItem|numberedListItem)$/.test(type)) n++; } return n; })()"')
-  say "the page shows $DOM_ITEMS list blocks under Action Items"
+  # The page's top-level list blocks between the Action Items title and the next title, as a
+  # cross-check that the counter and the person see the same items: `lib/action-item-blocks.js`, which
+  # `summary-prose-oracle.test.mjs` runs over BlockNote's own HTML.
+  DOM_JSON=$(python3 -I -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/action-item-blocks.js \
+    | curl -s -m 30 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d @- \
+    | python3 -I -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+sys.exit(3) if not isinstance(v, str) else print(v)') || die "the driver did not return the page's action items"
+  DOM_ITEMS=$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["items"])' "$DOM_JSON")
+  say "the page shows $DOM_ITEMS top-level list blocks under Action Items ($(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["nested"])' "$DOM_JSON") nested)"
   [ "$DOM_ITEMS" = "$ITEMS" ] || die "the counter read $ITEMS action items in the stored markdown and the page shows $DOM_ITEMS"
   if [ "$CONCLUSIVE" != True ]; then
-    if [ "$ITEMS" = 0 ]; then WHY="the summary has no action items"; else WHY="$HEADERLESS table rows have no header, so no cell is known to be the due date"; fi
+    # Zero items is either none written or none under a heading the counter reads (`**Action Items:**`
+    # is not one); the markdown above says which.
+    if [ "$ITEMS" = 0 ]; then WHY="the counter found no action items: none were written, or they sit under a heading it does not read"; else WHY="$HEADERLESS table rows have no header, so no cell is known to be the due date"; fi
     DUE_NOTE="; due slots INCONCLUSIVE ($WHY), not a result"
     say "due slots: INCONCLUSIVE -- $WHY, so this draw says nothing about them"
   else
