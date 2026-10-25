@@ -15,6 +15,10 @@ interface OnboardingStatus {
     parakeet: string;
     summary: string;
     selected_summary_model?: string;
+    /** The transcription model and the summariser chosen at steps 1 and 2. Absent in a status saved
+     *  before #172, which then resumes on the defaults, as every resume did. */
+    selected_transcribe_model?: string;
+    summary_provider?: string;
   };
   last_updated: string;
 }
@@ -410,6 +414,19 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
           return;
         }
 
+        // The choices, before anything reads them (#172). A resume used to start on the defaults and
+        // finish with them: the download screen fetched the default, and `complete_onboarding` wrote it
+        // with `builtin-ai` beside a cloud summariser's model.
+        //
+        // Before `verifyModelStatus`, because it asks the disk about `selectedTranscribeModelRef`, which
+        // the setter moves at once. And through #170's setter, which clears the flag on a change: the
+        // raw state setter would leave a "downloaded" answered for the default standing for the
+        // restored model. A status from before #172 carries neither field and resumes on the defaults.
+        const savedModel = status.model_status.selected_transcribe_model;
+        if (typeof savedModel === 'string' && savedModel) setSelectedTranscribeModel(savedModel);
+        const savedProvider = status.model_status.summary_provider;
+        if (typeof savedProvider === 'string' && savedProvider) setSummaryProvider(savedProvider);
+
         // Don't trust saved status - verify actual model status on disk
         const verifiedStatus = await verifyModelStatus(status);
 
@@ -520,6 +537,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
             parakeet: parakeetDownloaded ? 'downloaded' : 'not_downloaded',
             summary: summaryModelDownloaded ? 'downloaded' : 'not_downloaded',
             selected_summary_model: selectedSummaryModel || undefined,
+            selected_transcribe_model: selectedTranscribeModel || undefined,
+            summary_provider: summaryProvider || undefined,
           },
           last_updated: new Date().toISOString(),
         },

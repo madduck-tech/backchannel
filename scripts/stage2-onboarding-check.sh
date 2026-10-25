@@ -35,6 +35,9 @@
 #              by nothing were missed because every other mode walks one path at one size.
 #     catalogue `whisper-tiny-q8`, neither recommended nor the default, chosen through the catalogue
 #              alone, with a cloud summariser; first run is finished and the stored choice read (#166)
+#     resumes  moonshine-tiny-q8 and Claude chosen, the application ended at step 4 and launched
+#              again on the same profile; the second launch must check, finish and store both
+#              choices (#172)
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -61,7 +64,7 @@
 # is indistinguishable from "nothing ran".
 set -euo pipefail
 
-APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue] [profile-dir]}"
+APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue|resumes] [profile-dir]}"
 MODE="${2:-chooses}"
 PROFILE="${3:-}"
 PORT="${BC_WD_PORT:-14446}"
@@ -85,7 +88,7 @@ fi
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote|present|narrow|catalogue) ;; *) die "mode must be chooses, keeps, remote, present, narrow or catalogue, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue or resumes, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -103,7 +106,7 @@ mkdir -p "$APPDATA/models"
 # is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
 # "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
 # which is the same class of mistake as an empty one that is not a pass.
-if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ -d "$CACHE/models/summary" ]; then
+if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
@@ -130,6 +133,30 @@ if [ "$MODE" = present ]; then
 else
   [ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
 fi
+# `resumes` launches the application twice. It is single-instance: it claims
+# com.conversationaly.ai.SingleInstance on the session bus, which HOME/XDG isolation does not scope, so
+# a live copy anywhere would capture both launches. Identified by what each process is, as
+# `stage2-ui-check.sh` does, never by `pgrep -f`.
+app_pid() {
+  local pid exe
+  for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+    [ "$pid" = "$$" ] && continue
+    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+    case "$exe" in */conversationaly) echo "$pid"; return 0 ;; esac
+  done
+  return 1
+}
+HARNESS_UP=""
+if [ "$MODE" = resumes ]; then
+  RUNNING=$(app_pid) && die "another copy of the application is running (pid $RUNNING); a resume run cannot share the single-instance lock with it"
+  # The second launch presses Check by speaking. The harness is the default input, so the check hears
+  # its sample and never the room; before the first launch, because the device list is read at start.
+  SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
+  [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample for the audio check"
+  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
+  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" up --sample "$SAMPLE" || die "the audio harness could not come up"
+  HARNESS_UP=1
+fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
@@ -140,6 +167,7 @@ cleanup() {
   [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
+  [ -n "${HARNESS_UP:-}" ] && "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
   # Kept on failure: the application's own logs/ live in there, and the driver log alone does
   # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
   if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
@@ -339,7 +367,7 @@ fi
 # nothing is fetched for it. `remote` picks a cloud provider and types a key, which is the state
 # neither of the others has ever entered.
 await "document.body.innerText.includes('Where should the summary be written')" "the summariser screen" 30
-if [ "$MODE" = remote ] || [ "$MODE" = catalogue ]; then
+if [ "$MODE" = remote ] || [ "$MODE" = catalogue ] || [ "$MODE" = resumes ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
   click "$OPT" "the summariser the pass chose"
@@ -568,6 +596,113 @@ await "[...document.querySelectorAll('footer button')].some(b=>b.textContent.tri
 CONT=$(by_text "Continue"); [ -n "$CONT" ] || die "no Continue on the download screen"
 click "$CONT" "Continue on the download screen"
 await "document.body.innerText.includes('Check your audio')" "the audio check, which is step 4" 30
+
+# --- resumes: quit at step 4, launch again on the same profile, and the choices are still there (#172)
+if [ "$MODE" = resumes ]; then
+  DEFAULT_ID="parakeet-tdt-0.6b-v3-q8"; DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
+  CLOUD_MODEL="claude-sonnet-4-5-20250929"
+  # The 1 s auto-save must have written step 4 with both choices before the application ends. False in
+  # the state being left, which saved step 3. On a build whose Rust struct lacks the fields it never
+  # becomes true: serde drops keys the struct does not declare.
+  STATUS_FILE="$APPDATA/onboarding-status.json"
+  SAVED=""
+  for _ in $(seq 1 30); do
+    SAVED=$(python3 -I -c '
+import json, sys
+try:
+    st = json.load(open(sys.argv[1]))["status"]
+except Exception:
+    print(""); raise SystemExit
+ms = st.get("model_status", {})
+print(json.dumps([st.get("current_step"), ms.get("selected_transcribe_model"), ms.get("summary_provider")]))' "$STATUS_FILE")
+    [ "$SAVED" = "[4, \"$CHOSEN_ID\", \"claude\"]" ] && break
+    sleep 0.5
+  done
+  [ "$SAVED" = "[4, \"$CHOSEN_ID\", \"claude\"]" ] \
+    || die "the status never named both choices at step 4: it reads ${SAVED:-nothing} -- the saved payload or the Rust struct drops them"
+  say "the status names both choices at step 4: $SAVED"
+
+  # End the first launch, and prove it ended: a second launch would otherwise hand its argv to it.
+  curl -s -m 20 -X DELETE "$BASE" > /dev/null || true
+  GONE=""
+  for _ in $(seq 1 20); do app_pid > /dev/null || { GONE=1; break; }; sleep 0.5; done
+  if [ -z "$GONE" ]; then
+    # Ending the session did not end the process. A person quitting is what this stands for, so it is
+    # ended the way a quit would be, and the pass says so.
+    PID=$(app_pid) && { say "the first launch outlived its session; sending it SIGTERM (pid $PID)"; kill -TERM "$PID" 2>/dev/null || true; }
+    for _ in $(seq 1 20); do app_pid > /dev/null || { GONE=1; break; }; sleep 0.5; done
+  fi
+  [ -n "$GONE" ] || die "the first launch is still running 20 s after its session ended and a SIGTERM (pid $(app_pid))"
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  OFFSET=$(stat -c %s "$LOG")
+  say "the first launch has ended; its log is $OFFSET bytes"
+
+  # The second launch, on the same driver and profile.
+  SESSION=""
+  for attempt in 1 2 3 4 5; do
+    RESP=$(curl -s -m 30 -X POST "http://127.0.0.1:$PORT/session" -H 'Content-Type: application/json' \
+      -d "{\"capabilities\":{\"alwaysMatch\":{\"tauri:options\":{\"application\":\"$APP\",\"args\":[]}}}}" || true)
+    SESSION=$(printf '%s' "$RESP" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["value"]["sessionId"])
+except Exception: print("")' 2>/dev/null)
+    [ -n "$SESSION" ] && break
+    sleep 2
+  done
+  [ -n "$SESSION" ] || die "no WebDriver session for the second launch: ${RESP:-no answer}"
+  BASE="http://127.0.0.1:$PORT/session/$SESSION"
+  # False in the state left: a new process starts at step 1 and reaches step 4 only from its status.
+  await "document.body.innerText.includes('Check your audio')" "the second launch to resume at the audio check" 60
+  say "the second launch resumed at the audio check"
+  [ -e "$APPDATA/models/$DEFAULT_FILE" ] && die "precondition: the default's file is on disk, so a fallback to it could answer"
+
+  # Collected, then failed once, so a run against the defect lists every condition it breaks.
+  FAILS=()
+  AUDIO_CHECK_REDACT=1
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
+  MIC=$(audio_check_field "$(audio_check_read Microphone)" device)
+  case "$MIC" in *Backchannel*) ;; *) die "the microphone picker holds '$MIC', not the harness; the check would hear the room" ;; esac
+  audio_check_press
+  OUT=$( (audio_check_require_body_answer) 2>&1 ) || FAILS+=("the check: $OUT")
+  [ "$(stat -c %s "$LOG")" -ge "$OFFSET" ] || die "the log is shorter than before the relaunch: it rotated, and the relaunch's lines are lost"
+  L="$PROFILE/after-relaunch.log"
+  tail -c +$((OFFSET + 1)) "$LOG" > "$L"
+  grep -q "Loading model $CHOSEN_ID from" "$L" || FAILS+=("the second launch never loaded $CHOSEN_ID")
+  # A guard with no control: with the default's file absent, no build writes this line.
+  grep -q "Loading model $DEFAULT_ID from" "$L" && FAILS+=("the second launch loaded the default, $DEFAULT_ID")
+
+  FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
+  [ -n "$FIN" ] || die "nothing finishes the audio check on the second launch"
+  click "$FIN" "the control that finishes first run"
+  await "document.body.innerText.includes('MEETINGS')" "the main screen after first run" 90
+  READ=""
+  for _ in $(seq 1 40); do
+    READ=$(python3 -I -c '
+import json, sqlite3, sys
+try:
+    c = sqlite3.connect(sys.argv[1])
+    t = c.execute("select model from transcript_settings").fetchone()
+    s = c.execute("select provider, model from settings").fetchone()
+    print(json.dumps([t[0] if t else None, list(s) if s else None]))
+except Exception as e:
+    print(json.dumps([None, None, str(e)]))' "$APPDATA/meeting_minutes.sqlite")
+    case "$READ" in "[null"*) sleep 0.5 ;; *) break ;; esac
+  done
+  say "stored after the resumed first run: $READ"
+  case "$READ" in "[\"$CHOSEN_ID\", "*) ;; *) FAILS+=("transcript_settings.model is not $CHOSEN_ID: $READ") ;; esac
+  # Step 2 already wrote this pair, so it goes red only by being overwritten at completion.
+  case "$READ" in *"[\"claude\", \"$CLOUD_MODEL\"]]") ;; *) FAILS+=("settings is not (claude, $CLOUD_MODEL): $READ") ;; esac
+
+  # Guards with no control: at a step-4 resume the unfixed build fetches neither.
+  SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
+  [ "${SUMMARY_BYTES:-0}" -gt 1000000 ] && FAILS+=("models/summary holds $SUMMARY_BYTES bytes with Claude chosen")
+  [ -e "$APPDATA/models/$DEFAULT_FILE" ] && FAILS+=("the default's file appeared")
+
+  [ ${#FAILS[@]} -eq 0 ] || die "the resumed first run lost its choices: $(printf '%s | ' "${FAILS[@]}")"
+  PASSED=1
+  say "PASS (resumes): the second launch resumed at step 4 with $CHOSEN_ID and Claude, checked with $CHOSEN_ID, and stored both"
+  exit 0
+fi
 
 # --- the audio check, pressed (#167) --------------------------------------------------------------
 #
