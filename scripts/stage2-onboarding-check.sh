@@ -349,12 +349,15 @@ fi
 # until the HTTP response arrives (`engine.rs:418-420`). Every in-flight sample must read disabled.
 # An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
 if [ "$MODE" = keeps ]; then
-  # False on the summariser screen, which has no download rows.
-  await "document.querySelector('section[aria-label=\"$CHOSEN_ID\"]') !== null" "the download screen's row for $CHOSEN_ID" 30
+  # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the
+  # note at the narrow block says: a `"` here reached the driver's JSON body bare, the body did not
+  # parse, and this wait could never be true (#170's gate, measured on its first run).
+  await "document.querySelector('section[aria-label=$CHOSEN_ID]') !== null" "the download screen's row for $CHOSEN_ID" 30
   FINAL_BYTES=35466912   # moonshine-tiny-Q8_0.gguf, the cached file's size
   N=0; INFLIGHT=0; INFLIGHT_DISABLED=0; INFLIGHT_ENABLED=0; OTHER=0
   while [ "$N" -lt 3000 ]; do
-    D=$(js '"return (() => { const b = document.querySelector(\"footer button\"); return b ? String(b.disabled) : \"no button\"; })()"')
+    D=$(js '"return (() => { const b = document.querySelector(\"footer button\"); return b ? String(b.disabled) : \"no button\"; })()"') \
+      || die "the driver did not answer while sampling Continue ($N samples so far)"
     SZ=$(stat -c %s "$APPDATA/models/$CHOSEN_FILE" 2>/dev/null || echo absent)
     N=$((N + 1))
     if [ "$SZ" != absent ] && [ "$SZ" -ge $((FINAL_BYTES * 9 / 10)) ]; then break; fi
@@ -367,8 +370,9 @@ if [ "$MODE" = keeps ]; then
   done
   say "while $CHOSEN_ID was in flight: $INFLIGHT samples of $N, $INFLIGHT_DISABLED disabled, $INFLIGHT_ENABLED enabled, $OTHER unread"
   [ "$INFLIGHT" -gt 0 ] || die "unobserved: no sample caught $CHOSEN_ID in flight, so this run says nothing about Continue during the download"
-  [ "$INFLIGHT_DISABLED" -gt 0 ] || die "no in-flight sample read the button as disabled ($INFLIGHT in flight, $OTHER unread)"
+  # The defect first, so a run against it is reported as the defect and not as a missing sentinel.
   [ "$INFLIGHT_ENABLED" -eq 0 ] || die "Continue was enabled while $CHOSEN_ID was still on its way, because another model was on disk (#170)"
+  [ "$INFLIGHT_DISABLED" -gt 0 ] || die "no in-flight sample read the button as disabled ($INFLIGHT in flight, $OTHER unread)"
 fi
 
 # --- the oracle: what reached the disk ------------------------------------------------------------

@@ -31,19 +31,39 @@ const EVERYTHING = 'Everything you chose is on this device.';
 const ALREADY = 'Already here from an earlier install';
 
 const mounted = [];
-async function mount({ onDisk = [], saved = null } = {}) {
+/**
+ * A command's next answer, held until the test releases it. The races below are about an answer that
+ * arrives after the person has chosen again, so the test decides when each one lands.
+ */
+function holdable() {
+  const queue = [];
+  return {
+    hold() {
+      let release;
+      const gate = new Promise((r) => { release = r; });
+      queue.push(gate);
+      return () => release();
+    },
+    async pass(answer) {
+      const gate = queue.shift();
+      if (gate) await gate;
+      return answer();
+    },
+  };
+}
+async function mount({ onDisk = [], saved = null, disk = holdable(), summaryReady = holdable() } = {}) {
   const stubs = tauriStubs({
     extra: {
       transcribe_init: null,
       transcribe_has_available_models: () => onDisk.length > 0,
-      transcribe_get_available_models: () => onDisk.map((name) => ({ name, status: 'Available' })),
+      transcribe_get_available_models: () => disk.pass(() => onDisk.map((name) => ({ name, status: 'Available' }))),
       // Accepted and never finished: the download stays in flight, which is the moment that matters.
       transcribe_download_model: () => new Promise(() => {}),
       transcribe_list_models: [],
       builtin_ai_download_model: () => new Promise(() => {}),
       builtin_ai_list_models: [],
       builtin_ai_get_recommended_model: 'gemma4:e2b',
-      builtin_ai_is_model_ready: true,
+      builtin_ai_is_model_ready: () => summaryReady.pass(() => true),
       get_onboarding_status: saved,
       save_onboarding_status: null,
       complete_onboarding: null,
@@ -142,6 +162,62 @@ const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${det
   const row = chosenRow(m.container, OTHER);
   check('2b then step 3 waits', go && go.disabled === true && !m.container.textContent.includes(EVERYTHING) && row && !row.textContent.includes(ALREADY),
     `disabled=${go?.disabled}, everything=${m.container.textContent.includes(EVERYTHING)}, already=${row?.textContent.includes(ALREADY)}`);
+  await clear();
+}
+
+// 2c: a resume whose answer arrives after the person has chosen again. Resumed at step 1 with the
+// default on disk; the summary check is held, so the resume's flag lands after `OTHER` is picked. The
+// resume asked about the default, and its answer must not stand for the new choice. (#170's gate,
+// adversary finding 2)
+{
+  const summaryReady = holdable();
+  const releaseResume = summaryReady.hold();
+  const m = await mount({ onDisk: [DEFAULT], summaryReady, saved: { version: '1.0', completed: false, current_step: 1, model_status: { parakeet: 'not_downloaded', summary: 'not_downloaded' } } });
+  await act(async () => { m.ctx().setSelectedTranscribeModel(OTHER); });
+  await settle();
+  const before = m.ctx().parakeetDownloaded;
+  releaseResume();
+  await settle();
+  check('2c a late resume answer does not answer for a newer choice', before === false && m.ctx().parakeetDownloaded === false,
+    `parakeetDownloaded is ${before} after choosing ${OTHER} and ${m.ctx().parakeetDownloaded} once the resume's check of ${DEFAULT} returned`);
+  await act(async () => { m.ctx().goToStep(3); });
+  await settle();
+  const go = continueButton(m.container);
+  check('2c then step 3 waits', go && go.disabled === true && !m.container.textContent.includes(EVERYTHING),
+    `disabled=${go?.disabled}, everything=${m.container.textContent.includes(EVERYTHING)}`);
+  await clear();
+}
+
+// 1e: two quick choices, the first on disk and its answer late, the second not on disk. The first
+// answer must not stand for the second. (#170's gate, adversary finding 3)
+{
+  const SECOND_ON_DISK = 'nemotron-3.5-asr-streaming-0.6b-q8';
+  const disk = holdable();
+  const m = await mount({ onDisk: [DEFAULT, SECOND_ON_DISK], disk });
+  const releaseFirst = disk.hold();
+  await act(async () => { m.ctx().setSelectedTranscribeModel(SECOND_ON_DISK); });
+  await act(async () => { m.ctx().setSelectedTranscribeModel(OTHER); });
+  await settle();
+  releaseFirst();
+  await settle();
+  check('1e a late disk answer for an earlier choice does not answer for the current one', m.ctx().parakeetDownloaded === false,
+    `parakeetDownloaded is ${m.ctx().parakeetDownloaded} with ${OTHER} chosen, once the check of ${SECOND_ON_DISK} returned`);
+  await clear();
+}
+
+// 3b: a choice that is on disk is known to be before step 3, and choosing it again does not unset it.
+{
+  const m = await mount({ onDisk: [DEFAULT, OTHER] });
+  await act(async () => { m.ctx().setSelectedTranscribeModel(OTHER); });
+  await settle();
+  check('3b a chosen model on disk is known before step 3', m.ctx().parakeetDownloaded === true,
+    `parakeetDownloaded is ${m.ctx().parakeetDownloaded} after choosing ${OTHER}, which is on disk`);
+  const from = m.seen.length;
+  await act(async () => { m.ctx().setSelectedTranscribeModel(OTHER); });
+  await settle();
+  const after = m.seen.slice(from).map((x) => x.flag);
+  check('3b choosing the same model again does not unset it', after.every((f) => f === true),
+    `renders after choosing ${OTHER} again: ${JSON.stringify(after)}`);
   await clear();
 }
 

@@ -415,7 +415,12 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
         setCurrentStep(verifiedStatus.currentStep);
         setCompleted(verifiedStatus.completed);
-        setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        // Only while the model it checked is still the choice. The resume's checks take a few round
+        // trips, and a person may choose again meanwhile; that choice cleared the flag and asked the
+        // disk itself, so this answer, about the model before it, must not stand for it (#170's gate).
+        if (verifiedStatus.parakeetCheckedFor === selectedTranscribeModelRef.current) {
+          setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        }
         setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
         if (verifiedStatus.selectedSummaryModel) {
           setSelectedSummaryModel(verifiedStatus.selectedSummaryModel);
@@ -438,12 +443,13 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     let parakeetDownloaded = false;
     let summaryModelDownloaded = false;
     let selectedSummaryModel = '';
+    const parakeetCheckedFor = selectedTranscribeModelRef.current;
 
     // Verify the chosen transcription model is on disk, by name. Not "is any model there" (#170). Until
     // #172 persists the choice, a resumed first run chooses the default again, so this asks about it.
     try {
       await invoke('transcribe_init');
-      parakeetDownloaded = await transcribeModelIsOnDisk(selectedTranscribeModelRef.current);
+      parakeetDownloaded = await transcribeModelIsOnDisk(parakeetCheckedFor);
       console.log('[OnboardingContext] Chosen transcription model verified on disk:', parakeetDownloaded);
     } catch (error) {
       console.warn('[OnboardingContext] Failed to verify Parakeet:', error);
@@ -489,6 +495,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       currentStep,
       completed,
       parakeetDownloaded,
+      parakeetCheckedFor,
       summaryModelDownloaded,
       selectedSummaryModel,
     };
