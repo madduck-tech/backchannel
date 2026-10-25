@@ -46,31 +46,36 @@ pub fn measure_model(filename: &str) -> PathBuf {
     path
 }
 
-/// Minimal 16-bit PCM WAV reader: the samples are 16 kHz mono, and pulling a crate in for a
-/// measurement would be a dependency this repository does not otherwise need.
+/// Minimal WAV reader for 16 kHz mono, as 16-bit PCM or 32-bit float: upstream's samples carry both
+/// (`zh.wav` is float), and pulling a crate in for a measurement would be a dependency this repository
+/// does not otherwise need. Any other shape fails, rather than being read as noise.
 pub fn read_wav_mono_16k(path: &Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let mut float = None;
     let mut i = 12; // past "RIFF....WAVE"
     while i + 8 <= bytes.len() {
         let id = &bytes[i..i + 4];
         let size = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
         if id == b"fmt " {
+            let format = u16::from_le_bytes([bytes[i + 8], bytes[i + 9]]);
             let channels = u16::from_le_bytes([bytes[i + 10], bytes[i + 11]]);
             let rate = u32::from_le_bytes([bytes[i + 12], bytes[i + 13], bytes[i + 14], bytes[i + 15]]);
             let bits = u16::from_le_bytes([bytes[i + 22], bytes[i + 23]]);
-            assert!(
-                channels == 1 && rate == 16_000 && bits == 16,
-                "{} is {channels} ch, {rate} Hz, {bits} bit; the instruments read 16 kHz mono 16-bit",
-                path.display()
-            );
+            float = match (format, channels, rate, bits) {
+                (1, 1, 16_000, 16) => Some(false),
+                (3, 1, 16_000, 32) => Some(true),
+                _ => panic!(
+                    "{} is format {format}, {channels} ch, {rate} Hz, {bits} bit; the instruments read 16 kHz mono, 16-bit PCM or 32-bit float",
+                    path.display()
+                ),
+            };
         }
         if id == b"data" {
-            return bytes[i + 8..(i + 8 + size).min(bytes.len())]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| i16::from_le_bytes(*c) as f32 / 32768.0)
-                .collect();
+            let data = &bytes[i + 8..(i + 8 + size).min(bytes.len())];
+            return match float.unwrap_or_else(|| panic!("{} has no fmt chunk before its data", path.display())) {
+                false => data.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes(*c) as f32 / 32768.0).collect(),
+                true => data.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect(),
+            };
         }
         i += 8 + size + (size & 1);
     }

@@ -1,0 +1,6 @@
+{
+  "engine_revision": "553f1099a2b3a5bc4421894be171f09960fc0f3a",
+  "model": "Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf",
+  "sample": "zh.wav",
+  "text": "開放時間早上九點至下午五點"
+}

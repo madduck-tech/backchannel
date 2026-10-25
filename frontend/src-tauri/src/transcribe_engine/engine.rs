@@ -1018,6 +1018,34 @@ mod tests {
 }
 
 #[cfg(test)]
+mod pinned_engine_decodes {
+    //! A decode recorded on the engine `Cargo.lock` pins, for a comparison after it moves. (#169)
+
+    /// Decodes `BC_RECORD_SAMPLE` with `BC_RECORD_MODEL` (a catalogue filename, from
+    /// `crate::measure`) and the options the application passed before #169, which leave every field
+    /// at its default, and writes the text to `BC_RECORD_FIXTURE`. It compares nothing.
+    #[test]
+    #[ignore = "needs a model on disk (crate::measure); run by name with BC_RECORD_MODEL, BC_RECORD_SAMPLE and BC_RECORD_FIXTURE"]
+    fn record_a_decode_on_the_pinned_engine() {
+        let filename = std::env::var("BC_RECORD_MODEL").expect("set BC_RECORD_MODEL to a catalogue filename");
+        let sample = std::env::var("BC_RECORD_SAMPLE").expect("set BC_RECORD_SAMPLE to a file in samples/");
+        let out = std::env::var("BC_RECORD_FIXTURE").expect("set BC_RECORD_FIXTURE to the file to write");
+        let audio = crate::measure::read_wav_mono_16k(&crate::measure::pinned_sample(&sample));
+        let model = transcribe_cpp::Model::load(crate::measure::measure_model(&filename)).expect("the model opens");
+        let mut session = model.session().expect("a session opens");
+        let transcript = session.run(&audio, &super::RunOptions::default()).expect("the decode runs");
+        let fixture = serde_json::json!({
+            "engine_revision": crate::measure::pinned_engine_revision(),
+            "model": filename,
+            "sample": sample,
+            "text": transcript.text.trim(),
+        });
+        std::fs::write(&out, serde_json::to_string_pretty(&fixture).expect("json") + "\n").expect("the fixture is written");
+        eprintln!("{}", transcript.text.trim());
+    }
+}
+
+#[cfg(test)]
 mod token_probability_measurement {
     //! What a family actually puts in `Token::p`, measured rather than assumed. (#162)
     //!

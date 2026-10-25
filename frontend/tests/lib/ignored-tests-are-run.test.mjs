@@ -38,6 +38,10 @@ const NOT_RUN_BY_THE_GATE = new Map([
    { blocker: 'a recorder, not an assertion: it writes the diarizer fixture once, on the engine it is ' +
               'run against (553f109 for #169), and compares nothing. Run in the gate it would rewrite ' +
               'the fixture the comparison after the engine move reads' }],
+  ['frontend/src-tauri/src/transcribe_engine/engine.rs::record_a_decode_on_the_pinned_engine',
+   { blocker: 'a recorder, not an assertion: it writes one decode fixture on the engine it is run ' +
+              'against (553f109 for #169) and compares nothing. Run in the gate it would rewrite the ' +
+              'fixture the comparison after the engine move reads' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
    { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
      why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +
