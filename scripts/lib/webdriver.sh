@@ -71,6 +71,24 @@ print(v.get("error") or "unnamed driver error" if isinstance(v, dict) else "")')
   done
 }
 
+# type_into <element-id> <text> [what it is] — type into a field, or die naming the driver's refusal.
+#
+# #166's gate found Element Send Keys in the same shape `click` was written for: three posts in two
+# passes ended `> /dev/null`, so a refused input read as "waited 20s for the search to narrow the
+# catalogue", a sentence about the application. Unlike a click, no refusal here is transient.
+type_into() {
+  local el="$1" text="$2" what="${3:-element $1}" body resp err
+  body=$(TEXT="$text" python3 -c 'import json, os; print(json.dumps({"text": os.environ["TEXT"]}))')
+  resp=$(curl -s -m 20 -X POST "$BASE/element/$el/value" -H 'Content-Type: application/json' -d "$body")
+  err=$(printf '%s' "$resp" | python3 -c 'import json, sys
+try:
+    v = json.load(sys.stdin).get("value")
+except Exception:
+    print("the driver returned nothing readable"); raise SystemExit
+print(v.get("error") or "unnamed driver error" if isinstance(v, dict) else "")')
+  [ -z "$err" ] || die "typing into $what: the driver answered '$err'"
+}
+
 # wd_why <element-id> — ask the page why it refused, so the message names the application's state
 # rather than the driver's verdict.
 #

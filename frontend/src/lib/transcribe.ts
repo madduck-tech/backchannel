@@ -150,9 +150,10 @@ export function isDownloading(status: ModelStatus): boolean {
  *
  * Decimal MB, matching how the catalog's `size_mb` was derived.
  */
+/** The bytes a truncated file holds, in the catalogue's unit: `size_mb` counts MiB (`engine.rs:169`). */
 export function corruptedSizeMb(status: ModelStatus): number | null {
   return typeof status === 'object' && 'Corrupted' in status
-    ? Math.round(status.Corrupted.file_size / 1_000_000)
+    ? Math.round(status.Corrupted.file_size / (1024 * 1024))
     : null;
 }
 

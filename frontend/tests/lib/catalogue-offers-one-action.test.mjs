@@ -7,6 +7,11 @@
 //   "the subtitle is nonsense — it explained WER" -> the paragraph about quality tiers
 //   "why does the download start right here?"     -> a row click selects; it does not fetch
 //
+// **Since #166 this renders Settings' card only.** First run renders its own rows
+// (`onboarding/shared/ModelCatalogue.tsx`), and `every-catalogue-row-can-be-chosen.test.mjs` holds the
+// same removals there over the whole catalogue, not only its rows. The instruction was given about
+// first run's catalogue, which was this card until #166.
+//
 // **Rendered through `gallery.mjs`'s capped child process, not in this one.** A first version mounted
 // the component here with hand-rolled stubs and never terminated: measured, it ran 60s under a 2 GB
 // cap without finishing, and uncapped it reached 27 GB of anonymous RSS and was OOM-killed — taking
@@ -36,7 +41,7 @@ assert.ok(!/Sort models by|>Sort by</.test(html), 'the sort control is still on 
 assert.ok(!/Installed only/.test(html), 'the installed-only filter is still on the catalogue');
 assert.ok(
   !/Quality is a tier|word error rate/i.test(html),
-  'the catalogue still explains word error rate on a first-run screen'
+  "Settings' catalogue card still explains word error rate in a paragraph"
 );
 assert.ok(
   /Search transcription models/.test(html),

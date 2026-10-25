@@ -174,8 +174,7 @@ if ! printf '%s' "$(text)" | grep -q -- "$MODEL_ID"; then
   [ -n "$FIELD" ] || die "the catalogue has no search field to narrow it with"
   # First run's search matches the whole id since #166. It used to match display names
   # (`gigaam-v3-ctc (Q8)`), so this typed the family part of the id instead.
-  curl -s -m 20 -X POST "$BASE/element/$FIELD/value" -H 'Content-Type: application/json' \
-    -d "{\"text\":\"$MODEL_ID\"}" > /dev/null
+  type_into "$FIELD" "$MODEL_ID" "the catalogue's search field"
   # False before typing: the unfiltered list holds rows that do not carry the id. The wait that stood
   # here, for the page to contain the query, was true before anything was typed (#166).
   await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')];return r.length>0&&r.every(function(e){return e.textContent.indexOf('$MODEL_ID')>=0;});})()" \

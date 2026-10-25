@@ -241,7 +241,9 @@ if [ "$MODE" = narrow ]; then
   # "some button in a row" and counted `models/` four seconds later; with the defect restored it still
   # passed, because the click landed elsewhere and four seconds is not a download. A button that is
   # not there cannot be pressed, which is the instruction — and ADR 0023's shape for it.
-  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove)$/.test(t)).length"')
+  # `Delete` too: the control reads `Delete`, and forbidding only `Remove` is one of the reasons this
+  # pass stayed green while first run's rows had no control at all (#166).
+  FETCHERS=$(js '"return [...document.querySelectorAll(\"button\")].map(b=>(b.textContent||\"\").trim()).filter(t=>/^(Download|Download again|Remove|Delete)$/.test(t)).length"')
   say "buttons in the catalogue that would fetch or delete: $FETCHERS"
   [ "$FETCHERS" = "0" ] \
     || die "the catalogue offers $FETCHERS download/remove buttons during first run; a row selects, it does not fetch"
@@ -250,9 +252,15 @@ if [ "$MODE" = narrow ]; then
   BEFORE=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
   # Inside the catalogue's own radiogroup. This used to match `//label[...moonshine...]`, which is a
   # recommended option above the catalogue, so the click never reached a catalogue row (#166).
-  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[contains(.,'moonshine')]]\"}")
-  [ -n "$ROW" ] || die "no moonshine row inside the catalogue's radiogroup"
-  click "$ROW" "a catalogue row"; sleep 4
+  ROW=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[.='whisper-tiny-q8']]\"}")
+  [ -n "$ROW" ] || die "no whisper-tiny-q8 row inside the catalogue's radiogroup"
+  CHECKED=$(curl -s -m 20 "$BASE/element/$ROW/attribute/aria-checked" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value"))')
+  [ "$CHECKED" = "false" ] || die "the whisper-tiny-q8 row reads aria-checked=$CHECKED before it was clicked"
+  click "$ROW" "a catalogue row"
+  # The positive sentinel: the click chose the row, so the absence below is about a click that landed.
+  await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')].find(function(e){return e.textContent.indexOf('whisper-tiny-q8')>=0;});return !!r&&r.getAttribute('aria-checked')==='true';})()" \
+        "the clicked row to read aria-checked=true" 10
+  sleep 4
   AFTER=$(ls -1 "$APPDATA/models" 2>/dev/null | wc -l)
   [ "$BEFORE" = "$AFTER" ] \
     || die "clicking a catalogue row put a file in models/ — a row must select, not fetch (was $BEFORE, now $AFTER)"
@@ -278,7 +286,9 @@ fi
 # only for a file on disk, and first run had switched its `Download` off. So the catalogue could not
 # choose any of the 82 models outside the recommended four.
 if [ "$MODE" = catalogue ]; then
-  MODELS_BEFORE=$(ls -la "$APPDATA/models" | sed 1d | sort)
+  # Entries and sizes, not `ls -la`: that also lists `..`, the app-data directory, whose minute-level
+  # time can change for reasons that are not a download (#166's gate).
+  MODELS_BEFORE=$(find "$APPDATA/models" -mindepth 1 -printf '%P %s\n' | sort)
   CAT=$(by_text "Browse every model")
   [ -n "$CAT" ] || die "no 'Browse every model' button on the first-run screen"
   click "$CAT" "the catalogue button"
@@ -286,8 +296,7 @@ if [ "$MODE" = catalogue ]; then
   await "document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]').length > 1" "the catalogue's rows" 20
   FIELD=$(find_el '{"using":"css selector","value":"input[type=search]"}')
   [ -n "$FIELD" ] || die "the catalogue has no search field"
-  curl -s -m 20 -X POST "$BASE/element/$FIELD/value" -H 'Content-Type: application/json' \
-    -d "{\"text\":\"$CHOSEN_ID\"}" > /dev/null
+  type_into "$FIELD" "$CHOSEN_ID" "the catalogue's search field"
   # False before typing: the unfiltered list holds rows that do not carry the id.
   await "(function(){var r=[...document.querySelectorAll('[role=radiogroup][aria-label=Models] [role=radio]')];return r.length>0&&r.every(function(e){return e.textContent.indexOf('$CHOSEN_ID')>=0;});})()" \
         "the search to narrow the catalogue to $CHOSEN_ID" 20
@@ -338,8 +347,7 @@ if [ "$MODE" = remote ] || [ "$MODE" = catalogue ]; then
   await "document.querySelector('input[type=password]') !== null" "Claude's key field" 10
   KEY=$(find_el '{"using":"css selector","value":"input[type=password]"}')
   [ -n "$KEY" ] || die "no key field after choosing Claude"
-  curl -s -m 20 -X POST "$BASE/element/$KEY/value" -H 'Content-Type: application/json' \
-    -d '{"text":"sk-not-a-real-key-for-a-gate-run"}' > /dev/null
+  type_into "$KEY" "sk-not-a-real-key-for-a-gate-run" "Claude's key field"
   # A typed value is not a stored one: assert the field holds it before moving on.
   await "(document.querySelector('input[type=password]')||{}).value.length > 10" "the key to be typed" 10
   say "chose Claude and typed a key — nothing local should be fetched for the summariser"
@@ -375,7 +383,7 @@ if [ "$MODE" = catalogue ]; then
   LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
   [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
   MARK=$(wc -l < "$LOG")
-  MODELS_NOW=$(ls -la "$APPDATA/models" | sed 1d | sort)
+  MODELS_NOW=$(find "$APPDATA/models" -mindepth 1 -printf '%P %s\n' | sort)
   [ "$MODELS_BEFORE" = "$MODELS_NOW" ] || die "models/ changed before the download screen opened:
 $(diff <(printf '%s\n' "$MODELS_BEFORE") <(printf '%s\n' "$MODELS_NOW") | sed 's/^/    /')"
   say "models/ is unchanged since before the catalogue was opened, and the log is at line $MARK"
@@ -471,7 +479,7 @@ say "the chosen model arrived whole: $CHOSEN_FILE ($(stat -c %s "$APPDATA/models
 # The download line for the chosen file is the positive sentinel: the fetch happened, and it happened
 # after the mark, so the catalogue's row did not start it.
 if [ "$MODE" = catalogue ]; then
-  FIRST=$(grep -nE "Downloading .+ -> .+/$CHOSEN_FILE" "$LOG" | head -1 | cut -d: -f1)
+  FIRST=$(grep -nE "Downloading model file .+ -> .+/$CHOSEN_FILE" "$LOG" | head -1 | cut -d: -f1)
   [ -n "$FIRST" ] || die "the application never logged downloading $CHOSEN_FILE, and yet it is on disk"
   [ "$FIRST" -gt "$MARK" ] || die "the first download of $CHOSEN_FILE is at log line $FIRST, before the download screen opened (line $MARK)"
   say "the first download of $CHOSEN_FILE is at log line $FIRST, after the download screen opened (line $MARK)"
@@ -613,7 +621,10 @@ except Exception:
     sleep 0.5
   done
   [ "$STORED" = "$CHOSEN_ID" ] || die "chose $CHOSEN_ID in the catalogue and the application stored '${STORED:-<nothing>}'"
-  say "first run finished and transcript_settings.model is $STORED; the default's file is absent"
+  # Again after finishing: the check above runs before the finishing click, and finishing is where #130
+  # fetched the default (#166's gate).
+  [ -e "$APPDATA/models/$DEFAULT_FILE" ] && die "finishing first run fetched the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
+  say "first run finished and transcript_settings.model is $STORED; the default's file is still absent"
   sleep 5
   SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
   say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded; #181)"

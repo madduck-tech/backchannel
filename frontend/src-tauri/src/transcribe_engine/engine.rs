@@ -406,7 +406,10 @@ impl TranscribeEngine {
             TRANSCRIBE_MODEL_BASE_URL, repo, filename
         );
         let file_path = self.models_dir.join(filename);
-        info!("Downloading {} -> {}", url, file_path.display());
+        // A name only this line carries: the onboarding pass reads its order in the log, and the census
+        // (`a-gate-oracle-reads-a-line-the-app-writes.test.mjs`) can hold a pattern only by its literal
+        // prefix, which "Downloading" alone gave to an enum variant and another downloader (#166's gate).
+        info!("Downloading model file {} -> {}", url, file_path.display());
 
         if !self.models_dir.exists() {
             fs::create_dir_all(&self.models_dir).await?;

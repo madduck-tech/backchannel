@@ -244,6 +244,41 @@ for (const junk of ['<html>502 Bad Gateway</html>', '']) {
   });
 }
 
+// `type_into`, the same helper for Element Send Keys (#166's gate). A typed value the driver refused
+// must end the pass naming the field, never read as the application failing to react to it.
+function typeInto(port) {
+  const harness =
+    `set -uo pipefail\n` +
+    `say() { printf 'say: %s\\n' "$*"; }\n` +
+    `die() { printf 'die: %s\\n' "$*" >&2; exit 1; }\n` +
+    `BASE="http://127.0.0.1:${port}/session/stub"\n` +
+    `. ${JSON.stringify(HELPER)}\n` +
+    `type_into abcdef 'a "quoted" query' "the search field"\n` +
+    `echo TYPE-RETURNED\n`;
+  return new Promise((resolve) => {
+    execFile('bash', ['-c', harness], { timeout: 60_000 }, (err, stdout, stderr) => {
+      resolve({ status: err ? (err.code ?? 1) : 0, stdout, stderr });
+    });
+  });
+}
+for (const [bodies, ok] of [[[OK], true], [[NO_SUCH_ELEMENT], false], [[NOT_INTERACTABLE], false]]) {
+  const d = await stubDriver(bodies);
+  try {
+    const r = await typeInto(d.port);
+    if (ok) {
+      assert.equal(r.status, 0, `a typed value the driver accepted failed:\n${r.stderr}`);
+      assert.match(r.stdout, /TYPE-RETURNED/);
+    } else {
+      assert.notEqual(r.status, 0, `the pass walked past a typed value the driver refused:\n${r.stdout}`);
+      assert.doesNotMatch(r.stdout, /TYPE-RETURNED/);
+      assert.match(r.stderr, /typing into the search field: the driver answered '(no such element|element not interactable)'/);
+    }
+    assert.equal(d.attempts(), 1, `the value was sent ${d.attempts()} times`);
+  } finally {
+    d.server.close();
+  }
+}
+
 // =================================================================================================
 // The census: no pass owns a click this file has not exercised
 // =================================================================================================
@@ -259,7 +294,8 @@ assert.ok(passes.length >= 5, `only ${passes.length} stage2 passes found; this c
 // which fail to source the helper" -- and a pass left the set the moment it stopped clicking, so that
 // question had no answer that was not already covered. A detector defined by the thing being removed
 // measures its own removal.
-const ELEMENT_CLICK = /\/element\/[^"'\s]*\/click/;
+// `value` too: Element Send Keys had no helper until #166's gate, and three posts discarded the answer.
+const ELEMENT_CLICK = /\/element\/[^"'\s]*\/(click|value)/;
 const SOURCES_HELPER = /lib\/webdriver\.sh/;
 
 // 1. Nobody posts an Element Click of their own. This is the exact regression: four passes did, on
@@ -294,7 +330,7 @@ assert.ok(
 //    that sources `lib/webdriver.sh` and then declares its own `click() { ... }` over the top, and
 //    ordering is the only thing that makes the current tree correct.
 const shadowing = passes
-  .filter((p) => /^\s*click\s*\(\)\s*\{/m.test(p.src))
+  .filter((p) => /^\s*(click|type_into)\s*\(\)\s*\{/m.test(p.src))
   .map((p) => p.name);
 assert.deepEqual(
   shadowing,

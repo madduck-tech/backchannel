@@ -29,8 +29,10 @@ const MODELS = [
   model({ name: 'parakeet-tdt-0.6b-v3-q8', family: 'Parakeet TDT v3', size_mb: 740, languages: ['en', 'de', 'fr', 'ru', 'uk'], recommended: true }),
   model({ name: 'moonshine-tiny-q8', family: 'Moonshine', size_mb: 34, status: 'Available', recommended: true }),
   model({ name: 'gigaam-v3-ctc-q8', family: 'GigaAM', size_mb: 259, languages: ['ru'], description: 'Sber model trained on Russian speech.' }),
-  model({ name: 'whisper-tiny-q8', family: 'Whisper', size_mb: 44, languages: ['en', 'ru', 'de', 'ja', 'zh'], description: 'Smallest Whisper: smaller download, lower memory use.' }),
-  model({ name: 'granite-speech-4.1-2b-q8', family: 'Granite Speech', size_mb: 2100, languages: ['en', 'fr'] }),
+  // Italian and Estonian too: their names contain "ta" and begin with "es", which are codes no model here carries.
+  model({ name: 'whisper-tiny-q8', family: 'Whisper', size_mb: 44, languages: ['en', 'ru', 'de', 'ja', 'zh', 'it', 'et'], description: 'Smallest Whisper: smaller download, lower memory use.' }),
+  // Belarusian: its name contains "rus", which begins Russian.
+  model({ name: 'granite-speech-4.1-2b-q8', family: 'Granite Speech', size_mb: 2100, languages: ['en', 'fr', 'be'] }),
   model({ name: 'canary-180m-flash-q8', family: 'Canary', size_mb: 190, status: { Corrupted: { file_size: 52_000_000, expected_min_size: 179_000_000 } } }),
 ];
 
@@ -109,15 +111,26 @@ if (!group()) {
 }
 assert.equal(rows().length, MODELS.length, `the catalogue lists ${rows().length} rows of ${MODELS.length}`);
 
+// The prototype's search field has `autofocus`, and its rows are sorted by family, then size, then id.
+const searchField = container.querySelector('input[type="search"]');
+check('1e the search is focused when the catalogue opens', document.activeElement === searchField,
+  `the focused element is <${document.activeElement?.tagName?.toLowerCase()}>`);
+const ORDER = ['canary-180m-flash-q8', 'gigaam-v3-ctc-q8', 'granite-speech-4.1-2b-q8', 'moonshine-tiny-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'];
+check('1e the rows are in the prototype\'s order', JSON.stringify(shownIds()) === JSON.stringify(ORDER), `the rows read ${JSON.stringify(shownIds())}`);
+
 const fetchesBefore = stubs.calls.filter((c) => /download/i.test(c.cmd)).length;
+// Returns whether the event's default went ahead: false means the row prevented it, which for Space is
+// what stops the page from scrolling under the person's finger (the prototype's `preventDefault`).
 const choose = async (name, how) => {
   const r = rowFor(name);
-  if (!r) { failures.push(`no row for ${name}`); return; }
+  if (!r) { failures.push(`no row for ${name}`); return true; }
+  let wentAhead = true;
   await act(async () => {
-    if (how === 'click') r.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    else r.dispatchEvent(new window.KeyboardEvent('keydown', { key: how, bubbles: true, cancelable: true }));
+    if (how === 'click') wentAhead = r.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    else wentAhead = r.dispatchEvent(new window.KeyboardEvent('keydown', { key: how, bubbles: true, cancelable: true }));
   });
   await settle();
+  return wentAhead;
 };
 const exactlyChecked = (name) => {
   const on = rows().filter((r) => r.getAttribute('aria-checked') === 'true').map((r) => r.querySelector('.readout').textContent);
@@ -127,7 +140,8 @@ const exactlyChecked = (name) => {
 
 // 1a-1d. Each input on a row whose file is not on disk.
 for (const [cond, name, how] of [['1a', 'gigaam-v3-ctc-q8', 'click'], ['1b', 'whisper-tiny-q8', 'Enter'], ['1c', 'granite-speech-4.1-2b-q8', ' ']]) {
-  await choose(name, how);
+  const wentAhead = await choose(name, how);
+  if (how === ' ') check('1c Space does not scroll the page', wentAhead === false, 'the keydown for Space was not prevented');
   check(`${cond} a row not on disk is chosen by ${how === ' ' ? 'Space' : how}`, ctx.selectedTranscribeModel === name,
     `the provider holds ${ctx.selectedTranscribeModel} after ${JSON.stringify(how)} on ${name}`);
   const d = exactlyChecked(name);
@@ -146,13 +160,21 @@ check('3 choosing fetches nothing', fetches.length === 0, `choosing invoked ${JS
 const controls = rows().flatMap((r) => [...r.querySelectorAll('button, [data-state], [data-slot="tooltip-trigger"], a, input')]
   .map((el) => `${r.querySelector('.readout').textContent}: <${el.tagName.toLowerCase()}> "${el.textContent.trim().slice(0, 30)}"`));
 check('4 first run rows carry no controls', controls.length === 0, controls.join('; '));
-const catalogueText = group()?.textContent ?? '';
-check('4 nothing the product owner removed is back (#138)', !/Sort by|Installed only|word error rate|WER/i.test(catalogueText),
-  `the catalogue reads "${catalogueText.match(/Sort by|Installed only|word error rate|WER/i)?.[0]}"`);
+// The whole catalogue, not only its rows: a control above the radiogroup is still on first run's screen.
+// That is where the product owner's #138 instruction applies; `catalogue-offers-one-action.test.mjs`
+// holds the same removals on Settings' card.
+const catalogue = group()?.parentElement;
+const catalogueText = catalogue?.textContent ?? '';
+check('4 nothing the product owner removed is back (#138)', !/Sort by|Sort models|Installed only|Show only installed|word error rate|WER/i.test(catalogueText),
+  `the catalogue reads "${catalogueText.match(/Sort by|Sort models|Installed only|Show only installed|word error rate|WER/i)?.[0]}"`);
+const extraControls = [...(catalogue?.querySelectorAll('button, select, input:not([type="search"])') ?? [])].map((el) => `<${el.tagName.toLowerCase()}> "${el.textContent.trim().slice(0, 30)}"`);
+check('4 the search field is the catalogue\'s only control', extraControls.length === 0 && catalogue?.querySelectorAll('input').length === 1, `the catalogue also offers ${extraControls.join(', ')}`);
 const truncated = rowFor('canary-180m-flash-q8')?.textContent ?? '';
-check('6 a truncated row says what choosing it does', /Incomplete download/.test(truncated) && /fetches the whole file again/.test(truncated),
+check('6 a truncated row says what choosing it does', /Incomplete download/.test(truncated) && /the whole file is fetched again/.test(truncated),
   `the truncated row reads "${truncated}"`);
 check('6 and names no control it lacks', !/download again|delete|repair|remove/i.test(truncated), `the truncated row reads "${truncated}"`);
+// 52 000 000 bytes is 49.6 MiB, the catalogue's unit: `size_mb` counts MiB (`engine.rs:169`).
+check('6 in the catalogue\'s unit', /50 MB of 190 MB/.test(truncated), `the truncated row reads "${truncated}"`);
 
 // 1e-1f. The search, typed into the field.
 const field = container.querySelector('input[type="search"]');
@@ -168,10 +190,19 @@ for (const [query, want, by] of [
   ['Granite Speech', ['granite-speech-4.1-2b-q8'], 'a family, which no id spells'],
   ['Russian', ['gigaam-v3-ctc-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'], 'a language name'],
   ['ru', ['gigaam-v3-ctc-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'], 'a language code'],
+  ['uk', ['parakeet-tdt-0.6b-v3-q8'], 'a two-letter code, matched as a code'],
+  ['ta', [], 'a code no model carries, though "Italian" contains it'],
+  ['es', [], 'a code no model carries, though "Estonian" begins with it'],
+  ['ital', ['whisper-tiny-q8'], 'the start of a language name'],
+  ['rus', ['gigaam-v3-ctc-q8', 'parakeet-tdt-0.6b-v3-q8', 'whisper-tiny-q8'], 'the start of a name, not anywhere in one (Belarusian)'],
 ]) {
   await type(query);
   const got = shownIds().sort();
   check(`1e ${by} finds its rows`, JSON.stringify(got) === JSON.stringify([...want].sort()), `"${query}" shows ${JSON.stringify(got)}`);
+  if (query === 'ital') {
+    const langs = rowFor('whisper-tiny-q8')?.textContent ?? '';
+    check('1e a row of many languages names the one searched for', /7 languages, incl\. Italian/.test(langs), `the whisper row reads "${langs}"`);
+  }
 }
 await type('memory');
 check('1f a word only in a description matches nothing', rows().length === 0 && /Nothing matches/.test(group()?.textContent ?? ''),
@@ -180,6 +211,29 @@ await type('');
 
 await act(async () => { root.unmount(); });
 container.remove();
+
+// --- the catalogue's other states: a backend that fails, an empty catalogue, and one still loading -----
+for (const [state, answer, expect, forbid] of [
+  ['an error', () => { throw new Error('engine not initialised'); }, /Could not read the model catalogue: Error: engine not initialised/, /Nothing matches/],
+  ['an empty catalogue', () => [], /The catalogue is empty/, /Nothing matches/],
+  ['loading', () => new Promise(() => {}), null, /Nothing matches|Loading models…/],
+]) {
+  const st = tauriStubs({ extra: { transcribe_get_available_models: answer } });
+  const { ModelCatalogue } = loadTsx('src/components/onboarding/shared/ModelCatalogue.tsx', {
+    ...boundaryStubs().modules, '@tauri-apps/api/core': st.core, '@tauri-apps/api/event': st.event,
+  });
+  const box = document.createElement('div');
+  document.body.appendChild(box);
+  const r = createRoot(box);
+  await act(async () => { r.render(React.createElement(ModelCatalogue, { selectedModel: '', onModelSelect: () => {} })); });
+  await settle();
+  const text = box.textContent;
+  if (expect) check(`7b ${state} says so`, expect.test(text), `the catalogue reads "${text.slice(0, 120)}"`);
+  else check(`7b ${state} is a skeleton`, box.querySelector('[aria-busy="true"]') !== null, `the catalogue reads "${text.slice(0, 120)}"`);
+  check(`7b ${state} gives no search advice`, !forbid.test(text), `the catalogue reads "${text.slice(0, 120)}"`);
+  await act(async () => { r.unmount(); });
+  box.remove();
+}
 
 // --- Settings: the card is what it was ----------------------------------------------------------------
 {
