@@ -41,6 +41,14 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/transcribe_engine/measurements.rs::a_stream_commits_append_only_and_finalize_emits_the_tail',
    { blocker: 'needs 501 MB of streaming models (#169 condition 6); run by name and its output pasted ' +
               'into the verdict of the change that moves the engine' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::a_capped_stream_keeps_the_whole_meeting',
+   { blocker: 'needs the three moonshine_streaming models (545 MB on disk) and minutes of CPU on four cores ' +
+              '(#200 condition 2); run by name and its output pasted into the verdict of a change to ' +
+              'the live path rule' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::the_catalogue_label_agrees_with_the_path_rule',
+   { blocker: 'needs the streaming models in the measurement cache, 6 of the 13 streaming rows (#200 ' +
+              'condition 4); run by name and its output pasted into the verdict of a change to the ' +
+              'catalogue or the path rule' }],
   ['frontend/src-tauri/src/transcribe_engine/measurements.rs::the_august_exports_load_and_decode_on_the_pinned_engine',
    { blocker: 'needs about 8 GB of August exports, one per repository whose bytes changed (#169 ' +
               'condition 9); run by name and its output pasted into the verdict of the change that ' +

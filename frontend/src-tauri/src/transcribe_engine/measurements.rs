@@ -282,7 +282,9 @@ fn every_family_decodes_on_the_pinned_engine() {
 #[ignore = "needs 501 MB of models (crate::measure); run by name, output pasted into #169's verdict"]
 fn a_stream_commits_append_only_and_finalize_emits_the_tail() {
     let mut failures = Vec::new();
-    for name in ["nemotron-speech-streaming-en-0.6b-q4", "moonshine-streaming-tiny-q8"] {
+    // moonshine_streaming is decoded in segments since #200 (its stream is capped and kept a meeting's
+    // first seconds), so only the uncapped stream is driven here.
+    for name in ["nemotron-speech-streaming-en-0.6b-q4"] {
         let entry = crate::config::transcribe_model(name).expect("a catalogue row");
         let model = load_model(measure_model(entry.filename), Backend::Cpu).expect("the model loads");
         let mut session = model.session().expect("a session");
@@ -323,15 +325,8 @@ fn a_stream_commits_append_only_and_finalize_emits_the_tail() {
                 failures.push(format!("{name}: the committed prefix was sent again: {:?}", log.committed));
             }
         }
-        let no_tail = log.committed.len() <= before_finish;
-        match (name, no_tail) {
-            // #200, on 553f109 and on v0.4.1 alike: moonshine-streaming's commit stalls after its first
-            // words and finalize commits nothing more. Held as known, so the day it emits a tail this
-            // goes red and the expectation is removed with #200's fix.
-            ("moonshine-streaming-tiny-q8", true) => eprintln!("{name}: no tail at finalize, known (#200)"),
-            ("moonshine-streaming-tiny-q8", false) => failures.push(format!("{name}: finalize emitted a tail; #200 may be fixed, so remove its expectation here")),
-            (_, true) => failures.push(format!("{name}: finalize emitted no tail ({before_finish} chunks before, {} after)", log.committed.len())),
-            (_, false) => {}
+        if log.committed.len() <= before_finish {
+            failures.push(format!("{name}: finalize emitted no tail ({before_finish} chunks before, {} after)", log.committed.len()));
         }
     }
     assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
@@ -397,4 +392,165 @@ fn the_instruments_own_rules_go_red_on_what_they_reject() {
     let a = tokens_for("ask not what your country", false);
     assert_eq!(similarity(&a, &a), 1.0);
     assert!(similarity(&a, &tokens_for("ask not what my country", false)) < 1.0);
+}
+
+/// Records every committed chunk with its audio position.
+#[derive(Default)]
+struct TimedSink(Vec<(String, f64)>);
+
+impl crate::audio::transcription::ports::TranscriptSink for TimedSink {
+    fn committed(&mut self, chunk: crate::audio::transcription::ports::TranscriptChunk) {
+        self.0.push((chunk.text, chunk.audio_start));
+    }
+    fn tentative(&mut self, _text: &str) {}
+    fn warn(&mut self, message: &str) {
+        eprintln!("warning: {message}");
+    }
+}
+
+/// Feed `audio` in 100 ms chunks, then finish, returning each feed's wall time with the second it began.
+fn feed_all(t: &mut dyn Transcriber, audio: &[f32], sink: &mut TimedSink) -> Vec<(f64, f64)> {
+    let mut walls = Vec::new();
+    for (i, chunk) in audio.chunks(1600).enumerate() {
+        let started = std::time::Instant::now();
+        if let Err(e) = t.feed(Channel::You, chunk, sink) {
+            eprintln!("a feed failed: {e}");
+        }
+        walls.push((i as f64 * 0.1, started.elapsed().as_secs_f64()));
+    }
+    if let Err(e) = t.finish(sink) {
+        eprintln!("finish failed: {e}");
+    }
+    walls
+}
+
+/// Words that occur only in dots-full.wav's last 20 s: measured with tiny through `options::run`, the
+/// first 285 s in 30 s pieces against the last 20 s, and fixed before #200's work.
+const TAIL_WORDS: [&str; 3] = ["destiny", "karma", "confidence"];
+
+/// A moonshine_streaming row, through the adapter `live_path` picks for it, keeps the whole of a long
+/// recording. (#200 condition 2)
+///
+/// One stream held at most 81.9 s, re-decoded everything on every feed, and committed only its first
+/// words. Each check here was red on that path. Run on four cores (`taskset -c 0-3`), which the
+/// real-time bound assumes. `BC_ROWS` (comma-separated) runs a subset; `BC_AUDIO_SECONDS` cuts the
+/// sample, which the growth control on the stream path needs.
+#[test]
+#[ignore = "needs the moonshine_streaming models and minutes of CPU (crate::measure); run by name on four cores, output pasted into #200's verdict"]
+fn a_capped_stream_keeps_the_whole_meeting() {
+    use crate::audio::transcription::adapters::segmented::{Decoder, SegmentedTranscriber};
+    use crate::audio::transcription::{live_path, LivePath};
+    let mut audio = read_wav_mono_16k(&pinned_sample("dots-full.wav"));
+    if let Ok(secs) = std::env::var("BC_AUDIO_SECONDS") {
+        audio.truncate((secs.parse::<f64>().expect("seconds") * 16_000.0) as usize);
+    }
+    let len_s = audio.len() as f64 / 16_000.0;
+    let rows: Vec<String> = std::env::var("BC_ROWS")
+        .map(|v| v.split(',').map(|r| r.trim().to_string()).collect())
+        .unwrap_or_else(|_| ["moonshine-streaming-tiny-q8", "moonshine-streaming-small-q8", "moonshine-streaming-medium-q8"].map(String::from).to_vec());
+    let mut failures = Vec::new();
+
+    // Routing's sentinel: an uncapped stream still streams.
+    if let Ok(path) = std::panic::catch_unwind(|| measure_model(crate::config::transcribe_model("nemotron-speech-streaming-en-0.6b-q4").unwrap().filename)) {
+        let caps = load_model(path, Backend::Cpu).ok().and_then(|m| m.capabilities().ok());
+        if live_path(caps.as_ref()) != LivePath::Stream {
+            failures.push("routing: nemotron's capabilities no longer select the stream path".to_string());
+        }
+    } else {
+        failures.push("routing: nemotron is not in the measure directory, so the sentinel cannot be read".to_string());
+    }
+
+    for name in &rows {
+        let entry = crate::config::transcribe_model(name).unwrap_or_else(|| panic!("{name} is not a catalogue row"));
+        let model = load_model(measure_model(entry.filename), Backend::Cpu).expect("the model loads");
+        let path = live_path(model.capabilities().ok().as_ref());
+        if path != LivePath::Segmented {
+            failures.push(format!("{name}: routing: the rule chose {path:?} for a capped stream"));
+        }
+
+        // The reference: the same model over consecutive pieces of at most 30 s.
+        let mut reference = String::new();
+        for piece in audio.chunks(30 * 16_000) {
+            let mut s = model.session().expect("a session");
+            reference.push_str(&options::run(&mut s, piece, Some("en".into()), Diarize::Default).map(|t| t.text).unwrap_or_default());
+            reference.push(' ');
+        }
+
+        let mut sink = TimedSink::default();
+        let walls = match path {
+            LivePath::Segmented => {
+                let session = model.session().expect("a session");
+                let mut t = SegmentedTranscriber::new(Decoder::Local { session, language: Some("en".into()), diarize: Diarize::Default }).expect("the segmented adapter");
+                feed_all(&mut t, &audio, &mut sink)
+            }
+            LivePath::Stream => {
+                let mut session = model.session().expect("a session");
+                let stream = options::stream(&mut session, Some("en".into()), Diarize::Default, &StreamOptions::default()).expect("a stream");
+                let mut t = StreamingTranscriber::new(stream);
+                feed_all(&mut t, &audio, &mut sink)
+            }
+        };
+        let got: String = sink.0.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(" ");
+        let coverage = similarity(&tokens_for(&fold(&reference, false), false), &tokens_for(&fold(&got, false), false));
+        let latest = sink.0.iter().map(|(_, at)| *at).fold(0.0, f64::max);
+        let got_words = words(&got);
+        let missing: Vec<&str> = TAIL_WORDS.iter().copied().filter(|w| !got_words.iter().any(|g| g == w)).collect();
+        let window = |from: f64, to: f64| walls.iter().filter(|(at, _)| *at >= from && *at < to).map(|(_, w)| w).sum::<f64>();
+        let (early, late) = (window(0.0, 30.0), window(50.0, 80.0));
+        let total: f64 = walls.iter().map(|(_, w)| w).sum();
+        eprintln!(
+            "{name}: path {path:?}; {} rows; coverage {coverage:.3}; latest row at {latest:.1}s of {len_s:.1}s; tail words missing {missing:?}; feed wall 0-30s {early:.2}s, 50-80s {late:.2}s, total {total:.1}s ({:.2} x audio)",
+            sink.0.len(), total / len_s
+        );
+        if coverage < 0.9 {
+            failures.push(format!("{name}: coverage {coverage:.3} of the reference, under 0.9"));
+        }
+        if len_s > 100.0 && (latest < 0.9 * len_s || !missing.is_empty()) {
+            failures.push(format!("{name}: the tail: latest row at {latest:.1}s of {len_s:.1}s, missing {missing:?}"));
+        }
+        if late > 2.0 * early.max(0.01) {
+            failures.push(format!("{name}: growth: feeds in 50-80s cost {late:.2}s against {early:.2}s in 0-30s"));
+        }
+        if total > 0.5 * len_s {
+            failures.push(format!("{name}: real time: {total:.1}s of feeding for {len_s:.1}s of audio, over 0.5x"));
+        }
+    }
+    assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+}
+
+/// For every catalogue row whose model is in the measure directory, the rule streams it exactly when
+/// the catalogue says `streaming`. (#200's drift guard.) Batch rows are read too, so a family that
+/// streams but is missing from the generator's `STREAMING` set goes red here as well. Its reach is
+/// what the cache holds: 6 of the 13 natively streaming rows on 2026-10-25, without Nemotron 3.5 and
+/// Parakeet Unified.
+#[test]
+#[ignore = "needs the models in the measure directory (crate::measure); run by name"]
+fn the_catalogue_label_agrees_with_the_path_rule() {
+    use crate::audio::transcription::{live_path, LivePath};
+    let dir = measure_model("moonshine-tiny-Q8_0.gguf").parent().unwrap().to_path_buf();
+    let (mut seen, mut streaming_seen) = (0, 0);
+    let mut failures = Vec::new();
+    for entry in crate::config::TRANSCRIBE_MODEL_CATALOG {
+        let path = dir.join(entry.filename);
+        if !path.is_file() {
+            continue;
+        }
+        seen += 1;
+        let caps = load_model(&path, Backend::Cpu).ok().and_then(|m| m.capabilities().ok());
+        let native = caps.as_ref().is_some_and(|c| c.supports_streaming);
+        streaming_seen += usize::from(native);
+        let streams = live_path(caps.as_ref()) == LivePath::Stream;
+        eprintln!(
+            "{}: catalogue streaming {}, rule streams {streams}, supports_streaming {native}, max_audio_ms {:?}",
+            entry.name, entry.streaming, caps.as_ref().map(|c| c.max_audio_ms)
+        );
+        if caps.is_none() {
+            failures.push(format!("{}: its capabilities could not be read", entry.name));
+        } else if streams != entry.streaming {
+            failures.push(format!("{}: the catalogue says streaming {}, the rule says {streams}", entry.name, entry.streaming));
+        }
+    }
+    eprintln!("{seen} catalogue rows read, {streaming_seen} of them natively streaming");
+    assert!(streaming_seen > 0, "no streaming model in {}", dir.display());
+    assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
 }
