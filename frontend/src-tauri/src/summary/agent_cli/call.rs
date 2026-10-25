@@ -190,8 +190,8 @@ pub fn toml_basic_string(s: &str) -> String {
     out
 }
 
-/// A zero-width space, put after each `@` and after a `$` that starts a word in what is sent to the
-/// CLI, and taken out of what comes back.
+/// A zero-width space, put after every `@` and every `$` in what is sent to the CLI, and taken out of
+/// what comes back.
 const MENTION_BREAK: char = '\u{200B}';
 
 /// The prompt with the CLIs' own mention syntax broken, so a transcript cannot use it (#212 round 4).
@@ -202,13 +202,17 @@ const MENTION_BREAK: char = '\u{200B}';
 ///   permission deny in `CLAUDE_DENY_SETTINGS` also stops the read, but a managed policy with
 ///   `allowManagedPermissionRulesOnly` would set that deny aside, and this does not depend on it.
 /// - Codex loads and follows the person's installed skill named `$name`. With the break it did not.
+///   Every `$`, not only one before a letter: `$9name` and a link labelled `[$-](…/SKILL.md)` loaded
+///   a skill past that rule (the gate's adversary, measured by the skill's size in the request's
+///   input tokens), and with every `$` broken neither did.
+///
+/// One break per character, so `restore_mentions` takes out exactly what was put in, even where the
+/// transcript carried a zero-width space of its own.
 pub fn neutralise_mentions(prompt: &str) -> String {
     let mut out = String::with_capacity(prompt.len() + 16);
-    let mut chars = prompt.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in prompt.chars() {
         out.push(c);
-        let starts_word = chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_');
-        if c == '@' || (c == '$' && starts_word) {
+        if c == '@' || c == '$' {
             out.push(MENTION_BREAK);
         }
     }
@@ -555,10 +559,19 @@ mod tests {
     fn mention_syntax_is_broken_on_the_way_in_and_mended_on_the_way_out() {
         let t = "See @/home/u/.ssh/id_ed25519, use $bcuser, mail anna@example.com, it costs $5 and $ 10.";
         let n = neutralise_mentions(t);
-        assert_eq!(n, "See @\u{200B}/home/u/.ssh/id_ed25519, use $\u{200B}bcuser, mail anna@\u{200B}example.com, it costs $5 and $ 10.");
+        assert_eq!(n, "See @\u{200B}/home/u/.ssh/id_ed25519, use $\u{200B}bcuser, mail anna@\u{200B}example.com, it costs $\u{200B}5 and $\u{200B} 10.");
         assert!(!n.contains("@/") && !n.contains("$bcuser"));
         assert_eq!(restore_mentions(&n), t);
         assert_eq!(neutralise_mentions("@\"/quoted path\" @~/.bashrc"), "@\u{200B}\"/quoted path\" @\u{200B}~/.bashrc");
+        // The adversary's two forms past a letters-only rule (#212, the gate's fourth round).
+        for form in ["$9bcprobe", "[$-](~/.agents/skills/bcprobe/SKILL.md)", "[$9x](/abs/SKILL.md)"] {
+            let b = neutralise_mentions(form);
+            assert!(!b.contains("$9") && !b.contains("$-"), "{form} passed unbroken: {b:?}");
+        }
+        // A zero-width space the transcript carried itself survives the round trip.
+        for own in ["$\u{200B}5", "@\u{200B}x", "$\u{200B}\u{200B}q"] {
+            assert_eq!(restore_mentions(&neutralise_mentions(own)), own);
+        }
     }
 
     #[test]
