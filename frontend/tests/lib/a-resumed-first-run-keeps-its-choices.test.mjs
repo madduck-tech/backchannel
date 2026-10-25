@@ -25,6 +25,9 @@ const DEFAULT = 'parakeet-tdt-0.6b-v3-q8';
 const CHOSEN = 'moonshine-tiny-q8';
 const PROVIDER = 'claude';
 const CLOUD_MODEL = 'claude-sonnet-4-5-20250929';
+// The rows the stubbed catalogue lists. A saved name outside it is a model this build no longer has.
+const CATALOGUE = [DEFAULT, CHOSEN, 'whisper-tiny-q8'];
+const GONE = 'canary-1b-q8-removed';
 // The payload condition (a) captures, committed, so the Rust round trip in `onboarding.rs` reads the
 // very same JSON.
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../fixtures/onboarding-status-with-choices.json', import.meta.url), 'utf8'));
@@ -45,7 +48,9 @@ async function mount({ saved = null, onDisk = [], latency = 0, outsideAct = fals
     extra: {
       transcribe_init: null,
       transcribe_has_available_models: () => onDisk.length > 0,
-      transcribe_get_available_models: () => onDisk.map((name) => ({ name, status: 'Available', size_mb: 34 })),
+      // As the command answers: every catalogue row, each with its status.
+      transcribe_get_available_models: () =>
+        CATALOGUE.map((name) => ({ name, status: onDisk.includes(name) ? 'Available' : 'Missing', size_mb: 34 })),
       // Accepted and never finished: what is asked for is the measurement, not what arrives.
       transcribe_download_model: () => new Promise(() => {}),
       transcribe_list_models: [],
@@ -110,11 +115,17 @@ const settle = () => act(async () => { for (let i = 0; i < 10; i++) await sleep(
 // Longer than the provider's 1 s auto-save debounce.
 const pastTheSave = (outsideAct) => (outsideAct ? sleep(1400) : act(async () => { await sleep(1400); }));
 
-// (a) Choose, walk to step 4, and the auto-saved payload names both choices.
+// (a) Choose, walk to step 4, and the auto-saved payload names both choices. The status the step 1→2
+// change writes is kept for (g), so (g) resumes from what the provider wrote, not from a hand-made one.
+let fromStepTwo = null;
 {
   const m = await mount();
+  await act(async () => { m.ctx().setSelectedTranscribeModel(CHOSEN); });
+  await settle();
+  await act(async () => { m.ctx().goToStep(2); });
+  await pastTheSave(false);
+  fromStepTwo = m.saves.at(-1);
   await act(async () => {
-    m.ctx().setSelectedTranscribeModel(CHOSEN);
     m.ctx().setSummaryProvider(PROVIDER);
     m.ctx().setSelectedSummaryModel(CLOUD_MODEL);
   });
@@ -153,14 +164,20 @@ const pastTheSave = (outsideAct) => (outsideAct ? sleep(1400) : act(async () => 
   check('(c) no on-device summary download is asked for', summary.length === 0, `asked for ${JSON.stringify(summary)}`);
   const rows = [...m.container.querySelectorAll('section[aria-label]')].map((s) => s.getAttribute('aria-label'));
   check('(c) the download screen shows only the chosen model\'s row', JSON.stringify(rows) === JSON.stringify([CHOSEN]), `rows ${JSON.stringify(rows)}`);
-  // (e), on the same resume: its own auto-save still names both.
+  // (e) Resume twice: the first resume's own save, then a second resume from that save.
   await pastTheSave(true);
-  const last = m.saves.at(-1);
-  check('(e) precondition: the resume saved', !!last, 'no save after the resume');
-  check('(e) the save after a resume still names both choices',
-    last?.model_status?.selected_transcribe_model === CHOSEN && last?.model_status?.summary_provider === PROVIDER,
-    `saved ${JSON.stringify(last?.model_status)}`);
+  const first = m.saves.at(-1);
+  check('(e) precondition: the first resume saved', !!first, 'no save after the first resume');
   await m.unmount();
+  const again = await mount({ saved: first, latency: 15, outsideAct: true });
+  await sleep(1200);
+  await pastTheSave(true);
+  const second = again.saves.at(-1);
+  check('(e) precondition: the second resume saved', !!second, 'no save after the second resume');
+  check('(e) the save after a second resume still names both choices',
+    second?.model_status?.selected_transcribe_model === CHOSEN && second?.model_status?.summary_provider === PROVIDER,
+    `saved ${JSON.stringify(second?.model_status)}`);
+  await again.unmount();
 }
 
 // (d) Resume at step 3 with only the default on disk: the flag is false on every step-3 render; with the
@@ -193,7 +210,9 @@ const pastTheSave = (outsideAct) => (outsideAct ? sleep(1400) : act(async () => 
 // (g) Resume at step 2 from the status the step 1→2 change wrote: the model chosen at step 1 is the
 // choice, and step 3 asks for it.
 {
-  const fromStepTwo = { ...FIXTURE, current_step: 2, model_status: { parakeet: 'not_downloaded', summary: 'not_downloaded', selected_transcribe_model: CHOSEN, summary_provider: 'builtin-ai' } };
+  check('(g) precondition: the step 1→2 change saved step 2 with the choice',
+    fromStepTwo?.current_step === 2 && fromStepTwo?.model_status?.selected_transcribe_model === CHOSEN,
+    `saved ${JSON.stringify(fromStepTwo)}`);
   const m = await mount({ saved: fromStepTwo });
   check('(g) the model chosen at step 1 survives a resume at step 2', m.ctx().selectedTranscribeModel === CHOSEN, `model ${m.ctx().selectedTranscribeModel}`);
   await act(async () => { m.ctx().goToStep(3); });
@@ -201,6 +220,42 @@ const pastTheSave = (outsideAct) => (outsideAct ? sleep(1400) : act(async () => 
   const asked = m.downloads('transcribe_download_model');
   check('(g) and step 3 asks for it', JSON.stringify(asked) === JSON.stringify([CHOSEN]), `asked for ${JSON.stringify(asked)}`);
   await m.unmount();
+}
+
+// (h) A saved model this build no longer lists resumes on the default, not on "Unknown model" with
+// Continue disabled and no way back, and the next save does not write the dead name again.
+{
+  const gone = { ...FIXTURE, current_step: 3, model_status: { ...FIXTURE.model_status, selected_transcribe_model: GONE } };
+  const m = await mount({ saved: gone, latency: 15, outsideAct: true });
+  await sleep(1200);
+  const asked = m.downloads('transcribe_download_model');
+  check('(h) a model the catalogue no longer lists resumes on the default', JSON.stringify(asked) === JSON.stringify([DEFAULT]), `asked for ${JSON.stringify(asked)}`);
+  await pastTheSave(true);
+  const last = m.saves.at(-1);
+  check('(h) and the save after it names the default, not the dead name',
+    last?.model_status?.selected_transcribe_model === DEFAULT, `saved ${JSON.stringify(last?.model_status)}`);
+  check('(h) the summariser is still restored', last?.model_status?.summary_provider === PROVIDER, `saved ${JSON.stringify(last?.model_status)}`);
+  await m.unmount();
+}
+
+// (i) A saved summariser the screen does not offer resumes on the default one.
+{
+  const m = await mount({ saved: { ...FIXTURE, model_status: { ...FIXTURE.model_status, summary_provider: 'gemini' } } });
+  check('(i) a summariser the screen does not offer resumes on builtin-ai', m.ctx().summaryProvider === 'builtin-ai', `provider ${m.ctx().summaryProvider}`);
+  check('(i) and the model is still restored', m.ctx().selectedTranscribeModel === CHOSEN, `model ${m.ctx().selectedTranscribeModel}`);
+  await m.unmount();
+}
+
+// The list the restore checks against is the screen's list, in its order.
+{
+  const t = tauriStubs({});
+  const { SUMMARISER_IDS } = loadTsx('src/contexts/OnboardingContext.tsx', { ...boundaryStubs().modules, '@tauri-apps/api/core': t.core, '@tauri-apps/api/event': t.event });
+  const src = fs.readFileSync(new URL('../../src/components/onboarding/steps/SummariserStep.tsx', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('const OPTIONS'), src.indexOf('];', src.indexOf('const OPTIONS')));
+  const offered = [...block.matchAll(/\bid: '([^']+)'/g)].map((x) => x[1]);
+  check('precondition: the summariser screen\'s options were read', offered.length >= 5, `read ${JSON.stringify(offered)}`);
+  check('SUMMARISER_IDS equals the summariser screen\'s options', JSON.stringify([...SUMMARISER_IDS]) === JSON.stringify(offered),
+    `context ${JSON.stringify(SUMMARISER_IDS)}, screen ${JSON.stringify(offered)}`);
 }
 
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
