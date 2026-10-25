@@ -34,14 +34,17 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/audio/import.rs::test_import_pipeline_decode_vad',
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
-  ['frontend/src-tauri/src/audio/diarization.rs::record_the_diarizers_segments_on_the_pinned_engine',
-   { blocker: 'a recorder, not an assertion: it writes the diarizer fixture once, on the engine it is ' +
-              'run against (553f109 for #169), and compares nothing. Run in the gate it would rewrite ' +
-              'the fixture the comparison after the engine move reads' }],
-  ['frontend/src-tauri/src/transcribe_engine/engine.rs::record_a_decode_on_the_pinned_engine',
-   { blocker: 'a recorder, not an assertion: it writes one decode fixture on the engine it is run ' +
-              'against (553f109 for #169) and compares nothing. Run in the gate it would rewrite the ' +
-              'fixture the comparison after the engine move reads' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::every_family_decodes_on_the_pinned_engine',
+   { blocker: 'needs about 16.7 GB of models, one row per upstream family plus the default and the ' +
+              'repositories whose bytes changed (#169 condition 5); run by name and its output pasted ' +
+              'into the verdict of the change that moves the engine' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::a_stream_commits_append_only_and_finalize_emits_the_tail',
+   { blocker: 'needs 501 MB of streaming models (#169 condition 6); run by name and its output pasted ' +
+              'into the verdict of the change that moves the engine' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::what_the_august_exports_do_on_the_pinned_engine',
+   { blocker: 'an instrument, not an assertion: it loads and decodes the August exports of the ' +
+              'repositories whose bytes changed, about 8 GB (#169 condition 9), and any outcome is a ' +
+              'result; its output is pasted into the verdict' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
    { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
      why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +

@@ -63,7 +63,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use transcribe_cpp::{RunOptions, StreamOptions};
+use transcribe_cpp::{Diarize, StreamOptions};
 
 /// Longest the microphone may stay open waiting for a first committed word.
 ///
@@ -237,7 +237,7 @@ async fn measure(
         .open_session()
         .await
         .map_err(|e| format!("Failed to open transcription session: {e}"))?;
-    if !session.model().capabilities().supports_streaming {
+    if !session.model().capabilities().is_ok_and(|c| c.supports_streaming) {
         return Err("The loaded model does not stream. The probe times first *committed* text, \
                     and the VAD + batch path's latency floor is its 8s segment length, which \
                     would measure the segmenter rather than the capture path."
@@ -248,7 +248,7 @@ async fn measure(
     let sink_marks = marks.clone();
     let decoding = tokio::task::spawn_blocking(move || {
         let mut session = session;
-        let run_options = RunOptions { language, ..Default::default() };
+        let run_options = crate::transcribe_engine::options::run_options(language, Diarize::Default);
         // Semicolon load-bearing: without it the match is the closure's tail
         // expression, so its temporary `Result<Stream<'_>, _>` outlives
         // `session` — which the stream borrows.

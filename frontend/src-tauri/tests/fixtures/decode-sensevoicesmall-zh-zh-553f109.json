@@ -1,0 +1,7 @@
+{
+  "engine_revision": "553f1099a2b3a5bc4421894be171f09960fc0f3a",
+  "language": "zh",
+  "model": "SenseVoiceSmall-Q8_0.gguf",
+  "sample": "zh.wav",
+  "text": "开放时间早上九点至下午五点"
+}

@@ -91,6 +91,22 @@ pub trait TranscriptSink: Send {
     fn warn(&mut self, message: &str);
 }
 
+/// A transcriber that can take no more audio for the rest of the recording. (#169)
+///
+/// From transcribe.cpp v0.4.1 a stream whose family hook throws ends `FAILED`, and every later feed
+/// fails the same way. Any other error costs one chunk and the decoder carries on, so an adapter
+/// returns this, inside its `anyhow::Error`, only for the first kind, and the use case stops there.
+#[derive(Debug)]
+pub struct Fatal(pub String);
+
+impl std::fmt::Display for Fatal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Fatal {}
+
 /// Anything that can turn a live 16kHz mono stream into transcript text.
 ///
 /// One trait covers all three backends because the differences between them —

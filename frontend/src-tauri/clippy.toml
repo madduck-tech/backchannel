@@ -1,0 +1,8 @@
+# Every transcribe.cpp model is loaded through `transcribe_engine::options::load_model`, which copies
+# the weights instead of mapping the file (#169). These are the loaders that take default options;
+# a call to one anywhere else fails Stage 1's `cargo clippy -- -D warnings`.
+disallowed-methods = [
+  { path = "transcribe_cpp::Model::load", reason = "maps the file; load through transcribe_engine::options::load_model (#169)" },
+  { path = "transcribe_cpp::Model::load_with", reason = "load through transcribe_engine::options::load_model, which sets no_mmap (#169)" },
+  { path = "transcribe_cpp::transcribe", reason = "loads with default options; load through transcribe_engine::options::load_model (#169)" },
+]

@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use transcribe_cpp::{
-    Model, RunExtension, RunOptions, SortformerPreset, SortformerStreamOptions, SpeakerSegment,
+    Backend, DiarizeExtension, DiarizeOptions, SortformerDiarizeOptions, SortformerPreset, SpeakerSegment,
 };
 
 /// Result of a labelling pass.
@@ -208,33 +208,39 @@ async fn run_diarization<R: Runtime>(
 /// the moment the run returns — the pass happens once per meeting, and 139 MB
 /// resident for the rest of the session buys nothing.
 async fn run_diarizer(model_path: PathBuf, audio: Vec<f32>) -> Result<Vec<SpeakerSegment>> {
+    run_diarizer_at(model_path, audio, SortformerPreset::VeryHighLatency).await
+}
+
+/// [`run_diarizer`] at a stated preset, so the comparison test can measure what another operating
+/// point would have said.
+async fn run_diarizer_at(
+    model_path: PathBuf,
+    audio: Vec<f32>,
+    preset: SortformerPreset,
+) -> Result<Vec<SpeakerSegment>> {
     tokio::task::spawn_blocking(move || -> Result<Vec<SpeakerSegment>> {
         let started = std::time::Instant::now();
-        let model = Model::load(&model_path)
+        let model = crate::transcribe_engine::options::load_model(&model_path, Backend::Auto)
             .map_err(|e| anyhow!("Failed to load the speaker model: {}", e))?;
+        // From v0.4 Sortformer is a diarizer, not an ASR model: it runs through its own session,
+        // and an ASR session on it is refused.
         let mut session = model
-            .session()
+            .diarize_session()
             .map_err(|e| anyhow!("Failed to open a speaker session: {}", e))?;
 
-        let options = RunOptions {
-            // VERY_HIGH_LATENCY is the offline operating point: ~30s of
-            // lookahead, which costs nothing on a recording that already
-            // finished, and it is the point upstream's 14.7% AMI DER was
-            // measured at. `diarize` is left at its default deliberately —
-            // sortformer sets DIARIZATION as a family invariant and populates
-            // speaker segments straight from the probabilities, so the runtime
-            // toggle has nothing to switch.
-            family: Some(RunExtension::Sortformer(SortformerStreamOptions {
-                preset: Some(SortformerPreset::VeryHighLatency),
-            })),
-            ..Default::default()
+        // VERY_HIGH_LATENCY is the offline operating point: ~30s of
+        // lookahead, which costs nothing on a recording that already
+        // finished, and it is the point upstream's 14.7% AMI DER was
+        // measured at.
+        let options = DiarizeOptions {
+            family: Some(DiarizeExtension::Sortformer(SortformerDiarizeOptions { preset: Some(preset) })),
         };
 
-        let transcript = session
+        let segments = session
             .run(&audio, &options)
             .map_err(|e| anyhow!("Speaker detection failed: {}", e))?;
         info!("Diarizer run took {:?}", started.elapsed());
-        Ok(transcript.speaker_segments)
+        Ok(segments)
     })
     .await
     .map_err(|e| anyhow!("Speaker detection task panicked: {}", e))?
@@ -612,34 +618,123 @@ mod tests {
         assert_eq!(row_span(&row), None);
     }
 
-    /// The diarizer's segments for upstream's two-speaker sample, on the engine `Cargo.lock` pins.
-    /// (#169)
-    ///
-    /// Run once on `553f109`, before the engine moved, to record the fixture the comparison after the
-    /// move reads. It writes to `BC_RECORD_FIXTURE` and compares nothing itself.
+    /// Frame-level speaker agreement between two diarizations, under the best global mapping of one's
+    /// ids onto the other's: labels are arrival order, so the same turns can carry swapped ids. Each
+    /// 10 ms frame holds the set of speakers active in it; the score is the share of frames, among those
+    /// where either side hears someone, whose sets are equal. 1.0 is the same answer.
+    fn agreement(a: &[SpeakerSegment], b: &[SpeakerSegment]) -> f64 {
+        const FRAME_MS: i64 = 10;
+        let end = a.iter().chain(b).map(|s| s.t1_ms).max().unwrap_or(0);
+        let frames = (end / FRAME_MS + 1) as usize;
+        let masks = |segs: &[SpeakerSegment], map: &[i32; 5]| -> Vec<u8> {
+            let mut m = vec![0u8; frames];
+            for s in segs.iter().filter(|s| (1..=4).contains(&s.speaker_id)) {
+                let id = map[s.speaker_id as usize];
+                let (start, end) = ((s.t0_ms / FRAME_MS) as usize, ((s.t1_ms / FRAME_MS) as usize).min(frames));
+                for cell in m.iter_mut().take(end).skip(start) {
+                    *cell |= 1 << id;
+                }
+            }
+            m
+        };
+        let identity = [0, 1, 2, 3, 4];
+        let ma = masks(a, &identity);
+        let mut best = 0.0f64;
+        // Every mapping of b's ids 1..=4 onto 1..=4: 24 of them.
+        let ids = [1, 2, 3, 4];
+        for p0 in ids { for p1 in ids { for p2 in ids { for p3 in ids {
+            let perm = [p0, p1, p2, p3];
+            if (0..4).any(|i| (i + 1..4).any(|j| perm[i] == perm[j])) { continue; }
+            let mb = masks(b, &[0, p0, p1, p2, p3]);
+            let (mut same, mut speech) = (0usize, 0usize);
+            for (x, y) in ma.iter().zip(&mb) {
+                if *x != 0 || *y != 0 {
+                    speech += 1;
+                    if x == y { same += 1; }
+                }
+            }
+            if speech > 0 { best = best.max(same as f64 / speech as f64); }
+        }}}}
+        best
+    }
+
     #[test]
-    #[ignore = "needs the diarizer on disk (crate::measure); run by name with BC_RECORD_FIXTURE=<path>"]
-    fn record_the_diarizers_segments_on_the_pinned_engine() {
+    fn agreement_is_one_for_the_same_turns_under_swapped_ids_and_less_for_others() {
+        let a = [turn(0, 1000, 1), turn(1000, 2000, 2)];
+        let swapped = [turn(0, 1000, 2), turn(1000, 2000, 1)];
+        assert_eq!(agreement(&a, &swapped), 1.0, "arrival-order ids are not identities");
+        let one_speaker = [turn(0, 2000, 1)];
+        assert!((agreement(&a, &one_speaker) - 0.5).abs() < 1e-9, "{}", agreement(&a, &one_speaker));
+    }
+
+    /// The fraction of frames the diarizer on the pinned engine must share with what it said on
+    /// `553f109`, the fixture recorded before the move.
+    ///
+    /// Measured on v0.4.1, CPU, 2026-10-25: `VeryHighLatency` agrees with the fixture on 1.0000 of
+    /// frames, with the same five segments, and `LowLatency` agrees on 0.9820. The floor sits between
+    /// them, so the wrong preset is red while drift has 0.01 of room.
+    const AGREEMENT_FLOOR: f64 = 0.99;
+
+    /// The diarizer after the move to v0.4.1 against what it said before it, on upstream's two-speaker
+    /// sample. (#169 condition 4)
+    #[test]
+    #[ignore = "needs the diarizer on disk (crate::measure); selected by name in gopnik.json stage 1"]
+    fn the_diarizer_agrees_with_what_it_said_before_the_engine_moved() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/diarizer-sortformer-2spk-mix.json")).expect("the fixture parses");
+        assert_eq!(fixture["engine_revision"], "553f1099a2b3a5bc4421894be171f09960fc0f3a", "the fixture is the one recorded before the move");
+        let before: Vec<SpeakerSegment> = fixture["segments"]
+            .as_array()
+            .expect("segments")
+            .iter()
+            .map(|s| turn(s["t0_ms"].as_i64().unwrap(), s["t1_ms"].as_i64().unwrap(), s["speaker_id"].as_i64().unwrap() as i32))
+            .collect();
+        assert!(!before.is_empty(), "the fixture holds no segments");
+
         let filename = crate::config::SPEAKER_DIARIZER.filename;
         let model = crate::measure::measure_model(filename);
         let audio = crate::measure::read_wav_mono_16k(&crate::measure::pinned_sample("sortformer-2spk-mix.wav"));
-        let segments = tokio::runtime::Runtime::new()
-            .expect("a runtime")
-            .block_on(run_diarizer(model, audio))
-            .expect("the diarizer runs");
-        let out = std::env::var("BC_RECORD_FIXTURE").expect("set BC_RECORD_FIXTURE to the file to write");
-        let fixture = serde_json::json!({
-            "engine_revision": crate::measure::pinned_engine_revision(),
-            "model": filename,
-            "sample": "sortformer-2spk-mix.wav",
-            "preset": "VeryHighLatency",
-            "backend": "cpu",
-            "segments": segments
-                .iter()
-                .map(|s| serde_json::json!({ "t0_ms": s.t0_ms, "t1_ms": s.t1_ms, "speaker_id": s.speaker_id }))
-                .collect::<Vec<_>>(),
-        });
-        std::fs::write(&out, serde_json::to_string_pretty(&fixture).expect("json") + "\n").expect("the fixture is written");
-        eprintln!("{} segments written to {out}", segments.len());
+        let rt = tokio::runtime::Runtime::new().expect("a runtime");
+        let now = rt.block_on(run_diarizer(model.clone(), audio.clone())).expect("the diarizer runs");
+        let low = rt
+            .block_on(run_diarizer_at(model, audio, SortformerPreset::LowLatency))
+            .expect("the diarizer runs at LowLatency");
+
+        let drift = agreement(&before, &now);
+        eprintln!("segments now: {:?}", now.iter().map(|s| (s.t0_ms, s.t1_ms, s.speaker_id)).collect::<Vec<_>>());
+        eprintln!("agreement with the 553f109 fixture: {drift:.4}");
+        eprintln!("LowLatency against the fixture: {:.4}; against VeryHighLatency now: {:.4}", agreement(&before, &low), agreement(&now, &low));
+        eprintln!("floor: {AGREEMENT_FLOOR}");
+        // Collected, then failed once, so a control that breaks one check shows which, even where it
+        // moves another too.
+        let mut failures: Vec<String> = Vec::new();
+        if drift < AGREEMENT_FLOOR {
+            failures.push(format!("the diarizer agrees with its 553f109 fixture on {drift:.4} of frames, under the floor {AGREEMENT_FLOOR}"));
+        }
+
+        let max = crate::config::SPEAKER_DIARIZER.max_speakers as i32;
+        let mut ids: Vec<i32> = now.iter().map(|s| s.speaker_id).collect();
+        ids.sort();
+        ids.dedup();
+        if !ids.iter().all(|id| (1..=max).contains(id)) {
+            failures.push(format!("speaker ids {ids:?} are not each in [1, {max}]"));
+        }
+        if ids.len() < 2 {
+            failures.push(format!("the two-speaker sample came back with {} distinct ids: {ids:?}", ids.len()));
+        }
+
+        let end_s = now.iter().map(|s| s.t1_ms).max().unwrap_or(0) as f64 / 1000.0;
+        let labelled: Vec<i32> = (0..)
+            .map(|w| w as f64 * 2.0)
+            .take_while(|w0| *w0 < end_s)
+            .filter_map(|w0| dominant_speaker(&now, w0, w0 + 2.0))
+            .collect();
+        let mut distinct = labelled.clone();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() < 2 {
+            failures.push(format!("fixed 2 s windows were labelled {labelled:?}; at least two must carry different speakers"));
+        }
+        assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
     }
 }

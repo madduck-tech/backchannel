@@ -26,6 +26,7 @@
 | [0022](0022-a-check-that-skips-the-change-is-not-evidence.md) | A check that skips the change is not evidence | accepted |
 | [0023](0023-an-instruction-to-remove-ships-as-a-test.md) | An instruction to remove something ships as a test that fails while it is there | accepted |
 | [0024](0024-an-approved-design-nobody-built-is-a-defect.md) | An approved design nobody built is a defect, and "out of scope" is an issue or it is nothing | accepted |
+| [0025](0025-the-engine-moves-without-changing-what-a-person-sees.md) | transcribe.cpp 0.4.1 is adopted with the old pin's behaviour: weights copied, ITN off | accepted |
 
 ## Deferred questions
 

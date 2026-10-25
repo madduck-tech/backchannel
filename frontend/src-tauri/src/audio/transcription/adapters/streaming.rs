@@ -11,7 +11,8 @@
 // Because committed text can only grow, nothing downstream needs revision or
 // reconciliation logic.
 
-use crate::audio::transcription::ports::{Channel, Transcriber, TranscriptChunk, TranscriptSink};
+use crate::audio::transcription::ports::{Channel, Fatal, Transcriber, TranscriptChunk, TranscriptSink};
+use transcribe_cpp::StreamState;
 use anyhow::Result;
 use log::{info, warn};
 use std::time::{Duration, Instant};
@@ -178,7 +179,15 @@ impl Transcriber for StreamingTranscriber<'_> {
         let started = Instant::now();
         let update = self.stream.feed(pcm_16k);
         self.feed_wall += started.elapsed();
-        let update = update?;
+        let update = match update {
+            Ok(update) => update,
+            // A stream that ended FAILED fails every later feed (#169). A feed refused before the
+            // native call, NaN for one, leaves it ACTIVE, and the next chunk may well decode.
+            Err(e) if self.stream.state() == StreamState::Failed => {
+                return Err(Fatal(format!("The live transcript stopped: the decoder failed ({e})")).into());
+            }
+            Err(e) => return Err(e.into()),
+        };
         self.measure(&update);
 
         if update.committed_changed {
