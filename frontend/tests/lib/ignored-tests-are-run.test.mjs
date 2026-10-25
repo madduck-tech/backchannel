@@ -34,6 +34,10 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/audio/import.rs::test_import_pipeline_decode_vad',
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
+  ['frontend/src-tauri/src/audio/diarization.rs::record_the_diarizers_segments_on_the_pinned_engine',
+   { blocker: 'a recorder, not an assertion: it writes the diarizer fixture once, on the engine it is ' +
+              'run against (553f109 for #169), and compares nothing. Run in the gate it would rewrite ' +
+              'the fixture the comparison after the engine move reads' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
    { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
      why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +

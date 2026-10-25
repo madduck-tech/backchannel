@@ -1,0 +1,34 @@
+{
+  "backend": "cpu",
+  "engine_revision": "553f1099a2b3a5bc4421894be171f09960fc0f3a",
+  "model": "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf",
+  "preset": "VeryHighLatency",
+  "sample": "sortformer-2spk-mix.wav",
+  "segments": [
+    {
+      "speaker_id": 1,
+      "t0_ms": 320,
+      "t1_ms": 2400
+    },
+    {
+      "speaker_id": 1,
+      "t0_ms": 7360,
+      "t1_ms": 9360
+    },
+    {
+      "speaker_id": 1,
+      "t0_ms": 10240,
+      "t1_ms": 10640
+    },
+    {
+      "speaker_id": 2,
+      "t0_ms": 4240,
+      "t1_ms": 6640
+    },
+    {
+      "speaker_id": 2,
+      "t0_ms": 9760,
+      "t1_ms": 12000
+    }
+  ]
+}

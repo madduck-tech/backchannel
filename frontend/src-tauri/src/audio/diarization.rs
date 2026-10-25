@@ -611,4 +611,35 @@ mod tests {
         };
         assert_eq!(row_span(&row), None);
     }
+
+    /// The diarizer's segments for upstream's two-speaker sample, on the engine `Cargo.lock` pins.
+    /// (#169)
+    ///
+    /// Run once on `553f109`, before the engine moved, to record the fixture the comparison after the
+    /// move reads. It writes to `BC_RECORD_FIXTURE` and compares nothing itself.
+    #[test]
+    #[ignore = "needs the diarizer on disk (crate::measure); run by name with BC_RECORD_FIXTURE=<path>"]
+    fn record_the_diarizers_segments_on_the_pinned_engine() {
+        let filename = crate::config::SPEAKER_DIARIZER.filename;
+        let model = crate::measure::measure_model(filename);
+        let audio = crate::measure::read_wav_mono_16k(&crate::measure::pinned_sample("sortformer-2spk-mix.wav"));
+        let segments = tokio::runtime::Runtime::new()
+            .expect("a runtime")
+            .block_on(run_diarizer(model, audio))
+            .expect("the diarizer runs");
+        let out = std::env::var("BC_RECORD_FIXTURE").expect("set BC_RECORD_FIXTURE to the file to write");
+        let fixture = serde_json::json!({
+            "engine_revision": crate::measure::pinned_engine_revision(),
+            "model": filename,
+            "sample": "sortformer-2spk-mix.wav",
+            "preset": "VeryHighLatency",
+            "backend": "cpu",
+            "segments": segments
+                .iter()
+                .map(|s| serde_json::json!({ "t0_ms": s.t0_ms, "t1_ms": s.t1_ms, "speaker_id": s.speaker_id }))
+                .collect::<Vec<_>>(),
+        });
+        std::fs::write(&out, serde_json::to_string_pretty(&fixture).expect("json") + "\n").expect("the fixture is written");
+        eprintln!("{} segments written to {out}", segments.len());
+    }
 }
