@@ -247,7 +247,7 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
   ];
   const A = [
     { id: 'claude-code', name: 'Claude Code', cli: 'claude', vendor: 'Anthropic', found: '~/.local/bin/claude' },
-    { id: 'codex', name: 'Codex', cli: 'codex', vendor: 'OpenAI', found: null, reads: true }
+    { id: 'codex', name: 'Codex', cli: 'codex', vendor: 'OpenAI', found: null, isolated: true }
   ];
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const st = { p: null, key: '', url: '', a: null };
@@ -259,10 +259,16 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
   const listHTML = () => `<div class="grp">ON THIS MACHINE</div>${P.filter(p => p.local).map(p => optHTML(p)).join('')}<div class="grp">SENT TO A PROVIDER</div>${P.filter(p => !p.local).map(p => optHTML(p, V === 'C' && st.p === p.id ? keyRow(p) : '')).join('')}${groupOpt()}`;
   const keyRow = p => `<div class="keyrow">${p.url ? `<label for="url">Server address</label><div class="well"><input id="url" type="url" data-url placeholder="https://" value="${esc(st.url)}"></div>` : ''}<label for="key">API key for ${p.name}</label><div class="well"><input id="key" type="password" data-key autocomplete="off" placeholder="Paste the key" value="${esc(st.key)}"></div></div>`;
 
-  const caption = a => `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.${a.reads ? ' It can change nothing here, but it can read files on this machine.' : ''}`;
-  const pathLine = a => a.found ? `<p class="path">Found: ${a.found}</p>` : `<p class="path miss">Not found in your shell's PATH. Install ${a.cli}, then reopen this step.</p>`;
+  const caption = a => a.isolated
+    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It can change nothing here, but it can read files on this machine.`
+    : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
+  // Three states: found and logged in; found but not logged in; not found. Only the first can be chosen.
+  const usable = a => !!a.found && a.loggedIn !== false;
+  const pathLine = a => !a.found ? `<p class="path miss">Not found in your shell's PATH. Install ${a.cli}, then reopen this step.</p>`
+    : a.loggedIn === false ? `<p class="path miss">Found, but not logged in. Run ${a.cli} once in a terminal to log in, then reopen this step.</p>`
+    : `<p class="path">Found: ${a.found}</p>`;
   const agentOpt = a => `<div class="opt${st.p === a.id ? ' on' : ''}${a.found ? '' : ' off'}" role="radio" aria-checked="${st.p === a.id}" aria-disabled="${!a.found}" tabindex="${a.found ? 0 : -1}" data-p="${a.found ? a.id : ''}"><span class="dot" aria-hidden="true"></span><span><span class="name">${a.name} <span class="quiet">(local CLI)</span><span class="id">${a.cli}</span></span><p class="where">${caption(a)}</p>${pathLine(a)}</span></div>`;
-  const subOpt = a => `<div class="agent-choice${st.a === a.id ? ' on' : ''}${a.found ? '' : ' off'}" role="radio" aria-checked="${st.a === a.id}" aria-disabled="${!a.found}" tabindex="${a.found ? 0 : -1}" data-a="${a.found ? a.id : ''}"><span class="dot" aria-hidden="true"></span><span><span class="name">${a.name}<span class="id">${a.cli}</span></span><p class="where">${caption(a)}</p>${pathLine(a)}</span></div>`;
+  const subOpt = a => `<div class="agent-choice${st.a === a.id ? ' on' : ''}${usable(a) ? '' : ' off'}" role="radio" aria-checked="${st.a === a.id}" aria-disabled="${!usable(a)}" tabindex="${usable(a) ? 0 : -1}" data-a="${usable(a) ? a.id : ''}"><span class="dot" aria-hidden="true"></span><span><span class="name">${a.name}<span class="id">${a.cli}</span></span><p class="where">${caption(a)}</p>${pathLine(a)}</span></div>`;
   const groupOpt = () => `<div class="opt${st.p === 'agent' ? ' on' : ''}" role="radio" aria-checked="${st.p === 'agent'}" tabindex="0" data-p="agent"><span class="dot" aria-hidden="true"></span><span><span class="name">An agent on this machine<span class="id">claude · codex</span></span><p class="where">Uses an agent CLI you are already logged in to. No API key. The transcript goes to that agent's provider.</p></span>${st.p === 'agent' ? `<div class="agent-choices" role="radiogroup" aria-label="Agent">${A.map(subOpt).join('')}</div>` : ''}</div>`;
   const $ = s => document.querySelector(s);
 
