@@ -38,6 +38,9 @@
 #     resumes  moonshine-tiny-q8 and Claude chosen, the application ended at step 4 and launched
 #              again on the same profile; the second launch must check, finish and store both
 #              choices (#172)
+#     resumes-gone  a status saved at step 3 naming a model this build no longer has, seeded, so
+#              the onboarding screens before it are not walked; the resume must fall back to the
+#              default and fetch it, not stop on "Unknown model" (#172's gate)
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -64,7 +67,7 @@
 # is indistinguishable from "nothing ran".
 set -euo pipefail
 
-APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue|resumes] [profile-dir]}"
+APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone] [profile-dir]}"
 MODE="${2:-chooses}"
 PROFILE="${3:-}"
 PORT="${BC_WD_PORT:-14446}"
@@ -88,7 +91,7 @@ fi
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue or resumes, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue, resumes or resumes-gone, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -106,7 +109,7 @@ mkdir -p "$APPDATA/models"
 # is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
 # "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
 # which is the same class of mistake as an empty one that is not a pass.
-if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ -d "$CACHE/models/summary" ]; then
+if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ "$MODE" != resumes-gone ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
@@ -147,6 +150,15 @@ app_pid() {
   return 1
 }
 HARNESS_UP=""
+# The state an older version leaves: first run quit at the download screen, with a model this build no
+# longer lists (a catalogue row upstream dropped). Seeded, which is what makes the state reachable;
+# so this mode cannot observe the screens before step 3.
+GONE_ID="canary-1b-q8-removed"
+if [ "$MODE" = resumes-gone ]; then
+  printf '{"status":{"version":"1.0","completed":false,"current_step":3,"model_status":{"parakeet":"not_downloaded","summary":"not_downloaded","selected_summary_model":"claude-sonnet-4-5-20250929","selected_transcribe_model":"%s","summary_provider":"claude"},"last_updated":"2026-10-25T00:00:00Z"}}\n' \
+    "$GONE_ID" > "$APPDATA/onboarding-status.json"
+  say "seeded a status at step 3 naming $GONE_ID, which the catalogue does not list"
+fi
 if [ "$MODE" = resumes ]; then
   RUNNING=$(app_pid) && die "another copy of the application is running (pid $RUNNING); a resume run cannot share the single-instance lock with it"
   # The second launch presses Check by speaking. The harness is the default input, so the check hears
@@ -235,6 +247,43 @@ await() {
   done
   die "waited ${secs}s for $what and it never happened"
 }
+
+# --- resumes-gone: a saved model this build no longer has resumes on the default (#172's gate) ------
+if [ "$MODE" = resumes-gone ]; then
+  DEFAULT_ID="parakeet-tdt-0.6b-v3-q8"; DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
+  # False on arrival: the download screen is step 3, and the application renders nothing of it until
+  # the resume has read the status.
+  await "document.querySelector('section[aria-label]') !== null" "the resume to reach the download screen" 60
+  sleep 3
+  FAILS=()
+  ROWS=$(js '"return JSON.stringify([...document.querySelectorAll(\"section[aria-label]\")].map(s=>s.getAttribute(\"aria-label\")))"')
+  say "the download screen's rows: $ROWS"
+  [ "$ROWS" = "[\"$DEFAULT_ID\"]" ] || FAILS+=("the rows are $ROWS, not the default's alone")
+  [ "$(js '"return document.body.innerText.includes(\"Unknown model\")"')" = "True" ] && FAILS+=("the screen says Unknown model")
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  # The positive sentinel: the download the resume asked for. Written before the request (#166).
+  FETCHED=""
+  for _ in $(seq 1 20); do
+    grep -qE "Downloading model file .+/$DEFAULT_FILE" "$LOG" && { FETCHED=1; break; }
+    sleep 0.5
+  done
+  [ -n "$FETCHED" ] || FAILS+=("no download of $DEFAULT_FILE was asked for")
+  grep -qE "Downloading model file .+$GONE_ID" "$LOG" && FAILS+=("a download of $GONE_ID was asked for")
+  # The auto-save after the resume: false until it runs, since the seed named the dead model.
+  SAVED=""
+  for _ in $(seq 1 20); do
+    SAVED=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"]["model_status"].get("selected_transcribe_model"))' "$APPDATA/onboarding-status.json" 2>/dev/null || true)
+    [ "$SAVED" != "$GONE_ID" ] && break
+    sleep 0.5
+  done
+  say "the status now names: $SAVED"
+  [ "$SAVED" = "$DEFAULT_ID" ] || FAILS+=("the status still names '$SAVED' after the resume saved")
+  [ ${#FAILS[@]} -eq 0 ] || die "a resume from a model this build no longer has: $(printf '%s | ' "${FAILS[@]}")"
+  PASSED=1
+  say "PASS (resumes-gone): the resume fell back to $DEFAULT_ID, fetched it, and saved it in place of $GONE_ID"
+  exit 0
+fi
 
 # --- first run is on screen, because nothing seeded it away ---------------------------------------
 await "document.body.innerText.includes('Choose a transcription model')" "the first-run screen" 90
