@@ -40,6 +40,7 @@ export function DownloadProgressStep() {
     summaryProvider,
     selectedTranscribeModel,
     startBackgroundDownloads,
+    transcribeModelIsOnDisk,
   } = useOnboarding();
 
   // The listeners below are subscribed once and must not close over the first render's choice.
@@ -350,16 +351,23 @@ export function DownloadProgressStep() {
    *
    * It runs on mount now, gated by nothing. Continue still calls it too, so drift the other way --
    * flag true, model gone -- is caught as before.
+   *
+   * **By name** (#170). It used to ask `transcribe_has_available_models`, "is SOME model on disk", so
+   * any leftover model repaired the flag for a chosen one still on its way: Continue enabled, the
+   * footer saying everything was here, the row saying "Already here from an earlier install". It
+   * repairs only towards true. Clearing the flag is the context's job, on a new choice and on resume,
+   * and doing it here would race the download: a check that read "absent" just before the file
+   * arrived would undo the completion event that followed it.
    */
   const verifyModelPresence = React.useCallback(async () => {
     await invoke('transcribe_init');
-    const actuallyAvailable = await invoke<boolean>('transcribe_has_available_models');
+    const actuallyAvailable = await transcribeModelIsOnDisk(chosenRef.current);
     if (actuallyAvailable && !parakeetDownloaded) {
       setParakeetDownloaded(true);
       setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
     }
     return actuallyAvailable;
-  }, [parakeetDownloaded, setParakeetDownloaded]);
+  }, [parakeetDownloaded, setParakeetDownloaded, transcribeModelIsOnDisk]);
 
   // On mount, before the user reaches for anything.
   useEffect(() => {
@@ -388,7 +396,8 @@ export function DownloadProgressStep() {
     // Verify actual model availability (catches state drift)
     try {
       await invoke('transcribe_init');
-      const actuallyAvailable = await invoke<boolean>('transcribe_has_available_models');
+      // The chosen model, by name: any other model on disk says nothing about this one (#170).
+      const actuallyAvailable = await transcribeModelIsOnDisk(chosenRef.current);
 
       if (actuallyAvailable && !parakeetDownloaded) {
         console.log('[DownloadProgressStep] Model available but state not updated');

@@ -29,7 +29,9 @@
 //     that logs "Not implemented: navigation". That is a *divergence*: the real app reloads and
 //     this does not, so nothing after the reload is asserted here.
 //   * `framer-motion` is stubbed to plain elements — animation is not behaviour.
-//   * `useOnboarding` is stubbed and hands back one object per render.
+//   * `useOnboarding` is stubbed and hands back one object per render. That stub cannot see who sets
+//     the flag or when, so #170's cases (another model on disk, a choice made after a resume) are held
+//     by `the-download-waits-for-the-chosen-model.test.mjs`, against the real provider.
 import assert from 'node:assert/strict';
 import { setupDom } from './dom-harness.mjs';
 import { tauriStubs } from './tauri-stubs.mjs';
@@ -43,7 +45,7 @@ function harness({
   hasAvailableModels = true,
   failComplete = false,
 } = {}) {
-  const seen = { completed: 0, next: 0, parakeetSet: [], reloads: 0 };
+  const seen = { completed: 0, next: 0, parakeetSet: [], reloads: 0, asked: [] };
   const stubs = tauriStubs({
     extra: {
       transcribe_init: null,
@@ -63,6 +65,9 @@ function harness({
     setSummaryModelDownloaded: () => {},
     // Must be a promise: the component chains `.catch` onto it (`:179`).
     startBackgroundDownloads: async () => {},
+    // The provider's by-name check (#170): recorded, and answered from the harness's disk.
+    selectedTranscribeModel: 'parakeet-tdt-0.6b-v3-q8',
+    transcribeModelIsOnDisk: async (name) => { seen.asked.push(name); return hasAvailableModels; },
     completeOnboarding: async () => {
       seen.completed += 1;
       if (failComplete) throw new Error('could not persist onboarding state');
@@ -161,9 +166,17 @@ const click = async (el) => {
   // disabled by exactly that flag, so the rescue could never run from the screen it lived on. #92
   // inverts it. The verification now runs on mount, gated by nothing, so a user whose model is on
   // disk while the flag disagrees is repaired before they ever reach for a control.
+  //
+  // **Changed with #170.** It read `stubs.calls.some((c) => c.cmd === 'transcribe_has_available_models')`:
+  // "is SOME model on disk", which is the defect #170 fixes. It now requires the chosen model, by name.
+  assert.deepEqual(
+    seen.asked,
+    ['parakeet-tdt-0.6b-v3-q8'],
+    'the disk must be asked on mount, about the chosen model by name, not only behind a button the stuck user cannot press'
+  );
   assert.ok(
-    stubs.calls.some((c) => c.cmd === 'transcribe_has_available_models'),
-    'the backend must be asked on mount, not only behind a button the stuck user cannot press'
+    !stubs.calls.some((c) => c.cmd === 'transcribe_has_available_models'),
+    'and never whether SOME model is there: a leftover model says nothing about the chosen one (#170)'
   );
   assert.deepEqual(
     seen.parakeetSet,
@@ -190,7 +203,8 @@ const click = async (el) => {
   // removed — measured: the published control for exactly that assertion went `check-stayed-green`
   // the moment the second call site existed. The runner's message is the rule this file lives by:
   // "something else guarantees the same behaviour and both need mutating."
-  const asked = () => ok.stubs.calls.filter((c) => c.cmd === 'transcribe_has_available_models').length;
+  // **Changed with #170**: it counted `transcribe_has_available_models` calls, the any-model question.
+  const asked = () => ok.seen.asked.length;
   const before = asked();
   await click(continueButton(ok.container));
   assert.ok(

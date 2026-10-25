@@ -68,6 +68,8 @@ interface OnboardingContextType {
   completeOnboarding: () => Promise<void>;
   startBackgroundDownloads: (options: StartBackgroundDownloadsOptions) => Promise<void>;
   retryParakeetDownload: () => Promise<void>;
+  /** Is this model's file on disk? The by-name check every site that sets the flag uses (#170). */
+  transcribeModelIsOnDisk: (modelName: string) => Promise<boolean>;
 }
 
 interface StartBackgroundDownloadsOptions {
@@ -117,7 +119,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   // The two choices the first run now asks for. Defaults are what the flow wrote as constants
   // before #111, so a user who changes nothing gets exactly what they used to.
   const [summaryProvider, setSummaryProvider] = useState<string>('builtin-ai');
-  const [selectedTranscribeModel, setSelectedTranscribeModel] =
+  const [selectedTranscribeModel, setSelectedTranscribeModelState] =
     useState<string>('parakeet-tdt-0.6b-v3-q8');
   /**
    * The same value, reachable from the download listeners. Those are registered once with `[]` deps
@@ -129,6 +131,28 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     selectedTranscribeModelRef.current = selectedTranscribeModel;
   }, [selectedTranscribeModel]);
+  // The selection setter is stable (`useCallback` with `[]`), and the check it calls is redefined on
+  // every render; the ref is how the one reaches the other.
+  const transcribeModelIsOnDiskRef = useRef<(modelName: string) => Promise<boolean>>(async () => false);
+  /**
+   * `parakeetDownloaded` answers for **one** model, the chosen one. It used to be set from "is SOME
+   * model on disk", so a person with any model already there, who chose another, met Continue enabled,
+   * "Everything you chose is on this device" and "Already here from an earlier install" for a file that
+   * was still on its way (#170). So a new choice clears the flag in the same update, because a model
+   * whose file has not been checked yet is not known to be here, and then asks the disk by name. The
+   * download screen reads the flag on its first render, so a check that only ran there would show
+   * Continue enabled for one render before correcting it (#170's critic, round 3).
+   */
+  const setSelectedTranscribeModel = useCallback((name: string) => {
+    if (name === selectedTranscribeModelRef.current) return;
+    selectedTranscribeModelRef.current = name;
+    setSelectedTranscribeModelState(name);
+    setParakeetDownloaded(false);
+    void transcribeModelIsOnDiskRef.current(name).then((onDisk) => {
+      // Only for the choice it was asked about: a later pick has its own check in flight.
+      if (onDisk && selectedTranscribeModelRef.current === name) setParakeetDownloaded(true);
+    });
+  }, []);
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
   const [databaseExists, setDatabaseExists] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
@@ -391,7 +415,12 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
         setCurrentStep(verifiedStatus.currentStep);
         setCompleted(verifiedStatus.completed);
-        setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        // Only while the model it checked is still the choice. The resume's checks take a few round
+        // trips, and a person may choose again meanwhile; that choice cleared the flag and asked the
+        // disk itself, so this answer, about the model before it, must not stand for it (#170's gate).
+        if (verifiedStatus.parakeetCheckedFor === selectedTranscribeModelRef.current) {
+          setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        }
         setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
         if (verifiedStatus.selectedSummaryModel) {
           setSelectedSummaryModel(verifiedStatus.selectedSummaryModel);
@@ -414,12 +443,14 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     let parakeetDownloaded = false;
     let summaryModelDownloaded = false;
     let selectedSummaryModel = '';
+    const parakeetCheckedFor = selectedTranscribeModelRef.current;
 
-    // Verify Parakeet model exists on disk
+    // Verify the chosen transcription model is on disk, by name. Not "is any model there" (#170). Until
+    // #172 persists the choice, a resumed first run chooses the default again, so this asks about it.
     try {
       await invoke('transcribe_init');
-      parakeetDownloaded = await invoke<boolean>('transcribe_has_available_models');
-      console.log('[OnboardingContext] Parakeet verified on disk:', parakeetDownloaded);
+      parakeetDownloaded = await transcribeModelIsOnDisk(parakeetCheckedFor);
+      console.log('[OnboardingContext] Chosen transcription model verified on disk:', parakeetDownloaded);
     } catch (error) {
       console.warn('[OnboardingContext] Failed to verify Parakeet:', error);
       parakeetDownloaded = false;
@@ -464,6 +495,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       currentStep,
       completed,
       parakeetDownloaded,
+      parakeetCheckedFor,
       summaryModelDownloaded,
       selectedSummaryModel,
     };
@@ -566,6 +598,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       return false;
     }
   };
+  transcribeModelIsOnDiskRef.current = transcribeModelIsOnDisk;
 
   // Start background downloads for models.
   const startBackgroundDownloads = async ({
@@ -707,6 +740,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         completeOnboarding,
         startBackgroundDownloads,
         retryParakeetDownload,
+        transcribeModelIsOnDisk,
       }}
     >
       {children}
