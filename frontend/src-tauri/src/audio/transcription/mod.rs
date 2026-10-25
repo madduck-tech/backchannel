@@ -26,7 +26,7 @@ use crate::audio::AudioChunk;
 use crate::transcribe_engine::TRANSCRIBE_ENGINE;
 use log::{error, info};
 use tauri::{AppHandle, Runtime};
-use transcribe_cpp::{Diarize, RunOptions, StreamOptions};
+use transcribe_cpp::{Diarize, StreamOptions};
 
 pub use adapters::tauri_sink::{reset_speech_detected_flag, TranscriptPartial, TranscriptUpdate};
 
@@ -82,7 +82,9 @@ pub fn start_transcription_task<R: Runtime>(
             }
         };
 
-        let streaming = session.model().capabilities().supports_streaming;
+        // A model loaded for transcription has the ASR role (`load_model` refuses one without), so
+        // this reads its capabilities; were it ever to fail, the VAD + batch path is the safe one.
+        let streaming = session.model().capabilities().is_ok_and(|c| c.supports_streaming);
         let model_name = engine.get_current_model().await;
         let diarizes = model_name.as_deref().is_some_and(crate::config::model_diarizes);
         info!(
@@ -97,18 +99,14 @@ pub fn start_transcription_task<R: Runtime>(
         // lives on a blocking thread rather than stalling the async reactor.
         let joined = tokio::task::spawn_blocking(move || {
             let mut session = session;
-            let run_options = RunOptions {
-                language,
-                diarize: if diarizes { Diarize::On } else { Diarize::Default },
-                ..Default::default()
-            };
+            let diarize = if diarizes { Diarize::On } else { Diarize::Default };
             // One wrap here covers both decode paths below, because both reach
             // the user through this sink. Instrumentation belongs at the
             // composition root for the same reason adapter choice does.
             let sink = BenchSink::new(TauriSink::new(app.clone()));
 
             if streaming {
-                match session.stream(&run_options, &StreamOptions::default()) {
+                match crate::transcribe_engine::options::stream(&mut session, language, diarize, &StreamOptions::default()) {
                     // Only this path opts into the lag warning. The segmented
                     // adapter below already warns when its backlog cap starts
                     // dropping audio; the streaming path has no cap, so nothing
@@ -130,7 +128,7 @@ pub fn start_transcription_task<R: Runtime>(
                 }
             } else {
                 match SegmentedTranscriber::with_diarization(
-                    Decoder::Local { session, run_options },
+                    Decoder::Local { session, language, diarize },
                     diarizes,
                 ) {
                     Ok(transcriber) => service::run(transcriber, sink, receiver),

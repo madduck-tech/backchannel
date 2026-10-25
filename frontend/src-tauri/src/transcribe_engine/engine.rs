@@ -22,7 +22,8 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
-use transcribe_cpp::{Diarize, Model, RunOptions, Session, Transcript};
+use super::options::{self, load_model};
+use transcribe_cpp::{Backend, Diarize, Model, Session, Transcript};
 
 use crate::config::{
     transcribe_model, DEFAULT_TRANSCRIBE_MODEL, TRANSCRIBE_MODEL_BASE_URL,
@@ -228,10 +229,10 @@ impl TranscribeEngine {
 
         info!("Loading model {} from {}", model_name, path.display());
         let started = std::time::Instant::now();
-        // Model::load does GPU init and is blocking; keep it off the async
+        // A load does GPU init and is blocking; keep it off the async
         // reactor so a slow first Metal kernel compile can't stall other tasks.
         let owned_path = path.clone();
-        let model = tokio::task::spawn_blocking(move || Model::load(&owned_path))
+        let model = tokio::task::spawn_blocking(move || load_model(&owned_path, Backend::Auto))
             .await
             .map_err(|e| anyhow!("Model load task panicked: {}", e))?
             .map_err(|e| anyhow!("Failed to load model '{}': {}", model_name, e))?;
@@ -239,7 +240,11 @@ impl TranscribeEngine {
         // No streaming requirement here: most of the catalog is batch-only, and
         // the live path decodes those with VAD + `Session::run()` per segment
         // (see audio/transcription/stream_worker.rs).
-        let caps = model.capabilities();
+        // From v0.4 a model without the ASR role (the diarizer) has no capabilities: it is not a
+        // transcription model, and loading it as one is refused here rather than at the first run.
+        let caps = model
+            .capabilities()
+            .map_err(|e| anyhow!("'{}' is not a transcription model: {}", model_name, e))?;
         info!(
             "Loaded {} in {:?} (backend {}, {} languages, streaming {})",
             model_name,
@@ -283,7 +288,7 @@ impl TranscribeEngine {
     /// callers should treat as "any language", not "no languages".
     pub async fn model_languages(&self) -> Option<Vec<String>> {
         let guard = self.model.read().await;
-        Some(guard.as_ref()?.capabilities().languages)
+        guard.as_ref()?.capabilities().ok().map(|c| c.languages)
     }
 
     /// Resolve a stored language preference against the loaded model.
@@ -313,9 +318,12 @@ impl TranscribeEngine {
     /// (~300ms) if importing during a recording ever needs to work.
     pub async fn transcribe_batch(
         &self,
-        audio: Vec<f32>,
+        mut audio: Vec<f32>,
         language: Option<String>,
     ) -> Result<BatchResult> {
+        // From v0.4 one NaN or Inf rejects the whole run with INVALID_ARG. Import sanitises already
+        // (`decoder.rs`); retranscription, the device check and the command path do not.
+        crate::audio::transcription::service::replace_non_finite(&mut audio);
         let language = self.resolve_language(language).await;
         let diarizes = self
             .get_current_model()
@@ -323,14 +331,10 @@ impl TranscribeEngine {
             .as_deref()
             .is_some_and(crate::config::model_diarizes);
         let mut session = self.open_session().await?;
-        let options = RunOptions {
-            language,
-            diarize: if diarizes { Diarize::On } else { Diarize::Default },
-            ..Default::default()
-        };
+        let diarize = if diarizes { Diarize::On } else { Diarize::Default };
 
         let transcript = tokio::task::spawn_blocking(move || {
-            keep_partial_on_truncation(session.run(&audio, &options))
+            keep_partial_on_truncation(options::run(&mut session, &audio, language, diarize))
         })
             .await
             .map_err(|e| anyhow!("Transcription task panicked: {}", e))?
@@ -730,6 +734,11 @@ pub fn mean_token_confidence(transcript: &Transcript) -> f32 {
 /// what it decoded on `Error::OutputTruncated`. Treating that as fatal threw
 /// away usable text and aborted a whole import/retranscription on the first
 /// dense segment that hit the cap.
+///
+/// From v0.4.1 a decode stopped because its output began repeating itself is
+/// `Error::OutputRepetition`, with the text before the loop as its partial. It
+/// is the same kind of outcome, and without its arm an import aborted and a live
+/// segment's text was lost. (#169)
 pub fn keep_partial_on_truncation(
     outcome: std::result::Result<Transcript, transcribe_cpp::Error>,
 ) -> std::result::Result<Transcript, transcribe_cpp::Error> {
@@ -739,6 +748,13 @@ pub fn keep_partial_on_truncation(
             partial: Some(partial),
         }) => {
             warn!("Decode hit the generation cap before end-of-stream ({message}); keeping the partial transcript for this segment");
+            Ok(*partial)
+        }
+        Err(transcribe_cpp::Error::OutputRepetition {
+            message,
+            partial: Some(partial),
+        }) => {
+            warn!("Decode stopped when its output began repeating ({message}); keeping the transcript before the loop");
             Ok(*partial)
         }
         other => other,
@@ -839,6 +855,16 @@ mod tests {
         }))
         .expect("a truncated decode still yields the text it produced");
         assert_eq!(kept.text, "half a sentence");
+
+        let kept = keep_partial_on_truncation(Err(transcribe_cpp::Error::OutputRepetition {
+            message: "run: output repetition".to_string(),
+            partial: Some(Box::new(Transcript {
+                text: "before the loop".to_string(),
+                ..Default::default()
+            })),
+        }))
+        .expect("a repetition-stopped decode yields the text before the loop (#169)");
+        assert_eq!(kept.text, "before the loop");
 
         assert!(keep_partial_on_truncation(Err(transcribe_cpp::Error::Busy(
             "a stream is active".to_string()
@@ -1072,10 +1098,9 @@ mod token_probability_measurement {
         }
         eprintln!("model: {path}\nwav:   {wav}  ({} samples)", samples.len());
 
-        let model = transcribe_cpp::Model::load(&path).expect("the model opens");
+        let model = crate::transcribe_engine::options::load_model(&path, transcribe_cpp::Backend::Auto).expect("the model opens");
         let mut session = model.session().expect("a session opens");
-        let transcript = session
-            .run(&samples, &RunOptions::default())
+        let transcript = crate::transcribe_engine::options::run(&mut session, &samples, None, Diarize::Default)
             .expect("the decode runs");
 
         eprintln!("text:   {}", transcript.text.trim());
@@ -1115,7 +1140,7 @@ mod token_probability_measurement {
         }
         eprintln!("model: {path}\nwav:   {wav}  ({} samples clean, {} interleaved)", clean.len(), interleaved.len());
 
-        let model = transcribe_cpp::Model::load(&path).expect("the model opens");
+        let model = crate::transcribe_engine::options::load_model(&path, transcribe_cpp::Backend::Auto).expect("the model opens");
         let mut session = model.session().expect("a session opens");
         let words = |text: &str| -> Vec<String> {
             text.split_whitespace()
@@ -1123,8 +1148,8 @@ mod token_probability_measurement {
                 .filter(|w| !w.is_empty())
                 .collect()
         };
-        let a = session.run(&clean, &RunOptions::default()).expect("the clean decode runs");
-        let b = session.run(&interleaved, &RunOptions::default()).expect("the interleaved decode runs");
+        let a = crate::transcribe_engine::options::run(&mut session, &clean, None, Diarize::Default).expect("the clean decode runs");
+        let b = crate::transcribe_engine::options::run(&mut session, &interleaved, None, Diarize::Default).expect("the interleaved decode runs");
         eprintln!("clean:       {}", a.text.trim());
         eprintln!("interleaved: {}", b.text.trim());
         eprintln!("same word sequence: {}", words(&a.text) == words(&b.text));

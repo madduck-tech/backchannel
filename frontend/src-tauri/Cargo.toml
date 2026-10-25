@@ -157,7 +157,7 @@ cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["a
 futures-channel = "0.3.31"
 
 # transcribe.cpp — replaces whisper-rs + ort. `metal` is its default feature.
-transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "553f1099a2b3a5bc4421894be171f09960fc0f3a" }
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b" }
 
 # Windows-specific dependencies
 # Default: CPU-only build (no BLAS)
@@ -171,7 +171,7 @@ futures-channel = "0.3.31"
 # default-features = false: transcribe-cpp defaults to `metal`, which is a
 # macOS-only no-op elsewhere but must not be the implied backend here.
 # GPU backends come from this crate's cuda/vulkan features (see [features]).
-transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "553f1099a2b3a5bc4421894be171f09960fc0f3a", default-features = false }
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b", default-features = false }
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)
@@ -192,7 +192,7 @@ futures-channel = "0.3.31"
 cpal = { version = "0.18.1", features = ["pulseaudio"] }
 
 # See the Windows block for why default-features is off.
-transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "553f1099a2b3a5bc4421894be171f09960fc0f3a", default-features = false }
+transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev = "4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.3.0"

@@ -34,6 +34,17 @@ const NOT_RUN_BY_THE_GATE = new Map([
   ['frontend/src-tauri/src/audio/import.rs::test_import_pipeline_decode_vad',
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::every_family_decodes_on_the_pinned_engine',
+   { blocker: 'needs about 16.7 GB of models, one row per upstream family plus the default and the ' +
+              'repositories whose bytes changed (#169 condition 5); run by name and its output pasted ' +
+              'into the verdict of the change that moves the engine' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::a_stream_commits_append_only_and_finalize_emits_the_tail',
+   { blocker: 'needs 501 MB of streaming models (#169 condition 6); run by name and its output pasted ' +
+              'into the verdict of the change that moves the engine' }],
+  ['frontend/src-tauri/src/transcribe_engine/measurements.rs::the_august_exports_load_and_decode_on_the_pinned_engine',
+   { blocker: 'needs about 8 GB of August exports, one per repository whose bytes changed (#169 ' +
+              'condition 9); run by name and its output pasted into the verdict of the change that ' +
+              'moves the engine' }],
   ['frontend/src-tauri/src/transcribe_engine/engine.rs::what_a_family_hears_through_interleaved_zeros',
    { coveredBy: 'a_microphone_check_hears_the_microphone_and_nothing_else',
      why: 'an instrument, not an assertion: it prints what a given .gguf decodes from speech cut up by ' +

@@ -6567,8 +6567,8 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp"
-version = "0.2.0"
-source = "git+https://github.com/handy-computer/transcribe.cpp?rev=553f1099a2b3a5bc4421894be171f09960fc0f3a#553f1099a2b3a5bc4421894be171f09960fc0f3a"
+version = "0.4.1"
+source = "git+https://github.com/handy-computer/transcribe.cpp?rev=4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b#4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b"
 dependencies = [
  "log",
  "thiserror 2.0.20",
@@ -6577,8 +6577,8 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp-sys"
-version = "0.2.0"
-source = "git+https://github.com/handy-computer/transcribe.cpp?rev=553f1099a2b3a5bc4421894be171f09960fc0f3a#553f1099a2b3a5bc4421894be171f09960fc0f3a"
+version = "0.4.1"
+source = "git+https://github.com/handy-computer/transcribe.cpp?rev=4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b#4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b"
 dependencies = [
  "cmake",
  "serde_json",
