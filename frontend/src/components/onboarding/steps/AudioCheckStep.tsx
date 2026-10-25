@@ -39,6 +39,17 @@ type CheckResult = { device: string; heard_audio: boolean; text: string };
  */
 type State = { status: 'idle' | 'loading' | 'listening' | 'done' | 'error'; result?: CheckResult; error?: string };
 
+/** A tone whose context never reached `running`, so nothing played (#173). Its message is the reason
+ * the row gives; any other failure keeps `String(error)`, as #168 wrote it. */
+class ToneNeverStarted extends Error {}
+
+/** The context could not be made. Carries what was thrown, untouched: wrapping it in a new `Error`
+ * turned a DOMException's "NotSupportedError: …" into "Error: NotSupportedError: …" wherever the
+ * thrown value came from another realm, which is every test. */
+class ToneContextFailed {
+    constructor(readonly thrown: unknown) {}
+}
+
 export function AudioCheckStep() {
     const { goNext, completeOnboarding, selectedTranscribeModel } = useOnboarding();
     const [isMac, setIsMac] = useState(false);
@@ -137,7 +148,8 @@ export function AudioCheckStep() {
                 if (tone.status === 'rejected') {
                     // The device result would read "nothing arrived, pick another", which blames a
                     // device that was never given anything to hear.
-                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${String(tone.reason)}` });
+                    const why = tone.reason instanceof ToneNeverStarted ? tone.reason.message : String(tone.reason);
+                    set({ status: 'error', error: `The tone could not play, so there was nothing to hear: ${why}` });
                     return;
                 }
                 set({ status: 'done', result: capture.value });
@@ -162,7 +174,7 @@ export function AudioCheckStep() {
      * start audio only from a user gesture, and the tone now plays after the model has loaded, which
      * is no longer inside the gesture (#168). `null` where there is no Web Audio at all.
      */
-    const openToneContext = (): AudioContext | Error | null => {
+    const openToneContext = (): AudioContext | ToneContextFailed | null => {
         const AudioCtx =
             window.AudioContext ??
             (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -170,12 +182,12 @@ export function AudioCheckStep() {
         try {
             return new AudioCtx();
         } catch (error) {
-            return error instanceof Error ? error : new Error(String(error));
+            return new ToneContextFailed(error);
         }
     };
 
-    const playTone = useCallback(async (ctx: AudioContext | Error | null) => {
-        if (ctx instanceof Error) throw ctx;
+    const playTone = useCallback(async (ctx: AudioContext | ToneContextFailed | null) => {
+        if (ctx instanceof ToneContextFailed) throw ctx.thrown;
         // Guarded rather than assumed. Without it the whole check dies where Web Audio is absent,
         // and the listening half -- which is the half that proves anything -- would never run.
         if (!ctx) {
@@ -185,7 +197,7 @@ export function AudioCheckStep() {
         }
         // Not awaited. A context the webview will not start leaves `resume()` pending forever, and
         // awaiting it held both rows shut until a reload (the gate's adversary, round 3). Made in the
-        // click, the context normally runs; if it does not, the tone is silent and the device says so.
+        // click, the context normally runs; if it does not, the row names the tone (below).
         if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -195,7 +207,14 @@ export function AudioCheckStep() {
         osc.start();
         await new Promise((r) => setTimeout(r, 2500));
         osc.stop();
+        // Read after the tone and before closing: a context starts `suspended` and reaches `running`
+        // only once its output starts, so a read any earlier calls every working tone a failure. One
+        // that never got there played nothing. Until #173 that was every tone in the AppImage, where
+        // WebKit found no audio sink, and the row told the person their device was silent. Compared
+        // with `running`, not against `suspended`: `interrupted` played nothing either.
+        const ran = ctx.state === 'running';
         await ctx.close();
+        if (!ran) throw new ToneNeverStarted('the audio output never started');
     }, []);
 
     const inputs = devices.filter((d) => d.device_type === 'Input');
@@ -235,7 +254,7 @@ export function AudioCheckStep() {
                         // Closed on every path, not only after a tone that played: a load that fails
                         // never reaches the tone, and each open context holds an output stream.
                         void check(speakers, true, setSysState, () => playTone(ctx)).finally(() => {
-                            if (ctx && !(ctx instanceof Error) && ctx.state !== 'closed') {
+                            if (ctx && !(ctx instanceof ToneContextFailed) && ctx.state !== 'closed') {
                                 void ctx.close().catch(() => undefined);
                             }
                         });
