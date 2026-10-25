@@ -80,8 +80,9 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
   check('a found CLI shows where', claude?.textContent.includes('Found: /home/u/.local/bin/claude'), claude?.textContent);
   check('Claude Code says where the transcript goes', claude?.textContent.includes('The transcript goes to the provider Claude Code is set up for, Anthropic by default.'), claude?.textContent);
   check('a logged-out CLI says so and how to fix it', codex?.textContent.includes('Found, but not logged in. Run codex once in a terminal to log in'), codex?.textContent);
-  // The product owner's copy after #212 round 2, when Codex was measured unable to read files.
-  check("Codex says its settings are not used and that its tools are off", codex?.textContent.includes('your own Codex settings are not used. It runs with its tools off.') && !codex?.textContent.includes('read files'), codex?.textContent);
+  // The product owner's copy after #212 round 3: Codex measured unable to read files, and still
+  // reading the person's own ~/.codex/AGENTS.md, which no setting turns off.
+  check("Codex says where it goes and that its tools are off, and nothing about its settings", codex?.textContent.includes("The transcript is sent to OpenAI with Codex's default model. It runs with its tools off.") && !codex?.textContent.includes('read files') && !codex?.textContent.includes('settings are not used'), codex?.textContent);
   check('a logged-out CLI cannot be chosen', codex?.getAttribute('aria-disabled') === 'true', codex?.getAttribute('aria-disabled'));
 
   await click(codex);
@@ -97,7 +98,7 @@ const cliRow = (c, id) => c.querySelector(`[data-agent="${id}"]`);
   check('the choice is saved as the provider, with no model and no key', save?.args?.provider === 'claude-code' && save?.args?.model === '' && save?.args?.apiKey === '', JSON.stringify(save?.args));
 }
 
-// --- Codex chosen: its readout names OpenAI, since its own settings are not used ---------------------
+// --- Codex chosen: its readout names OpenAI, since the run ignores its config.toml ------------------------
 {
   const { container } = await render([
     { id: 'claude-code', found: '/home/u/.local/bin/claude', loggedIn: true },

@@ -17,26 +17,28 @@ pub const TIMEOUT: Duration = Duration::from_secs(300);
 /// arrived is read as the answer. A detached descendant holding stdout must not hold the summary.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// Whether a Codex feature is left as it is: the ones about approvals, the sandbox and reaching the
-/// provider at all. Every other feature is turned off for the run (#212 round 2).
+/// The Codex features left as they are, by exact name: reaching the provider through a proxy,
+/// compressing and retrying its requests, masking credentials in output, and the Windows sandbox.
+/// Every other feature is turned off for the run (#212 rounds 2 and 3).
 ///
 /// A list of what to turn off was tried first and was not enough, measured 2026-10-25: Codex has
 /// tools that leave no event in `--json` (`view_image`, a sub-agent spawn), a web search that is not
 /// a feature at all, and more each release. Turning off everything it lists means a tool added in a
 /// later version is off in that version too, and a feature the call turns out to need fails the
-/// summary loudly instead.
+/// summary loudly instead. Names, not patterns: a pattern would keep a future
+/// `guardian_conversation_history_tools` on for having the right prefix.
+const CODEX_FEATURES_KEPT: [&str; 6] = [
+    "system_proxy_fallback", "respect_system_proxy", "enable_request_compression", "unbounded_connection_retries", "credential_masking", "windows_sandbox_service",
+];
+
 fn codex_feature_kept(name: &str) -> bool {
-    name.starts_with("guardian")
-        || name.contains("approval")
-        || name.contains("sandbox")
-        || name.contains("proxy")
-        || matches!(name, "credential_masking" | "enable_request_compression" | "unbounded_connection_retries")
+    CODEX_FEATURES_KEPT.contains(&name)
 }
 
 /// The features to turn off, read from `codex features list`: every row except removed and
-/// deprecated ones (Codex refuses an unknown name, and warns on a deprecated one) and the kept ones.
-/// `None` when the listing has no `shell_tool` row: a listing this cannot read is not a reason to
-/// run Codex with its tools on.
+/// deprecated ones (a removed name does nothing and a deprecated one prints a warning into the
+/// stream) and the kept ones. `None` when the listing has no `shell_tool` row: a listing this cannot
+/// read is not a reason to run Codex with its tools on.
 pub fn codex_features_to_disable(listing: &str) -> Option<Vec<String>> {
     let mut off = Vec::new();
     let mut read_it = false;
@@ -56,15 +58,77 @@ pub fn codex_features_to_disable(listing: &str) -> Option<Vec<String>> {
     read_it.then_some(off)
 }
 
-/// `claude -p` with every tool off, no MCP server, no customisation, no session, and structured
-/// output. The system prompt is a file: one argument is capped at 131 071 bytes on Linux.
+/// Every built-in tool denied by permission, on top of `--tools ""`. Not redundant: Claude Code
+/// itself reads a file named as `@/path` in the prompt and attaches it before the model runs, with
+/// no tool event and `tools: []` in the start-up event (#212 round 3, measured: the file was opened
+/// five times and its contents came back in the summary). A `Read` deny is what stops that read;
+/// with this setting `strace` saw the file, a directory and `@~/.bashrc` opened zero times.
+pub const CLAUDE_DENY_SETTINGS: &str = r#"{"permissions":{"deny":["Read","Write","Edit","Bash","WebFetch","WebSearch","Glob","Grep","NotebookEdit"]}}"#;
+
+/// `claude -p` with every tool off and denied, no MCP server, no customisation, no session, and
+/// structured output. The system prompt is a file: one argument is capped at 131 071 bytes on Linux.
 pub fn claude_args(system_prompt_file: &Path) -> Vec<OsString> {
-    let mut a: Vec<OsString> = ["-p", "--tools", "", "--strict-mcp-config", "--safe-mode", "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--system-prompt-file"]
+    let mut a: Vec<OsString> = ["-p", "--tools", "", "--strict-mcp-config", "--safe-mode", "--no-session-persistence", "--settings", CLAUDE_DENY_SETTINGS, "--output-format", "stream-json", "--verbose", "--system-prompt-file"]
         .iter()
         .map(OsString::from)
         .collect();
     a.push(system_prompt_file.as_os_str().to_owned());
     a
+}
+
+/// Codex's model list with the sub-agent version taken out of every model, from the one Codex keeps
+/// at `models_cache.json`. A model whose catalog entry carries `multi_agent_version` is given
+/// `spawn_agent` and its siblings whatever the features say, and a spawn leaves no event in `--json`
+/// (#212 round 3, measured: a sub-agent ran a model turn of its own; with this catalog the tool is
+/// gone). Only `models` is kept: the cache also holds an identity string the run has no use for.
+/// `None` when there is no model list to read.
+pub fn codex_catalog_without_sub_agents(cache: &str) -> Option<String> {
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.remove("multi_agent_version");
+                m.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let parsed: serde_json::Value = serde_json::from_str(cache).ok()?;
+    let mut models = parsed.get("models")?.clone();
+    if models.as_array().is_none_or(|a| a.is_empty()) {
+        return None;
+    }
+    strip(&mut models);
+    Some(serde_json::json!({ "models": models }).to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's stand-in for Codex's home, so no test reads the person's.
+    static TEST_CODEX_HOME: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Where Codex keeps its state: `CODEX_HOME`, or `~/.codex`.
+fn codex_home() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(h) = TEST_CODEX_HOME.with(|h| h.borrow().clone()) {
+        return Some(h);
+    }
+    std::env::var_os("CODEX_HOME").map(Into::into).or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
+}
+
+/// Write Codex's catalog without sub-agents into `dir`, and say where. A Codex with no model list to
+/// read is not run.
+pub(crate) fn codex_catalog_file(dir: &Path) -> Result<std::path::PathBuf, AgentError> {
+    let cli = AgentCli::Codex;
+    let derived = codex_home()
+        .map(|h| h.join("models_cache.json"))
+        .and_then(|c| std::fs::read_to_string(c).ok())
+        .and_then(|c| codex_catalog_without_sub_agents(&c))
+        .ok_or(AgentError::Failed { cli, message: "its model list could not be read, so it was not run (run codex once in a terminal, then try again)".into() })?;
+    let file = dir.join("models.json");
+    std::fs::write(&file, derived).map_err(|e| AgentError::Spawn { cli, message: e.to_string() })?;
+    Ok(file)
 }
 
 /// `codex exec` with the person's config and rules ignored, a read-only sandbox, no session,
@@ -76,7 +140,7 @@ pub fn claude_args(system_prompt_file: &Path) -> Vec<OsString> {
 /// setting, not a feature); an `AGENTS.md` beside a `.git` in a parent directory, which on Linux can
 /// be the shared `/tmp`, was followed (`project_root_markers`); the person's skills were listed to
 /// the model (`skills.*`).
-pub fn codex_args(system_prompt: &str, disabled: &[String]) -> Vec<OsString> {
+pub fn codex_args(system_prompt: &str, disabled: &[String], catalog: &Path) -> Vec<OsString> {
     let mut a: Vec<OsString> = ["exec", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json"]
         .iter()
         .map(OsString::from)
@@ -89,6 +153,8 @@ pub fn codex_args(system_prompt: &str, disabled: &[String]) -> Vec<OsString> {
         a.push("-c".into());
         a.push(c.into());
     }
+    a.push("-c".into());
+    a.push(format!("model_catalog_json={}", toml_basic_string(&catalog.to_string_lossy())).into());
     a.push("-c".into());
     a.push(format!("developer_instructions={}", toml_basic_string(system_prompt)).into());
     a.push("-".into());
@@ -161,7 +227,10 @@ pub async fn run(
             std::fs::write(&file, system_prompt).map_err(spawn_err)?;
             claude_args(&file)
         }
-        AgentCli::Codex => codex_args(system_prompt, &codex_features(binary, child_path).await?),
+        AgentCli::Codex => {
+            let features = codex_features(binary, child_path).await?;
+            codex_args(system_prompt, &features, &codex_catalog_file(prompt_dir.path())?)
+        }
     };
     let mut cmd = tokio::process::Command::new(binary);
     cmd.args(&args)
@@ -289,10 +358,13 @@ pub(crate) async fn codex_features(binary: &Path, child_path: &OsStr) -> Result<
     let cli = AgentCli::Codex;
     let work = work_dir().map_err(|e| AgentError::Spawn { cli, message: e.to_string() })?;
     let mut cmd = tokio::process::Command::new(binary);
+    // An empty home of its own: the listing is the binary's, so a `config.toml` the run ignores
+    // cannot break it (#212 round 3, measured: an unparsable config made it exit 1 with nothing).
     cmd.args(["features", "list"])
         .current_dir(work.path())
         .env_clear()
         .envs(environment(std::env::vars_os(), child_path))
+        .env("CODEX_HOME", work.path())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
@@ -362,20 +434,33 @@ mod tests {
         let a: Vec<String> = claude_args(Path::new("/p/system.txt")).iter().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(
             a,
-            ["-p", "--tools", "", "--strict-mcp-config", "--safe-mode", "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--system-prompt-file", "/p/system.txt"]
+            ["-p", "--tools", "", "--strict-mcp-config", "--safe-mode", "--no-session-persistence", "--settings", CLAUDE_DENY_SETTINGS, "--output-format", "stream-json", "--verbose", "--system-prompt-file", "/p/system.txt"]
         );
+        let deny: serde_json::Value = serde_json::from_str(CLAUDE_DENY_SETTINGS).unwrap();
+        let denied: Vec<&str> = deny["permissions"]["deny"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(denied.contains(&"Read"), "Read is what stops an @-mentioned file being attached");
+    }
+
+    #[test]
+    fn codexs_catalog_loses_its_sub_agent_version_and_nothing_else() {
+        let cache = r#"{"fetched_at":"x","identity":"someone","models":[{"slug":"m1","multi_agent_version":"v2","context_window":1},{"slug":"m2","nested":{"multi_agent_version":"v2"}}]}"#;
+        let out: serde_json::Value = serde_json::from_str(&codex_catalog_without_sub_agents(cache).unwrap()).unwrap();
+        assert_eq!(out, serde_json::json!({"models":[{"slug":"m1","context_window":1},{"slug":"m2","nested":{}}]}));
+        assert_eq!(codex_catalog_without_sub_agents("{}"), None);
+        assert_eq!(codex_catalog_without_sub_agents(r#"{"models":[]}"#), None);
+        assert_eq!(codex_catalog_without_sub_agents("not json"), None);
     }
 
     #[test]
     fn codex_is_run_isolated_read_only_and_with_its_features_off() {
-        let a: Vec<String> = codex_args("Write a summary.", &["shell_tool".into(), "view_image".into()]).iter().map(|s| s.to_string_lossy().into_owned()).collect();
+        let a: Vec<String> = codex_args("Write a summary.", &["shell_tool".into(), "view_image".into()], Path::new("/p/models.json")).iter().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(
             a,
             [
                 "exec", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "--json",
                 "--disable", "shell_tool", "--disable", "view_image",
                 "-c", "web_search=\"disabled\"", "-c", "project_root_markers=[]", "-c", "skills.include_instructions=false",
-                "-c", "skills.bundled.enabled=false", "-c", "developer_instructions=\"Write a summary.\"", "-",
+                "-c", "skills.bundled.enabled=false", "-c", "model_catalog_json=\"/p/models.json\"", "-c", "developer_instructions=\"Write a summary.\"", "-",
             ]
         );
     }
@@ -390,8 +475,12 @@ mod tests {
         }
         // Off whether or not it is on by default: the listing reflects the person's config, and the run ignores it.
         assert!(off.iter().any(|f| f == "multi_agent_v2"), "a feature the listing shows as off is left alone");
-        for kept in ["guardian_approval", "write_stdin_approval", "system_proxy_fallback", "network_proxy", "windows_sandbox_service", "enable_request_compression"] {
+        for kept in CODEX_FEATURES_KEPT {
             assert!(!off.iter().any(|f| f == kept), "{kept} is turned off");
+        }
+        // Off although their names look like safety: no tool runs, so nothing is left to approve.
+        for off_too in ["guardian_approval", "write_stdin_approval", "network_proxy", "guardian_conversation_history_tools"] {
+            assert!(off.iter().any(|f| f == off_too), "{off_too} is left on");
         }
         for not_passed in ["sqlite", "steer", "collaboration_modes", "web_search_cached", "use_legacy_landlock"] {
             assert!(!off.iter().any(|f| f == not_passed), "{not_passed}, removed or deprecated, is passed and Codex would refuse or warn");
@@ -455,16 +544,33 @@ mod tests {
         std::fs::write(&listing_file, listing).unwrap();
         let run = fake_cli(dir, record, &fixture("codex-summary.jsonl"), 0, "");
         let script = dir.join("fakecodex");
-        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = features ]; then cat {}; exit 0; fi\nexec {} \"$@\"\n", listing_file.display(), run.display())).unwrap();
+        // Like the real one with a broken `config.toml`: asked for its features from the person's home
+        // (no `CODEX_HOME`, which means `~/.codex`, or one holding a config), it exits 1 saying nothing.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = features ]; then if [ -z \"$CODEX_HOME\" ] || [ -e \"$CODEX_HOME/config.toml\" ]; then exit 1; fi; cat {}; exit 0; fi\nexec {} \"$@\"\n",
+                listing_file.display(),
+                run.display()
+            ),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         script
+    }
+
+    /// A Codex home holding a model list with a sub-agent version, for the duration of a test.
+    fn with_codex_home(dir: &Path) {
+        std::fs::write(dir.join("models_cache.json"), r#"{"identity":"x","models":[{"slug":"m","multi_agent_version":"v2"}]}"#).unwrap();
+        TEST_CODEX_HOME.with(|h| *h.borrow_mut() = Some(dir.to_path_buf()));
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn codex_is_run_with_the_features_it_listed_turned_off() {
         let t = tempfile::tempdir().unwrap();
+        with_codex_home(t.path());
         let rec = t.path().join("rec");
         let cli = fake_codex(t.path(), &rec, &fixture("codex-features.txt"));
         let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "the transcript", None, TIMEOUT).await;
@@ -473,12 +579,28 @@ mod tests {
         let off: Vec<&str> = args.windows(2).filter(|w| w[0] == "--disable").map(|w| w[1].as_str()).collect();
         assert_eq!(off, codex_features_to_disable(&fixture("codex-features.txt")).unwrap(), "the run did not turn off what the listing named");
         assert!(off.contains(&"shell_tool") && off.contains(&"view_image"));
+        // And it was handed the catalog without the sub-agent version.
+        let catalog = args.iter().find_map(|a| a.strip_prefix("model_catalog_json=")).expect("a catalog was passed");
+        assert!(!catalog.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_codex_with_no_model_list_is_not_run() {
+        let t = tempfile::tempdir().unwrap();
+        TEST_CODEX_HOME.with(|h| *h.borrow_mut() = Some(t.path().to_path_buf()));
+        let rec = t.path().join("rec");
+        let cli = fake_codex(t.path(), &rec, &fixture("codex-features.txt"));
+        let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert!(matches!(got, Err(AgentError::Failed { .. })), "{got:?}");
+        assert_eq!(recorded(&rec, "args"), "", "it was run anyway");
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn a_codex_that_cannot_list_its_features_is_not_run() {
         let t = tempfile::tempdir().unwrap();
+        with_codex_home(t.path());
         let rec = t.path().join("rec");
         let cli = fake_codex(t.path(), &rec, "error: unrecognized subcommand 'features'\n");
         let got = run(AgentCli::Codex, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
@@ -569,6 +691,32 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    /// A process in a session of its own that holds the CLI's output, started before the CLI exits.
+    /// The CLI waits until it is there: a background `setsid` not yet past its fork when the CLI exits
+    /// is still in the group and is killed with it, which closed the pipe and made the cancel test
+    /// return `Empty` once in four full runs (measured).
+    #[cfg(unix)]
+    fn detached(dir: &Path) -> String {
+        let up = dir.join("detached-up");
+        format!("setsid sh -c 'touch {u}; sleep 20' & while [ ! -e {u} ]; do sleep 0.05; done", u = up.display())
+    }
+
+    /// The adversary's case (#212 round 3): the CLI answers and exits at once, leaving a process in
+    /// its group that would write later. The group is killed after the exit, so it never does.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_the_cli_left_in_its_group_after_exiting_is_killed() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        let marker = t.path().join("left-behind");
+        // Its output closed, so the drain does not wait for it; still in the CLI's process group.
+        let cli = fake_cli(t.path(), &rec, &fixture("claude-summary.jsonl"), 0, &format!("(exec >/dev/null 2>&1; sleep 2; touch {}) &", marker.display()));
+        let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
+        assert_eq!(got, Ok("hello".to_string()));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!marker.exists(), "a process the CLI left in its group outlived it");
+    }
+
     /// The adversary's case (#212 round 2): the CLI answers and exits, and a process it detached
     /// into a session of its own keeps stdout open. The answer is what arrived, within the grace.
     #[cfg(unix)]
@@ -576,7 +724,7 @@ mod tests {
     async fn a_detached_process_holding_the_output_does_not_hold_the_summary() {
         let t = tempfile::tempdir().unwrap();
         let rec = t.path().join("rec");
-        let cli = fake_cli(t.path(), &rec, &fixture("claude-summary.jsonl"), 0, "setsid sleep 20 &");
+        let cli = fake_cli(t.path(), &rec, &fixture("claude-summary.jsonl"), 0, &detached(t.path()));
         let started = std::time::Instant::now();
         let got = run(AgentCli::ClaudeCode, &cli, OsStr::new("/usr/bin:/bin"), "S", "u", None, TIMEOUT).await;
         assert_eq!(got, Ok("hello".to_string()));
@@ -588,7 +736,7 @@ mod tests {
     async fn a_cancel_after_the_cli_exits_still_ends_the_wait() {
         let t = tempfile::tempdir().unwrap();
         let rec = t.path().join("rec");
-        let cli = fake_cli(t.path(), &rec, "", 0, "setsid sleep 20 &");
+        let cli = fake_cli(t.path(), &rec, "", 0, &detached(t.path()));
         // Cancelled after the CLI has exited and while its detached child still holds the output:
         // a token cancelled before the run lets the first wait take it, which is not this case
         // (measured: that version stayed green with the drain's cancel removed).

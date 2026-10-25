@@ -873,7 +873,7 @@ export function ModelSettingsModal({
                     Claude Code (local CLI) — uses your Claude Code login, transcripts go to the provider it is set up for (Anthropic by default)
                   </SelectItem>
                   <SelectItem value="codex">
-                    Codex (local CLI) — uses your Codex login, transcripts are sent to OpenAI with Codex&apos;s default model, your Codex settings are not used; it runs with its tools off
+                    Codex (local CLI) — uses your Codex login, transcripts are sent to OpenAI with Codex&apos;s default model; it runs with its tools off
                   </SelectItem>
                 </SelectGroup>
               </SelectContent>

@@ -75,6 +75,9 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
     let cli = AgentCli::Codex;
     let mut messages: Vec<String> = Vec::new();
     let mut completed = false;
+    // A top-level `error` is not final: Codex prints one per reconnect ("Reconnecting... 1/5") and
+    // may go on to finish (#212 round 3). It is the answer only if the turn never completes.
+    let mut last_error: Option<String> = None;
     for e in events(stdout) {
         match e["type"].as_str() {
             Some(t) if t.starts_with("item.") => match e["item"]["type"].as_str() {
@@ -92,12 +95,11 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
                 Some(other) => return Err(AgentError::ToolUsed { cli, what: other.to_string() }),
                 None => {}
             },
-            Some("error") | Some("turn.failed") => {
-                let message = e["message"]
-                    .as_str()
-                    .or_else(|| e["error"]["message"].as_str())
-                    .unwrap_or("an error")
-                    .to_string();
+            Some("error") => {
+                last_error = Some(e["message"].as_str().or_else(|| e["error"]["message"].as_str()).unwrap_or("an error").to_string());
+            }
+            Some("turn.failed") => {
+                let message = e["error"]["message"].as_str().or_else(|| e["message"].as_str()).or(last_error.as_deref()).unwrap_or("an error").to_string();
                 return Err(AgentError::Failed { cli, message });
             }
             Some("turn.completed") => completed = true,
@@ -105,7 +107,10 @@ pub fn codex(stdout: &str) -> Result<String, AgentError> {
         }
     }
     let text = messages.join("\n\n");
-    if !completed || text.trim().is_empty() {
+    if !completed {
+        return Err(last_error.map_or(AgentError::Empty(cli), |message| AgentError::Failed { cli, message }));
+    }
+    if text.trim().is_empty() {
         return Err(AgentError::Empty(cli));
     }
     Ok(text)
@@ -206,8 +211,16 @@ mod tests {
         let mut s = fixture("codex-summary.jsonl");
         s.push_str("{\"type\":\"turn.failed\",\"error\":{\"message\":\"You've hit your usage limit\"}}\n");
         assert_eq!(codex(&s), Err(AgentError::Failed { cli: AgentCli::Codex, message: "You've hit your usage limit".into() }));
-        let s = format!("{}{{\"type\":\"error\",\"message\":\"stream disconnected\"}}\n", fixture("codex-summary.jsonl"));
-        assert!(matches!(codex(&s), Err(AgentError::Failed { .. })));
+        let unfinished: String = fixture("codex-summary.jsonl").lines().filter(|l| !l.contains("turn.completed")).map(|l| format!("{l}\n")).collect();
+        let s = format!("{unfinished}{{\"type\":\"error\",\"message\":\"stream disconnected before completion\"}}\n");
+        assert_eq!(codex(&s), Err(AgentError::Failed { cli: AgentCli::Codex, message: "stream disconnected before completion".into() }));
+    }
+
+    /// The shape measured on a reconnect (#212 round 3): an `error` per retry, then the turn finishes.
+    #[test]
+    fn a_reconnect_that_recovers_is_not_a_failure() {
+        let s = format!("{{\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (stream disconnected before completion)\"}}\n{}", fixture("codex-summary.jsonl"));
+        assert_eq!(codex(&s), Ok("hello".to_string()));
     }
 
     #[test]

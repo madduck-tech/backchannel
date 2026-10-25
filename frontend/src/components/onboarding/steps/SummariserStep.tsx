@@ -96,7 +96,7 @@ const AGENTS: Agent[] = [
 /** The prototype's `caption`, word for word. */
 const agentCaption = (a: Agent) =>
     a.isolated
-        ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It runs with its tools off.`
+        ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model. It runs with its tools off.`
         : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
 
 /** Found and logged in: the only state that can be chosen. Unknown login (`null`) counts as usable. */

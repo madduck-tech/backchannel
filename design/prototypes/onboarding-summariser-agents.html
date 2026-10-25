@@ -260,7 +260,7 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
   const keyRow = p => `<div class="keyrow">${p.url ? `<label for="url">Server address</label><div class="well"><input id="url" type="url" data-url placeholder="https://" value="${esc(st.url)}"></div>` : ''}<label for="key">API key for ${p.name}</label><div class="well"><input id="key" type="password" data-key autocomplete="off" placeholder="Paste the key" value="${esc(st.key)}"></div></div>`;
 
   const caption = a => a.isolated
-    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model; your own ${a.name} settings are not used. It runs with its tools off.`
+    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model. It runs with its tools off.`
     : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
   // Three states: found and logged in; found but not logged in; not found. Only the first can be chosen.
   const usable = a => !!a.found && a.loggedIn !== false;
