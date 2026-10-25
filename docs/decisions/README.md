@@ -27,6 +27,7 @@
 | [0023](0023-an-instruction-to-remove-ships-as-a-test.md) | An instruction to remove something ships as a test that fails while it is there | accepted |
 | [0024](0024-an-approved-design-nobody-built-is-a-defect.md) | An approved design nobody built is a defect, and "out of scope" is an issue or it is nothing | accepted |
 | [0025](0025-the-engine-moves-with-its-weights-copied.md) | transcribe.cpp 0.4.1 is adopted with its weights copied, and with upstream's ITN default but one | accepted |
+| [0026](0026-a-capped-stream-is-decoded-in-segments.md) | A stream with a length cap is decoded in segments | accepted |
 
 ## Deferred questions
 

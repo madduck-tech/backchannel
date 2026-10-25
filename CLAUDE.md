@@ -107,12 +107,12 @@ Raw Audio (Mic + System)
 
 **Two decode paths, chosen at recording start:**
 
-1. **Streaming** — for streaming-native models. One `transcribe_cpp::Stream` stays open for the whole meeting. Its text splits into `committed` (append-only, never rewritten -> persisted as transcript rows via `transcript-update`) and `tentative` (volatile -> emitted as `transcript-partial`, never saved).
+1. **Streaming** — for streaming-native models whose stream has no length cap. One `transcribe_cpp::Stream` stays open for the whole meeting. Its text splits into `committed` (append-only, never rewritten -> persisted as transcript rows via `transcript-update`) and `tentative` (volatile -> emitted as `transcript-partial`, never saved).
 2. **VAD + batch** — speech is segmented and each segment decoded whole. No `transcript-partial` events, and its latency floor is the segment length (`LIVE_MAX_SEGMENT_SAMPLES`, 8s). Two decoders share the loop, behind `enum Decoder`, since segmentation and backlog policy are identical:
    - `Decoder::Local` — `Session::run()` for batch-only catalog families (whisper, canary, qwen3-asr, ...).
    - `Decoder::AudioLlm` — one llama-helper sidecar request per segment for audio-capable LLMs (Gemma 4 E2B/E4B), selected by `transcript_settings.provider = 'builtin-ai'`. Reports no confidence: a chat completion has no token probabilities.
 
-Between 1 and 2, `Capabilities::supports_streaming` on the loaded model decides — read from GGUF metadata, so it cannot drift from what the model can do. The catalog's `streaming` field is display-only (it labels rows before download). The provider is checked first, because an audio LLM has no transcribe.cpp session at all.
+Between 1 and 2, `audio::transcription::live_path` decides from the loaded model's GGUF metadata, so it cannot drift from what the model can do: a model streams only when `supports_streaming` is true **and** `max_audio_ms` is 0. `moonshine_streaming` streams natively but reports 81 920 ms; one stream re-decoded everything on every feed, committed only its first words, and a meeting kept its first seconds (#200), so it is decoded in segments. The dictation probe uses the same function. The catalog's `streaming` field is display-only (it labels rows before download) and is false for those rows; `the_catalogue_label_agrees_with_the_path_rule` holds the two in agreement for every model in the measurement cache. The provider is checked first, because an audio LLM has no transcribe.cpp session at all.
 
 Path 2 caps its un-transcribed backlog at 30s and drops the oldest segments past it, so a model slower than real time falls behind by a bounded amount instead of growing for the whole meeting.
 
@@ -387,7 +387,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
   - `nemotron-3.5-asr-streaming-0.6b-q8` is the streaming-native alternative: word-by-word live text and 32 locales incl. CJK/Arabic/Hindi, at 3.06% WER
   - Batch-only families are selectable for live recording too, via the VAD + batch path above
   - Excluded on purpose: `diar_streaming_sortformer_4spk-v2.1` (no text output), `medasr` (gated upstream), `voxtral-small-24b-2507` (too large)
-  - Low-end machines: `moonshine-streaming-{small,tiny}` (English only)
+  - Low-end machines: `moonshine-streaming-{small,tiny}` (English only), decoded in VAD segments since #200. Measured 2026-10-25 on `dots-full.wav` (305 s), four CPU cores: tiny, small and medium keep 0.946, 0.950 and 0.950 of a per-30-s reference, transcribe its last 20 s, and feed at 0.04, 0.09 and 0.13 × real time (`a_capped_stream_keeps_the_whole_meeting`). Their live text arrives per segment, with no partials
 - **GPU Acceleration**: Metal on macOS by default; CUDA/Vulkan/ROCm via Cargo features
 
 ### Frontend Performance
