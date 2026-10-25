@@ -11,6 +11,11 @@
 //! **A slot** is a labelled value: `due:`, `due date:` or `deadline:`, case-insensitive, in a list item
 //! outside its `ref: "…"` quote; or the Due Date cell of a table row. The bare word is never a slot,
 //! so "postponed due to rain" is not one. A filler under any other label is missed.
+//!
+//! **A list item may carry its date in the task text.** The product owner chose "Send the budget by
+//! November 7" over a separate `(due: …)` field on 2026-10-25 (#171). So in a list item, the stated
+//! date anywhere outside the ref quote is kept, and any date outside it on an undated item is a hit,
+//! as a filled slot is. A table keeps its Due Date column, and there the cell is what counts.
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -127,6 +132,19 @@ impl Item {
         }
     }
 
+    /// A list item's text outside its `ref: "…"` quote; a table row's cells other than Due Date.
+    fn own_text(&self) -> String {
+        match self {
+            Item::List(t) => REF_QUOTE.replace_all(t, "").to_string(),
+            Item::Row { .. } => self.text(),
+        }
+    }
+
+    /// A date in the item's own text, for a list item: the product owner's format puts it there.
+    fn dates_in_text(&self) -> bool {
+        matches!(self, Item::List(_)) && ANY_DATE.is_match(&self.own_text())
+    }
+
     /// What the due slot holds: `Some("")` for an empty table cell, `None` with no slot at all.
     fn slot(&self) -> Option<String> {
         match self {
@@ -149,6 +167,7 @@ pub fn read(markdown: &str, mode: Mode) -> Reading {
             r.conclusive = !items.is_empty();
             for item in &items {
                 match item.slot().as_deref() {
+                    None if item.dates_in_text() => r.hits += 1,
                     None => {}
                     Some("") => r.nonconforming_blanks += 1,
                     Some(v) if v == BLANK => {}
@@ -163,6 +182,7 @@ pub fn read(markdown: &str, mode: Mode) -> Reading {
             r.conclusive = !budget.is_empty() && !venue.is_empty() && !both;
             for item in &venue {
                 match item.slot().as_deref() {
+                    None if item.dates_in_text() => r.hits += 1,
                     None => {}
                     Some("") => r.nonconforming_blanks += 1,
                     Some(v) if v == BLANK => {}
@@ -171,15 +191,19 @@ pub fn read(markdown: &str, mode: Mode) -> Reading {
             }
             let mut kept = false;
             for item in &budget {
-                match item.slot() {
-                    Some(v) if v.is_empty() => r.nonconforming_blanks += 1,
-                    Some(v) => {
-                        if let Some(year) = stated_date(&v) {
-                            kept = true;
-                            r.invented_year |= year;
-                        }
+                // A table row keeps its date in the Due Date cell; a list item, anywhere outside its ref
+                // quote (the product owner's format, 2026-10-25).
+                let carried = match (item, item.slot()) {
+                    (_, Some(v)) if v.is_empty() => {
+                        r.nonconforming_blanks += 1;
+                        None
                     }
-                    None => {}
+                    (Item::Row { .. }, slot) => slot,
+                    (Item::List(_), _) => Some(item.own_text()),
+                };
+                if let Some(year) = carried.as_deref().and_then(stated_date) {
+                    kept = true;
+                    r.invented_year |= year;
                 }
             }
             r.kept = Some(kept);
@@ -261,10 +285,24 @@ mod tests {
         assert_eq!((r.kept, r.invented_year), (Some(true), true), "{r:?}");
     }
 
+    /// The product owner's format (2026-10-25): the date in the task text is kept. The ref quote alone
+    /// is not the item's own text.
     #[test]
-    fn case_6_a_date_outside_the_slot_is_not_kept() {
+    fn case_6_a_date_in_the_task_text_is_kept_and_in_the_quote_alone_is_not() {
         let r = read(&list(&["- [ ] Send the budget by November 7 — ref: \"…November 7…\"", "- [ ] Look at the venue"]), Mode::Keyword);
+        assert_eq!(r.kept, Some(true), "{r:?}");
+        let r = read(&list(&["- [ ] Send the budget — ref: \"Anna will send the budget by November 7.\"", "- [ ] Look at the venue"]), Mode::Keyword);
         assert_eq!(r.kept, Some(false), "{r:?}");
+    }
+
+    /// An undated item given a date in its text is a hit, as a filled slot is.
+    #[test]
+    fn case_6h_a_date_in_the_undated_items_text_is_a_hit() {
+        let md = list(&[BUDGET_DATED, "- [ ] Look at the venue by November 9 — ref: \"Someone should look at the venue.\""]);
+        assert_eq!(read(&md, Mode::Keyword).hits, 1);
+        assert_eq!(read(&list(&["- [ ] Look at the venue by November 9"]), Mode::NoDate).hits, 1);
+        let quoted = list(&[BUDGET_DATED, "- [ ] Look at the venue — ref: \"we met on November 9\""]);
+        assert_eq!(read(&quoted, Mode::Keyword).hits, 0, "a date inside the quote is the transcript's, not the model's");
     }
 
     #[test]
@@ -377,6 +415,11 @@ mod instrument {
             ("old retrospective", manifest.join("tests/fixtures/templates-before-171/retrospective.json")),
             ("daily_standup", manifest.join("templates/daily_standup.json")),
         ];
+        // `BC_ARMS`, comma-separated, runs only the named arms: a revised template is measured again
+        // without paying for the arms it does not change.
+        let only: Vec<String> = std::env::var("BC_ARMS").map(|v| v.split(',').map(|a| a.trim().to_string()).collect()).unwrap_or_default();
+        let arms: Vec<(&str, PathBuf)> = arms.into_iter().filter(|(a, _)| only.is_empty() || only.iter().any(|o| o == a)).collect();
+        assert!(!arms.is_empty(), "BC_ARMS names no arm");
         let detected = crate::summary::language_detection::detect_summary_language(&[INPUT.to_string()]).language;
         let threshold = crate::summary::summary_engine::models::get_model_by_name(MODEL).expect("the model").context_size.saturating_sub(300) as usize;
         eprintln!("detected language: {detected:?}; token threshold: {threshold}");
