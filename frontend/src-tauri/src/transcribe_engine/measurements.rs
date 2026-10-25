@@ -39,8 +39,6 @@ fn p_class(t: &Transcript) -> PClass {
 enum Rule {
     /// Every one of these words appears, case-folded, punctuation stripped.
     Words(&'static [&'static str]),
-    /// At least `min` words, and at least 90% of letters Cyrillic.
-    Cyrillic { min: usize },
     /// At least `min` Han characters.
     Han { min: usize },
 }
@@ -60,12 +58,6 @@ fn check_rule(rule: Rule, text: &str) -> Result<(), String> {
             let got = words(text);
             let missing: Vec<&str> = want.iter().copied().filter(|w| !got.iter().any(|g| g == w)).collect();
             if missing.is_empty() { Ok(()) } else { Err(format!("missing {missing:?}")) }
-        }
-        Rule::Cyrillic { min } => {
-            let letters: Vec<char> = text.chars().filter(|c| c.is_alphabetic()).collect();
-            let cyr = letters.iter().filter(|c| ('\u{0400}'..='\u{04FF}').contains(*c)).count();
-            let n = words(text).len();
-            if n >= min && !letters.is_empty() && cyr * 10 >= letters.len() * 9 { Ok(()) } else { Err(format!("{n} words, {cyr} of {} letters Cyrillic", letters.len())) }
         }
         Rule::Han { min } => {
             let han = text.chars().filter(|c| ('\u{4E00}'..='\u{9FFF}').contains(c)).count();
@@ -149,7 +141,9 @@ const ROWS: &[Row] = &[
     fixture_row("fun-asr-mlt-nano-2512-q4", "zh.wav", None, Rule::Han { min: 6 }, PClass::None, "decode-fun-zh-553f109.json"),
     fixture_row("fun-asr-mlt-nano-2512-q4", "jfk.wav", Some("en"), JFK, PClass::None, "decode-fun-jfk-en-553f109.json"),
     fixture_row("fun-asr-mlt-nano-2512-q4", "zh.wav", Some("zh"), Rule::Han { min: 6 }, PClass::None, "decode-fun-zh-zh-553f109.json"),
-    row("gigaam-v3-ctc-q8", "ru-short.wav", "ru", Rule::Cyrillic { min: 5 }, PClass::Zero),
+    // Words, not a script check: gigaam is Russian-only and writes Cyrillic for any speech, English
+    // included, so "mostly Cyrillic" passed with jfk.wav (#169's control C12).
+    row("gigaam-v3-ctc-q8", "ru-short.wav", "ru", Rule::Words(&["добавил", "однако", "следует"]), PClass::Zero),
     row("granite-speech-4.1-2b-plus-q4", "jfk.wav", "en", JFK, PClass::None),
     row("granite-speech-4.1-2b-nar-q4", "jfk.wav", "en", JFK, PClass::None),
     row("moonshine-tiny-q8", "jfk.wav", "en", JFK, PClass::None),
@@ -292,18 +286,15 @@ fn a_stream_commits_append_only_and_finalize_emits_the_tail() {
         if words(&text).is_empty() {
             failures.push(format!("{name}: nothing was committed"));
         }
-        // Append-only: a chunk repeating text already committed is a rewrite reaching the sink.
-        let all = words(&text);
-        let mut seen_prefix_again = false;
-        for (i, chunk) in log.committed.iter().enumerate().skip(1) {
-            let w = words(chunk);
-            let earlier = words(&log.committed[..i].join(" "));
-            if !w.is_empty() && earlier.len() >= w.len() && earlier[..w.len()] == w[..] {
-                seen_prefix_again = true;
+        // Append-only: the first chunk's text appears once in all that was committed. A rewrite reaching
+        // the sink re-sends the prefix, and the prefix begins with the first chunk. Compared as text,
+        // not by words: a chunk may end inside a word ("Americ", then "ans"), which a word comparison
+        // missed (#169's control C18).
+        let joined: String = log.committed.concat();
+        if let Some(first) = log.committed.first().filter(|f| f.trim().len() >= 3) {
+            if joined.matches(first.as_str()).count() > 1 {
+                failures.push(format!("{name}: the committed prefix was sent again: {:?}", log.committed));
             }
-        }
-        if seen_prefix_again {
-            failures.push(format!("{name}: a committed chunk repeats the committed prefix: {all:?}"));
         }
         let no_tail = log.committed.len() <= before_finish;
         match (name, no_tail) {
@@ -354,8 +345,9 @@ fn what_the_august_exports_do_on_the_pinned_engine() {
 fn the_instruments_own_rules_go_red_on_what_they_reject() {
     assert!(check_rule(JFK, "And so my fellow Americans, ask not what your country can do for you").is_ok());
     assert!(check_rule(JFK, "и так мои дорогие американцы").is_err());
-    assert!(check_rule(Rule::Cyrillic { min: 3 }, "и так мои дорогие американцы").is_ok());
-    assert!(check_rule(Rule::Cyrillic { min: 3 }, "ask not what").is_err());
+    let ru = Rule::Words(&["добавил", "однако"]);
+    assert!(check_rule(ru, "он добавил, что их однако не следует").is_ok());
+    assert!(check_rule(ru, "эн соу май фелоу американс").is_err(), "Cyrillic is not Russian");
     assert!(itn_off("and so my fellow americans").is_ok());
     assert!(itn_off("And so, my fellow Americans.").is_err());
     assert!(itn_off("開放時間早上九點至下午五點").is_ok());
