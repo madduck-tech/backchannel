@@ -133,11 +133,6 @@ pub fn start_transcription_task<R: Runtime>(
 
             if streaming {
                 match crate::transcribe_engine::options::stream(&mut session, language, diarize, &StreamOptions::default()) {
-                    // Only this path opts into the lag warning. The segmented
-                    // adapter below already warns when its backlog cap starts
-                    // dropping audio; the streaming path has no cap, so nothing
-                    // otherwise tells a user that the transcript has quietly
-                    // drifted half a minute behind them.
                     // Wrapped, because one open stream cannot take two
                     // channels: it would hear the same second of the meeting
                     // twice, in series. ADR 0003's per-channel instance needs a
@@ -145,7 +140,7 @@ pub fn start_transcription_task<R: Runtime>(
                     // this path gets the mix and its rows carry no channel.
                     Ok(stream) => service::run(
                         SumChannels::new(StreamingTranscriber::new(stream)),
-                        sink.warn_when_behind(),
+                        sink,
                         receiver,
                     ),
                     Err(e) => {
@@ -183,8 +178,8 @@ async fn transcript_provider_config<R: Runtime>(app: &AppHandle<R>) -> Option<(S
 /// Live transcription through an audio-capable LLM in the built-in sidecar.
 ///
 /// Uses the same segmented adapter as a local batch model: an LLM decode per
-/// utterance needs exactly the same VAD segmentation, backlog cap and emit
-/// path. Only the call that turns samples into a string differs.
+/// utterance needs exactly the same VAD segmentation and emit path. Only the
+/// call that turns samples into a string differs.
 async fn run_builtin_audio_llm<R: Runtime>(
     app: AppHandle<R>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
@@ -285,5 +280,121 @@ mod live_path_tests {
     fn a_batch_model_is_segmented_and_so_is_an_unread_one() {
         assert_eq!(live_path(Some(&caps(false, 0))), LivePath::Segmented);
         assert_eq!(live_path(None), LivePath::Segmented);
+    }
+}
+
+#[cfg(test)]
+mod falling_behind {
+    //! A model slower than real time, through the live path as it is built. (#209)
+    //!
+    //! The real `service::run`, the real `SegmentedTranscriber` with its Silero VAD, the counting
+    //! channel the pipeline sends into, and `BenchSink` as the composition root builds it. Only the
+    //! decoder is a fake: it sleeps `K` seconds per second of segment, scaled by `SCALE`, and the
+    //! sender paces windows on the same scale, so the run takes a tenth of the audio's length and
+    //! lag, counted in samples, is exact whatever the scale.
+    use super::adapters::bench_sink::BenchSink;
+    use super::adapters::segmented::{Decoder, SegmentedTranscriber};
+    use super::ports::{Channel, TranscriptSink, Transcriber};
+    use super::sent_clock::{feed_channel, tests::window};
+    use super::service::{self, tests::FakeSink};
+    use crate::measure::{pinned_sample, read_wav_mono_16k};
+    use anyhow::Result;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// Seconds of decoding per second of segment.
+    const K: f64 = 2.0;
+    /// Wall seconds are audio seconds over this. Bounded at 10 so Silero's per-frame time stays
+    /// inside the tolerance; if it did not, the depth check would fail loudly, not pass falsely.
+    const SCALE: f64 = 10.0;
+    /// Seconds of `dots-full.wav` sent.
+    const T: f64 = 120.0;
+
+    /// Counts the samples the service actually fed on `you`: depth is what was sent minus this.
+    struct Counting<X> {
+        inner: X,
+        fed: Arc<AtomicU64>,
+    }
+
+    impl<X: Transcriber> Transcriber for Counting<X> {
+        fn feed(&mut self, channel: Channel, pcm_16k: &[f32], sink: &mut dyn TranscriptSink) -> Result<()> {
+            if channel == Channel::You {
+                self.fed.fetch_add(pcm_16k.len() as u64, Ordering::Relaxed);
+            }
+            self.inner.feed(channel, pcm_16k, sink)
+        }
+        fn finish(&mut self, sink: &mut dyn TranscriptSink) -> Result<()> {
+            self.inner.finish(sink)
+        }
+    }
+
+    /// The segments the adapter cuts from `audio`, decoded instantly: what a model that keeps up
+    /// would commit, to hold the slow run's commits against.
+    ///
+    /// The reference goes through the same adapter, so a loss that happens whatever the speed is
+    /// invisible here; what this proves is that **being slow loses nothing**, which is the claim:
+    /// the dropping it replaces fired only on a model that had fallen behind. Its control drops
+    /// segments only when the decoder is slow.
+    fn segments_of(audio: &[f32]) -> Vec<String> {
+        let sink = FakeSink::default();
+        let recorded = sink.0.clone();
+        let mut t = SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0, seconds_per_second: 0.0 }).unwrap();
+        let mut sink = sink;
+        for w in audio.chunks(800) {
+            t.feed(Channel::You, w, &mut sink).unwrap();
+            t.feed(Channel::Others, &vec![0.0; w.len()], &mut sink).unwrap();
+        }
+        t.finish(&mut sink).unwrap();
+        let committed = recorded.lock().unwrap().committed.clone();
+        committed
+    }
+
+    #[test]
+    fn a_segmented_model_slower_than_real_time_is_warned_about_and_loses_nothing() {
+        let all = read_wav_mono_16k(&pinned_sample("dots-full.wav"));
+        let audio = &all[..(T * 16_000.0) as usize];
+        let expected_rows = segments_of(audio);
+        let speech: u64 = expected_rows.iter().map(|r| r.trim_end_matches(" samples").parse::<u64>().unwrap()).sum();
+        let f = speech as f64 / audio.len() as f64;
+        assert!(K * f >= 1.5, "inconclusive: k·f = {:.2} (f = {f:.2}), under 1.5, so this run cannot fall behind enough to mean anything", K * f);
+
+        let (tx, rx) = feed_channel();
+        let (rx, clock) = rx.into_parts();
+        let fake = FakeSink::default();
+        let recorded = fake.0.clone();
+        // As the composition root builds every live sink.
+        let sink = BenchSink::new(fake, clock.clone());
+        let fed = Arc::new(AtomicU64::new(0));
+        let transcriber = Counting {
+            inner: SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0, seconds_per_second: K / SCALE }).unwrap(),
+            fed: fed.clone(),
+        };
+        let consumer = std::thread::spawn(move || service::run(transcriber, sink, rx));
+
+        let start = Instant::now();
+        for (i, w) in audio.chunks(800).enumerate() {
+            let due = start + Duration::from_secs_f64(i as f64 * 0.05 / SCALE);
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            tx.send_window(window(w.to_vec(), tx.sent_samples())).unwrap();
+        }
+        let depth = (clock.samples() - fed.load(Ordering::Relaxed)) as f64 / 16_000.0;
+        drop(tx);
+        consumer.join().unwrap();
+
+        let log = recorded.lock().unwrap();
+        let predicted = T * (1.0 - 1.0 / (K * f));
+        eprintln!(
+            "f {f:.3}, k·f {:.2}; depth when sending ended {depth:.1} s, predicted {predicted:.1} s; {} rows of {} expected; warnings {:?}",
+            K * f, log.committed.len(), expected_rows.len(), log.warnings
+        );
+        assert!(depth >= 30.0, "the run fell only {depth:.1} s behind, so it says nothing about a backlog");
+        assert!((depth - predicted).abs() <= 8.0, "depth {depth:.1} s, predicted {predicted:.1} s ± 8");
+        assert_eq!(log.committed, expected_rows, "every segment committed, in order, none shed");
+        assert!(!log.warnings.iter().any(|w| w.contains("skipped")), "audio was shed: {:?}", log.warnings);
+        let behind: Vec<&String> = log.warnings.iter().filter(|w| w.contains("behind what you are saying")).collect();
+        assert_eq!(behind.len(), 1, "one warning that the transcript is behind: {:?}", log.warnings);
     }
 }

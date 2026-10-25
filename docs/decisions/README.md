@@ -9,7 +9,7 @@
 | [0005](0005-platform-support-tiers.md) | Platform support tiers; development on Linux only | accepted; decision 2 superseded by 0015 |
 | [0006](0006-proactive-mode-design.md) | Proactive mode: mechanics of the intervention levels | accepted |
 | [0007](0007-observation-schema-versioning.md) | Versioning of the observation schema | accepted |
-| [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted |
+| [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted; decision 3's drop-cap criterion superseded by 0027 |
 | [0009](0009-positioning-share-protection.md) | Positioning: share protection, not stealth | accepted |
 | [0010](0010-project-language-english.md) | The project language is English | accepted |
 | [0011](0011-design-system-package-and-opendesign.md) | Design system as a repository package; OpenDesign for prototyping | accepted |
@@ -28,6 +28,7 @@
 | [0024](0024-an-approved-design-nobody-built-is-a-defect.md) | An approved design nobody built is a defect, and "out of scope" is an issue or it is nothing | accepted |
 | [0025](0025-the-engine-moves-with-its-weights-copied.md) | transcribe.cpp 0.4.1 is adopted with its weights copied, and with upstream's ITN default but one | accepted |
 | [0026](0026-a-capped-stream-is-decoded-in-segments.md) | A stream with a length cap is decoded in segments | accepted |
+| [0027](0027-a-live-path-that-falls-behind-is-warned-about-not-trimmed.md) | A live path that falls behind is warned about, never trimmed | accepted; supersedes the drop-cap wording of 0008 decision 3 |
 
 ## Deferred questions
 

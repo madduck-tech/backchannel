@@ -5,7 +5,7 @@
 //
 // There is no tentative text on this path, so it is silent between utterances,
 // and its latency floor is the segment length. Two decoders sit behind one
-// adapter because segmentation and backlog policy are identical between them —
+// adapter because segmentation is identical between them —
 // only the call that turns samples into a string differs:
 //   - `Decoder::Local`    — `Session::run()`, for the batch-only catalog
 //                           families (whisper, canary, qwen3-asr, ...).
@@ -43,16 +43,6 @@ const SAMPLE_RATE: u32 = 16_000;
 /// import path so live and file transcripts segment the same way.
 const VAD_REDEMPTION_MS: u32 = 2_000;
 
-/// Most un-transcribed audio to hold before dropping the oldest segments. A
-/// model slower than real time otherwise grows this queue for the whole
-/// meeting, and the transcript falls further behind the longer it runs.
-///
-/// **Applied per channel, not to the two of them together.** A single shared
-/// budget makes the busier side evict the quieter one: a long stretch of OTHERS
-/// would push out the user's own words, which are the rows they can actually
-/// check. The ceiling that matters to a listener is how far behind *their*
-/// channel may fall, and that stays 30s whatever the other side is doing.
-const MAX_BACKLOG_SAMPLES: usize = 30 * SAMPLE_RATE as usize;
 
 /// How a segment becomes text.
 pub enum Decoder {
@@ -67,10 +57,13 @@ pub enum Decoder {
     /// Returns one turn per segment, naming the segment's length.
     ///
     /// Test-only, and it is what makes this adapter's own logic — which channel
-    /// a segment came from, what order the two queues drain in, what the
-    /// backlog cap sheds — observable without loading a model.
+    /// a segment came from, and what order the two queues drain in — observable
+    /// without loading a model.
+    ///
+    /// `seconds_per_second` makes it slow: it sleeps that long per second of the segment, so a
+    /// model slower than real time can be driven without one (#209).
     #[cfg(test)]
-    Fake { speaker_id: i32 },
+    Fake { speaker_id: i32, seconds_per_second: f64 },
 }
 
 pub struct DecodedTurn {
@@ -147,13 +140,20 @@ impl Decoder {
                 }])
             }
             #[cfg(test)]
-            Decoder::Fake { speaker_id } => Ok(vec![DecodedTurn {
+            Decoder::Fake { speaker_id, seconds_per_second } => {
+                if *seconds_per_second > 0.0 {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(
+                        samples.len() as f64 / SAMPLE_RATE as f64 * *seconds_per_second,
+                    ));
+                }
+                Ok(vec![DecodedTurn {
                 text: format!("{} samples", samples.len()),
                 speaker_id: *speaker_id,
                 start_ms: 0.0,
                 end_ms: 0.0,
                 confidence: None,
-            }]),
+            }])
+            }
         }
     }
 }
@@ -174,10 +174,6 @@ struct ChannelState {
     channel: Channel,
     vad: ContinuousVadProcessor,
     pending: VecDeque<SpeechSegment>,
-    /// Said once per channel per recording: a slow model backlogs whichever
-    /// side is speaking, and the point is to tell the user to change models,
-    /// not to bury the UI in toasts.
-    backlog_warned: bool,
 }
 
 impl ChannelState {
@@ -186,32 +182,7 @@ impl ChannelState {
             channel,
             vad: ContinuousVadProcessor::new(SAMPLE_RATE, VAD_REDEMPTION_MS)?,
             pending: VecDeque::new(),
-            backlog_warned: false,
         })
-    }
-
-    /// Drop the oldest queued speech on this channel if the decoder has fallen
-    /// too far behind to catch up, and say so once.
-    fn shed_backlog(&mut self, sink: &mut dyn TranscriptSink) {
-        let dropped = trim_backlog(&mut self.pending);
-        if dropped == 0 {
-            return;
-        }
-        let secs = dropped as f64 / SAMPLE_RATE as f64;
-        let channel = self.channel.label();
-        warn!(
-            "Transcription of the {channel} channel is behind real time; dropped {secs:.1}s of \
-             audio to stay within the {}s per-channel backlog cap",
-            MAX_BACKLOG_SAMPLES / SAMPLE_RATE as usize
-        );
-        if !self.backlog_warned {
-            self.backlog_warned = true;
-            sink.warn(&format!(
-                "This model is transcribing slower than the {channel} channel is speaking, so \
-                 some audio is being skipped. Pick a faster or streaming model in settings. \
-                 ({secs:.0}s skipped so far)"
-            ));
-        }
     }
 }
 
@@ -264,12 +235,12 @@ impl SegmentedTranscriber {
             .map(|(i, _)| i)
     }
 
-    /// Decode everything queued on both channels, shedding backlog first.
+    /// Decode everything queued on both channels.
+    ///
+    /// Inside every `feed`, so the queue here never holds more than one window's segment. A model
+    /// slower than real time falls behind upstream, in the channel that feeds the service, and
+    /// nothing is dropped: `BenchSink` tells the person once it is 20 s behind (#209, ADR 0027).
     fn drain(&mut self, sink: &mut dyn TranscriptSink) {
-        for state in self.channels.iter_mut() {
-            state.shed_backlog(sink);
-        }
-
         while let Some(i) = self.oldest_queued() {
             let channel = self.channels[i].channel;
             let Some(segment) = self.channels[i].pending.pop_front() else { break };
@@ -366,19 +337,6 @@ fn enqueue(segments: Vec<SpeechSegment>, pending: &mut VecDeque<SpeechSegment>, 
     }
 }
 
-/// Drop the oldest segments until the queue fits the budget, returning how many
-/// samples were discarded. Pure, so the policy is testable on its own.
-fn trim_backlog(pending: &mut VecDeque<SpeechSegment>) -> usize {
-    let mut backlog: usize = pending.iter().map(|s| s.samples.len()).sum();
-    let mut dropped = 0usize;
-    // Drop from the front: the newest speech is the part still worth showing.
-    while backlog > MAX_BACKLOG_SAMPLES {
-        let Some(segment) = pending.pop_front() else { break };
-        backlog -= segment.samples.len();
-        dropped += segment.samples.len();
-    }
-    dropped
-}
 
 #[cfg(test)]
 mod tests {
@@ -403,7 +361,7 @@ mod tests {
     }
 
     fn transcriber() -> SegmentedTranscriber {
-        SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0 }).unwrap()
+        SegmentedTranscriber::new(Decoder::Fake { speaker_id: 0, seconds_per_second: 0.0 }).unwrap()
     }
 
     /// What a sink was told, with the channel each row claimed.
@@ -510,71 +468,13 @@ mod tests {
     }
 
     #[test]
-    fn a_backlogged_channel_does_not_evict_the_other() {
-        // The cap is per channel. Under one shared 30s budget, 50s queued on
-        // OTHERS would shed YOU's speech as well -- the rows the user is in the
-        // best position to check.
-        let mut t = transcriber();
-        let mut rows = Rows::default();
-
-        // 50s queued on OTHERS against a 30s cap, and one second on YOU that is
-        // the oldest thing in the meeting -- so a single shared budget shedding
-        // oldest-first would throw the user's own words away first.
-        for i in 0..10 {
-            t.slot(Channel::Others).pending.push_back(segment(5.0, i as f64 * 5_000.0));
-        }
-        t.slot(Channel::You).pending.push_back(segment(1.0, 0.0));
-
-        t.drain(&mut rows);
-
-        assert!(
-            rows.channels().contains(&Some(Channel::You)),
-            "the quiet channel's speech must survive the other's backlog, got {:?}",
-            rows.channels()
-        );
-        assert_eq!(
-            rows.channels().iter().filter(|c| **c == Some(Channel::Others)).count(),
-            6,
-            "the busy channel must be trimmed to its own 30s cap, not to a shared one"
-        );
-    }
-
-    #[test]
     fn a_cluster_id_is_the_only_thing_left_in_speaker() {
         assert_eq!(label(0), None, "a row nothing attributed must claim nothing");
         assert_eq!(label(2), Some("2".to_string()));
     }
 
     #[test]
-    fn backlog_under_budget_is_left_alone() {
-        let mut pending: VecDeque<_> = (0..3).map(|i| segment(5.0, i as f64 * 5000.0)).collect();
-        assert_eq!(trim_backlog(&mut pending), 0);
-        assert_eq!(pending.len(), 3, "15s of audio is inside the 30s budget");
-    }
-
-    #[test]
-    fn backlog_over_budget_drops_oldest_until_it_fits() {
-        // 10 x 5s = 50s queued against a 30s cap.
-        let mut pending: VecDeque<_> = (0..10).map(|i| segment(5.0, i as f64 * 5000.0)).collect();
-
-        let dropped = trim_backlog(&mut pending);
-
-        assert_eq!(dropped, 20 * SAMPLE_RATE as usize, "should shed exactly 20s");
-        let remaining: usize = pending.iter().map(|s| s.samples.len()).sum();
-        assert!(remaining <= MAX_BACKLOG_SAMPLES, "still over budget: {remaining}");
-        assert_eq!(
-            pending.front().unwrap().start_timestamp_ms,
-            20_000.0,
-            "the oldest speech must be what goes, not the newest"
-        );
-    }
-
-    /// A single over-long segment cannot be trimmed to fit without discarding
-    /// everything, so enqueue() has to have split it before it gets here.
-    /// A single over-long segment cannot be trimmed to fit without discarding
-    /// everything, so enqueue() has to have split it before it gets here.
-    #[test]
-    fn a_long_utterance_is_split_before_it_can_starve_the_backlog() {
+    fn a_long_utterance_is_split_before_one_decode_holds_the_transcript() {
         let mut pending = VecDeque::new();
         enqueue(vec![segment(40.0, 0.0)], &mut pending, LIVE_MAX_SEGMENT_SAMPLES);
 

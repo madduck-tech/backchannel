@@ -39,8 +39,8 @@ pub fn is_builtin_transcript_provider(provider: &str) -> bool {
 /// Batch-only, so the live path segments with VAD and decodes each segment whole:
 /// no `transcript-partial` events, and text lands one segment at a time
 /// (`LIVE_MAX_SEGMENT_SAMPLES`, 8s) rather than as you speak. Its "Medium" speed
-/// is what keeps that sustainable — a "Slow" model falls behind real time and
-/// `segmented.rs` drops the oldest audio past the 30s backlog cap.
+/// is what keeps that sustainable — a "Slow" model falls behind real time, keeps
+/// every second of audio, and is warned about once it is 20 s behind (#209).
 ///
 /// 25 European locales. Anyone recording Chinese, Japanese, Korean, Arabic, or
 /// Hindi wants `nemotron-3.5-asr-streaming-0.6b-q8` instead, which also restores

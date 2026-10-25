@@ -52,11 +52,9 @@ pub struct BenchSink<S> {
     started: Instant,
     commits: u64,
     last_log: Instant,
-    /// Whether this recording wants the user warned about lag at all. Off by
-    /// default: see [`BenchSink::warn_when_behind`].
-    lag_warning: bool,
-    /// Latched after the one warning, the same way `segmented.rs` latches its
-    /// backlog warning.
+    /// Latched after the one warning. A spike that recovers spends it, and a later sustained lag
+    /// in the same recording is not reported: accepted in #209, because re-arming would mean a
+    /// second toast, which is the product owner's call.
     lag_warned: bool,
     /// Every lag, not only the throttled ones that reach the log.
     ///
@@ -79,32 +77,23 @@ impl<S: TranscriptSink> BenchSink<S> {
             commits: 0,
             last_log: started,
             lags_ms: Vec::new(),
-            lag_warning: false,
             lag_warned: false,
         }
     }
 
-    /// Also tell the user, once, if the transcript falls ~20s behind them.
-    ///
-    /// Opt-in rather than always-on because only the streaming path needs it.
-    /// The VAD + batch adapter already warns when its backlog cap starts
-    /// dropping audio, and one slow model producing two different toasts is one
-    /// too many. The streaming path has no such cap: it never drops anything,
-    /// it just arrives later and later, which is exactly the failure a user
-    /// cannot diagnose without being told.
-    pub fn warn_when_behind(mut self) -> Self {
-        self.lag_warning = true;
-        self
-    }
-
     /// Whether this is the moment to hand out the "pick a faster model" advice.
+    ///
+    /// Every live path asks. Neither drops audio when it falls behind (ADR 0003, ADR 0027): it
+    /// arrives later and later, which is exactly the failure a user cannot diagnose without being
+    /// told. Until #209 only the stream path asked, on the premise that the VAD + batch path warned
+    /// when its backlog cap dropped audio; that cap could not fire.
     ///
     /// Once per recording: the condition holds for every subsequent commit once
     /// it holds at all, and the point is to tell the user something they can
     /// act on, not to bury the UI in identical toasts.
     fn behind(&mut self, lag: f64) -> bool {
         let baseline = *self.baseline_ms.get_or_insert(lag);
-        if self.lag_warning && !self.lag_warned && lag - baseline >= LAG_WARN_MS {
+        if !self.lag_warned && lag - baseline >= LAG_WARN_MS {
             self.lag_warned = true;
             true
         } else {
@@ -284,7 +273,7 @@ mod tests {
         let inner = FakeSink::default();
         let recorded = inner.0.clone();
         let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock).warn_when_behind();
+        let mut bench = BenchSink::new(inner, clock);
 
         feed.send(60.0);
         bench.committed(chunk("on time", 59.5));
@@ -299,7 +288,7 @@ mod tests {
         let inner = FakeSink::default();
         let recorded = inner.0.clone();
         let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock).warn_when_behind();
+        let mut bench = BenchSink::new(inner, clock);
 
         feed.send(10.0);
         bench.committed(chunk("before the pause", 9.5));
@@ -319,7 +308,7 @@ mod tests {
         let inner = FakeSink::default();
         let recorded = inner.0.clone();
         let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock).warn_when_behind();
+        let mut bench = BenchSink::new(inner, clock);
 
         feed.send(30.0);
         bench.committed(chunk("first, after a 28 s load", 2.0));
@@ -337,7 +326,7 @@ mod tests {
         let inner = FakeSink::default();
         let recorded = inner.0.clone();
         let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock).warn_when_behind();
+        let mut bench = BenchSink::new(inner, clock);
 
         feed.send(7.0);
         bench.committed(chunk("five seconds behind from the start", 2.0));
@@ -361,7 +350,7 @@ mod tests {
         let inner = FakeSink::default();
         let recorded = inner.0.clone();
         let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock).warn_when_behind();
+        let mut bench = BenchSink::new(inner, clock);
 
         feed.send(5.0);
         bench.committed(chunk("on time", 4.0));
@@ -372,24 +361,6 @@ mod tests {
         bench.committed(chunk("behind again", 40.0));
 
         assert_eq!(recorded.lock().unwrap().warnings.len(), 1);
-    }
-
-    #[test]
-    fn the_segmented_paths_are_left_to_their_own_warning() {
-        // No `warn_when_behind`, so the decorator only measures. The VAD + batch
-        // adapter already tells the user when its backlog cap starts dropping
-        // audio, and two toasts about one slow model is one too many.
-        let inner = FakeSink::default();
-        let recorded = inner.0.clone();
-        let (feed, clock) = feed();
-        let mut bench = BenchSink::new(inner, clock);
-
-        feed.send(5.0);
-        bench.committed(chunk("on time", 4.0));
-        feed.send(30.0);
-        bench.committed(chunk("late", 5.0));
-
-        assert!(recorded.lock().unwrap().warnings.is_empty());
     }
 
     #[test]
