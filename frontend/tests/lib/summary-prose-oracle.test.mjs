@@ -71,6 +71,10 @@ render(sections('1. Look at the venue\n2. Send the budget'));
 check('numbered items are items', items().items === 2, JSON.stringify(items()));
 render(sections('None noted in this section.'));
 check('no items, and the Discussion bullet after the next title is not one', items().items === 0, JSON.stringify(items()));
+// What the `scores` draw wrote in #171's gate: the empty-section line as a checklist item.
+render(sections('- [ ] **None noted in this section.**'));
+i = items();
+check('the empty-section line written as a checklist item is no item', i.items === 0 && i.placeholders === 1, JSON.stringify(i));
 
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 console.log('ok - the prose bar and the item count read BlockNote 0.53\'s own HTML as the core pass needs');

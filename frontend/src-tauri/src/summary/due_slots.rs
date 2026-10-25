@@ -106,6 +106,13 @@ fn plain(text: &str) -> String {
     text.replace(['*', '_'], "")
 }
 
+/// The system prompt's line for an empty section (`processor.rs`, rule 5), however it is emphasised.
+/// Measured in #171's gate: the `scores` draw wrote it as `- [ ] **None noted in this section.**`,
+/// and the counter took it for an action item and the draw for a conclusive one.
+fn is_placeholder(text: &str) -> bool {
+    plain(text).trim().to_lowercase().starts_with("none noted")
+}
+
 fn cells(line: &str) -> Vec<String> {
     line.trim().trim_matches('|').split('|').map(|c| c.trim().to_string()).collect()
 }
@@ -168,8 +175,14 @@ fn action_items(markdown: &str) -> Vec<Item> {
                 items.push(Item::Row { cells: cells(row), due, headed });
             }
         } else if BULLET.is_match(line) && item_indent.is_none_or(|parent| indent <= parent) {
+            let text = BULLET.replace(line, "").to_string();
+            if is_placeholder(&text) {
+                // The system prompt's empty-section line, written as a checklist item, is no task.
+                item_indent = None;
+                continue;
+            }
             item_indent = Some(indent);
-            items.push(Item::List(BULLET.replace(line, "").to_string()));
+            items.push(Item::List(text));
         } else if !trimmed.is_empty() && item_indent.is_some_and(|parent| indent > parent) {
             // A nested bullet or a continuation line: part of the item above it.
             if let Some(Item::List(text)) = items.last_mut() {
@@ -516,6 +529,15 @@ mod tests {
             let r = read_standup(text);
             assert!(r.conclusive && !r.invented.is_empty(), "{text}: {r:?}");
         }
+    }
+
+    /// Case 23, from #171's gate: an empty section's placeholder, written as a checklist item, is not
+    /// an action item, so a summary holding only it has none.
+    #[test]
+    fn case_23_the_empty_section_line_is_not_an_action_item() {
+        let md = "**Action Items**\n- [ ] **None noted in this section.**\n\n**Discussion Highlights**\n";
+        let r = read(md, Mode::NoDate);
+        assert_eq!((r.items, r.conclusive), (0, false), "{r:?}");
     }
 
     #[test]

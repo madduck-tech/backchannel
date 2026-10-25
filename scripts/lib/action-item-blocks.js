@@ -11,11 +11,15 @@
 // ones: BlockNote renders a nested line as a block of its own, where the counter reads it as part of
 // the item above (#171's gate, round 2).
 //
-// Returns a JSON string: { items, nested }.
+// The system prompt's line for an empty section, written as a list item ("None noted in this section."),
+// is no task, as `summary::due_slots` reads it too.
+//
+// Returns a JSON string: { items, nested, placeholders }.
 var blocks = Array.prototype.slice.call(document.querySelectorAll('[data-content-type]'));
 var inside = false;
 var items = 0;
 var nested = 0;
+var placeholders = 0;
 blocks.forEach(function (b) {
   var type = b.getAttribute('data-content-type');
   var t = (b.textContent || '').trim();
@@ -30,6 +34,7 @@ blocks.forEach(function (b) {
   var container = b.closest('[data-node-type=blockContainer]');
   var parent = container && container.parentElement && container.parentElement.closest('[data-node-type=blockContainer]');
   if (parent) { nested++; return; }
+  if (/^none noted/i.test(t)) { placeholders++; return; }
   items++;
 });
-return JSON.stringify({ items: items, nested: nested });
+return JSON.stringify({ items: items, nested: nested, placeholders: placeholders });
