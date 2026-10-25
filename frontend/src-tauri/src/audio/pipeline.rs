@@ -1501,11 +1501,10 @@ mod tests {
         out
     }
 
-    // `tokio::test`, not `test`: `AudioPipeline::new` builds an
-    // `AudioMetricsBatcher`, which spawns onto a reactor.
     /// The clock live lag is read from advances by one channel's samples per window, as the
     /// timestamps do, however the window is sent (#209). Sent chunk by chunk, it would count both
-    /// channels and read every healthy recording as falling behind.
+    /// channels and read every healthy recording as falling behind. A `tokio::test` for the reason
+    /// given on the next test.
     #[tokio::test]
     async fn the_transcription_clock_advances_by_one_channel_per_window() {
         let (mut pipeline, mut transcription, _recording, clock) = pipeline_with_clock();
@@ -1528,6 +1527,8 @@ mod tests {
         );
     }
 
+    // `tokio::test`, not `test`: `AudioPipeline::new` builds an
+    // `AudioMetricsBatcher`, which spawns onto a reactor.
     #[tokio::test]
     async fn transcription_receives_the_two_channels_apart_and_tagged() {
         let (mut pipeline, mut transcription, _recording) = pipeline_for_test();
