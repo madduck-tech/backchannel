@@ -658,10 +658,30 @@ except Exception: print("")' 2>/dev/null)
 
   # Collected, then failed once, so a run against the defect lists every condition it breaks.
   FAILS=()
-  AUDIO_CHECK_REDACT=1
+  # Not redacted: the harness is the microphone here, so the words are jfk.wav's, never the room's.
+  AUDIO_CHECK_REDACT=
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
+  # The picker's first entry is whatever the machine lists first, not the default input, so the
+  # harness is picked by the description PipeWire reports, as `stage2-core-check.sh` does.
+  HARNESS_DESC=$(pw-dump | python3 -c '
+import json, sys
+for o in json.load(sys.stdin):
+    p = (o.get("info") or {}).get("props") or {}
+    if p.get("node.name") == "backchannel_harness_src":
+        print(p.get("node.description") or ""); break
+')
+  [ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph"
+  TRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Microphone\"]"}')
+  [ -n "$TRIG" ] || die "no microphone picker on the audio check"
+  click "$TRIG" "the microphone picker"
+  await "document.querySelectorAll('[role=option]').length > 0" "the microphone list to open" 15
+  OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='option'][contains(normalize-space(),\\\"$HARNESS_DESC\\\")]\"}")
+  [ -n "$OPT" ] || die "the audio check does not offer the harness microphone '$HARNESS_DESC'"
+  click "$OPT" "the harness microphone"
+  await "(function(){var t=document.querySelector('button[aria-label=Microphone]');return !!t&&t.textContent.indexOf('$HARNESS_DESC')>=0;})()" \
+        "the picker to show the harness microphone" 10
   MIC=$(audio_check_field "$(audio_check_read Microphone)" device)
-  case "$MIC" in *Backchannel*) ;; *) die "the microphone picker holds '$MIC', not the harness; the check would hear the room" ;; esac
+  case "$MIC" in *"$HARNESS_DESC"*) ;; *) die "the microphone picker holds '$MIC', not the harness; the check would hear the room" ;; esac
   audio_check_press
   OUT=$( (audio_check_require_body_answer) 2>&1 ) || FAILS+=("the check: $OUT")
   [ "$(stat -c %s "$LOG")" -ge "$OFFSET" ] || die "the log is shorter than before the relaunch: it rotated, and the relaunch's lines are lost"
