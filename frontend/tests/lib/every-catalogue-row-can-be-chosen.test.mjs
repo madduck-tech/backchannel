@@ -66,6 +66,10 @@ const modules = {
   '@tauri-apps/api/event': stubs.event,
 };
 const context = loadTsx('src/contexts/OnboardingContext.tsx', modules);
+// The application mounts `TooltipProvider` once, in its layout, so it is mounted here too. Without it,
+// `main`'s first run, which mounted Settings' card with its tooltips, died on the provider before any
+// assertion about choosing could run.
+const firstRunTooltip = loadTsx('src/components/ui/tooltip.tsx', modules);
 // Loaded by its literal path, so `no-invisible-component.test.mjs` sees that a test renders it, and
 // handed to the step as the module it imports, so the step renders this very instance.
 const catalogueModule = loadTsx('src/components/onboarding/shared/ModelCatalogue.tsx', modules);
@@ -73,6 +77,7 @@ const { TranscriptionModelStep } = loadTsx('src/components/onboarding/steps/Tran
   ...modules,
   '@/contexts/OnboardingContext': context,
   '../shared/ModelCatalogue': catalogueModule,
+  '@/components/ui/tooltip': firstRunTooltip,
   '../OnboardingContainer': { OnboardingContainer: ({ children }) => React.createElement('div', null, children) },
 });
 
@@ -81,7 +86,10 @@ const Probe = () => { ctx = context.useOnboarding(); return React.createElement(
 const container = document.createElement('div');
 document.body.appendChild(container);
 const root = createRoot(container);
-await act(async () => { root.render(React.createElement(context.OnboardingProvider, null, React.createElement(Probe))); });
+await act(async () => {
+  root.render(React.createElement(firstRunTooltip.TooltipProvider, null,
+    React.createElement(context.OnboardingProvider, null, React.createElement(Probe))));
+});
 await settle();
 
 const open = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('Browse every model'));
@@ -93,7 +101,12 @@ const group = () => container.querySelector('[role="radiogroup"][aria-label="Mod
 const rows = () => [...(group()?.querySelectorAll('[role="radio"]') ?? [])];
 const rowFor = (name) => rows().find((r) => r.querySelector('.readout')?.textContent === name);
 const shownIds = () => rows().map((r) => r.querySelector('.readout')?.textContent);
-assert.ok(group(), "the catalogue renders no radiogroup of its own");
+if (!group()) {
+  // Before #166 first run mounted Settings' card. Say what its row for a model not on disk offered.
+  const card = [...container.querySelectorAll('div.rounded-lg')].find((c) => c.textContent.includes('gigaam-v3-ctc'));
+  const offers = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent.trim());
+  assert.fail(`the catalogue renders no radiogroup of its own; the gigaam-v3-ctc-q8 row, not on disk, offers ${JSON.stringify(offers)}, none of which chooses it`);
+}
 assert.equal(rows().length, MODELS.length, `the catalogue lists ${rows().length} rows of ${MODELS.length}`);
 
 const fetchesBefore = stubs.calls.filter((c) => /download/i.test(c.cmd)).length;
