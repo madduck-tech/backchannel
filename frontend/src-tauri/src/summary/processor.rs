@@ -46,6 +46,17 @@ fn resolve_final_language_action(
     }
 }
 
+/// Whether a transcript of `total_tokens` is summarised in one pass.
+///
+/// Cloud providers take any length in one pass. Ollama and the built-in model have small contexts and
+/// are chunked past their threshold. An agent CLI is chunked past its threshold too (#212): its
+/// threshold is the processor's 100 000-token fallback, and each chunk is one more CLI start against
+/// the person's quota, so it is chunked only when it must be.
+pub(crate) fn single_pass(provider: &LLMProvider, total_tokens: usize, token_threshold: usize) -> bool {
+    let chunks_when_long = matches!(provider, LLMProvider::Ollama | LLMProvider::BuiltInAI) || provider.agent_cli().is_some();
+    !chunks_when_long || total_tokens < token_threshold
+}
+
 fn english_normalization_system_prompt() -> &'static str {
     r#"You are a precise English Markdown editor. Convert the provided Markdown document into English while preserving structure exactly.
 
@@ -364,9 +375,9 @@ pub async fn generate_meeting_summary(
         let successful_chunk_count: i64;
 
         // Strategy: Use single-pass for cloud providers or short transcripts
-        // Use multi-level chunking for Ollama/BuiltInAI with long transcripts
+        // Use multi-level chunking for Ollama/BuiltInAI, and for an agent CLI past its threshold
         // Note: CustomOpenAI is treated like cloud providers (unlimited context)
-        if (provider != &LLMProvider::Ollama && provider != &LLMProvider::BuiltInAI) || total_tokens < token_threshold {
+        if single_pass(provider, total_tokens, token_threshold) {
             info!(
                 "Using single-pass summarization (tokens: {}, threshold: {})",
                 total_tokens, token_threshold
@@ -1121,5 +1132,25 @@ mod template_slots {
             }
         }
         assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod single_pass_tests {
+    use super::*;
+
+    #[test]
+    fn an_agent_cli_is_one_pass_up_to_its_threshold_and_chunked_past_it() {
+        for p in [LLMProvider::ClaudeCode, LLMProvider::Codex] {
+            assert!(single_pass(&p, 99_999, 100_000), "{p:?} under the threshold");
+            assert!(!single_pass(&p, 100_000, 100_000), "{p:?} at the threshold");
+        }
+    }
+
+    #[test]
+    fn the_other_providers_are_as_they_were() {
+        assert!(single_pass(&LLMProvider::Claude, 10_000_000, 100_000), "a cloud provider is never chunked");
+        assert!(!single_pass(&LLMProvider::Ollama, 5_000, 1_748));
+        assert!(single_pass(&LLMProvider::BuiltInAI, 1_000, 1_748));
     }
 }
