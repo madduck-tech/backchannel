@@ -72,12 +72,15 @@ SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jf
 [ -d "$CACHE/models/summary" ] || die "no summary model in $CACHE/models/summary; this pass summarises and will not download 2.7 GB inside a gate"
 [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample to play"
 
-PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""
+PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""
 cleanup() {
   [ -n "$SESSION" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
   [ -n "$DRIVER_PID" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null
   sleep 1
   [ -n "$DRIVER_PID" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null
+  [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
+  # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
+  type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
   elif [ -n "$PROFILE" ]; then printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
@@ -87,6 +90,9 @@ trap cleanup EXIT
 scripts/audio-harness.sh down >/dev/null 2>&1
 scripts/audio-harness.sh up --sample "$SAMPLE" || die "the audio harness could not come up"
 HARNESS_UP=1
+# Before the application starts, so the audio check's device list contains the tone sink's monitor.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/tone-sink.sh"
+tone_sink_create
 
 # The system side is the harness's own sink, so nothing from the machine's speakers is recorded.
 SINK_DESC=$(pw-dump | python3 -c '
@@ -287,13 +293,67 @@ if [ ${#WORDS[@]} -gt 0 ]; then
   say "the decoded text holds $N distinct words of the sample: $(audio_check_field "$AUDIO_CHECK" decoded)"
 fi
 
-# --- the system row is not pressed here, and why (#173) ------------------------------------------
+# --- the system row: the tone, pressed in the running application (#168, #173) ---------------------
 #
-# It was, for one run: with a null sink as the default output, the row answered `Nothing arrived`.
-# The AppImage carries no GStreamer plugins, so Web Audio has no output and the tone never sounds
-# (`GStreamer element autoaudiosink not found`, the application's own stderr). That press, and the
-# sink it plays into, are #173's oracle, red until the media framework ships. Until then the system
-# row's tone is held by jsdom alone (`audio-check-step.test.mjs`), and a verdict says so.
+# The tone plays through the default output, which for this one press is `lib/tone-sink.sh`'s null
+# sink, so it never sounds in the person's speakers; the row listens on that sink's monitor. Until
+# #173 the AppImage had no GStreamer plugins, Web Audio had no output, and this press answered
+# `Nothing arrived`. The row's answer alone cannot say *what* arrived, because WirePlumber moves
+# streams already playing into a new default output; so the graph is sampled across the press
+# (`lib/tone-graph.py`) and every link into the sink must come from WebKit.
+STRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"The other side is heard through\"]"}')
+[ -n "$STRIG" ] || die "no system picker on the audio check"
+click "$STRIG" "the system picker"
+await "document.querySelectorAll('[role=option]').length > 0" "the system list to open" 15
+SOPT=$(find_el '{"using":"xpath","value":"//*[@role=\"option\"][contains(normalize-space(),\"Backchannel tone sink\")]"}')
+[ -n "$SOPT" ] || die "the audio check does not offer the tone sink's monitor; it offers: $(js '"return [...document.querySelectorAll(\"[role=option]\")].map(o=>o.textContent.trim()).join(\" | \")"')"
+click "$SOPT" "the tone sink's monitor"
+await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].find(b=>b.getAttribute('aria-label')==='The other side is heard through');return !!t&&t.textContent.indexOf('Backchannel tone sink')>=0;})()" \
+      "the system picker to show the tone sink's monitor" 10
+
+GRAPH="$PROFILE/tone-graph.jsonl"
+# The driver's pid is the root of the application's process tree: a link counts as the tone only
+# from a WebKitWebProcess under it, not from any WebKitGTK program on the machine.
+python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH" &
+GRAPH_PID=$!
+tone_sink_make_default
+audio_check_press "The other side is heard through" "Play a tone and listen"
+kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
+
+# What Web Audio does here, after the press so the tone was the web process's first context: the
+# context's states and what `resume()` did. It is a check, not only a record: a context that does not
+# reach `running` here means the tone above did not play either, whatever the row said. It runs after
+# the sampler stops, so its own link cannot stand in for the tone's. It runs before the restore, so
+# its silent stream opens in the null sink, not in the person's headset.
+PROBE=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/web-audio-probe.js \
+  | curl -s -m 20 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
+  | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+print(v if isinstance(v, str) else "the probe did not answer: " + repr(v)[:200])')
+say "Web Audio in this build: $PROBE"
+tone_sink_restore || die "the default output could not be put back; run 'bash scripts/lib/tone-sink.sh restore'"
+
+# Every judgement is made before any of them fails the pass, so a red run shows all of them.
+TONE_FAILS=()
+case "$(audio_check_field "$AUDIO_CHECK" kind)" in
+  NO_WORDS|HEARD) ;;
+  *) TONE_FAILS+=("the row: '$(audio_check_field "$AUDIO_CHECK" outcome)'") ;;
+esac
+# Pinned to the tone sink's monitor: the microphone row's line says audio=true too.
+SYS_LINE=$(grep -oE "Device check on Monitor of Backchannel tone sink: [0-9]+ samples, audio=(true|false)" "$LOG" | tail -1)
+SYS_SAMPLES=$(printf '%s' "$SYS_LINE" | grep -oE '[0-9]+ samples' | grep -oE '[0-9]+')
+say "the system check: ${SYS_LINE:-no line in the log for the monitor of the tone sink} (one side: $LO..$HI)"
+[ -n "$SYS_SAMPLES" ] && [ "$SYS_SAMPLES" -ge "$LO" ] && [ "$SYS_SAMPLES" -le "$HI" ] \
+  || TONE_FAILS+=("${SYS_SAMPLES:-no} samples for a ${LISTEN_S}s window; one side is $LO..$HI")
+case "$SYS_LINE" in *audio=true) ;; *) TONE_FAILS+=("the application heard no audio: '${SYS_LINE:-no line}'") ;; esac
+VERDICT=$(python3 -I scripts/lib/tone-graph.py judge "$GRAPH") || TONE_FAILS+=("the graph: $VERDICT")
+say "the tone sink, across the press: $VERDICT"
+printf '%s' "$PROBE" | python3 -c 'import json,sys
+v = json.loads(sys.stdin.read())
+sys.exit(0 if v.get("final") == "running" and v.get("resume") == "resolved" else 1)' 2>/dev/null \
+  || TONE_FAILS+=("Web Audio did not start: $PROBE")
+[ ${#TONE_FAILS[@]} -eq 0 ] || die "the tone did not play into the default output and reach its monitor: $(printf '%s | ' "${TONE_FAILS[@]}")"
 
 FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
 [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"

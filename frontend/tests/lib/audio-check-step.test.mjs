@@ -33,7 +33,7 @@ const DEVICES = [
 const CHOSEN = 'gigaam-v3-e2e-rnnt-q8';
 const DEFAULT_MODEL = 'parakeet-tdt-0.6b-v3-q8';
 
-async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails, suspended } = {}) {
+async function render({ result, fail, failComplete = false, loaded = null, failLoad, holdLoad, holdCheck, toneFails, suspended, resumeRejects, startsOnResume, initialState } = {}) {
   const calls = [];
   // One timeline for IPC and the tone, so an ordering between them can be asserted.
   const events = [];
@@ -89,11 +89,19 @@ async function render({ result, fail, failComplete = false, loaded = null, failL
   window.AudioContext = class {
     constructor() {
       events.push('ctx');
-      if (toneFails) throw new Error('NotSupportedError: no audio output');
+      // What WebKit throws: a DOMException, which is an Error in the page's realm (WebIDL).
+      if (toneFails) throw new window.DOMException('no audio output', 'NotSupportedError');
       // A context the webview will not start: `resume()` stays pending, as the spec allows.
-      this.state = suspended ? 'suspended' : 'running';
+      this.state = initialState ?? (suspended ? 'suspended' : 'running');
     }
-    resume() { return new Promise(() => {}); }
+    // What WebKit does when it cannot build an audio sink: `resume()` rejects (`InvalidStateError`,
+    // "Failed to start the audio device"). Pending is the other shape a context that never starts can
+    // take; both leave the state `suspended` (#173). `startsOnResume` is a working webview: the state
+    // turns `running` only once `resume()` settles, later than the click, as WebKit's does.
+    resume() {
+      if (startsOnResume) return new Promise((r) => setTimeout(() => { this.state = 'running'; r(); }, 50));
+      return resumeRejects ? Promise.reject(new Error('InvalidStateError: Failed to start the audio device')) : new Promise(() => {});
+    }
     createOscillator() {
       return {
         frequency: {},
@@ -320,10 +328,9 @@ const click = async (el) => {
   });
   assert.equal(calls.filter((c) => c.cmd === 'check_capture_device').length, 1, 'and no second check starts beside the first');
   await act(async () => { release(); await holdCheck; });
-  assert.match(
-    container.textContent,
-    /The tone could not play/,
-    'the outcome names the tone, not the device: "nothing arrived, pick another" would blame a device given nothing to hear'
+  assert.ok(
+    container.textContent.includes('The tone could not play, so there was nothing to hear: NotSupportedError: no audio output'),
+    `the outcome names the tone, not the device, with the error as #168 wrote it (String(error)): ${container.textContent}`
   );
 }
 {
@@ -365,6 +372,44 @@ const click = async (el) => {
   const made = events.filter((e) => e === 'ctx').length;
   assert.equal(made, 3, 'the sentinel: three presses made three contexts');
   assert.equal(events.filter((e) => e === 'close').length, made, `each one is closed: ${events.join(' > ')}`);
+}
+
+// --- 4d: a tone that never sounded is named, not blamed on the device (#173) ----------------------
+//
+// Until #173, Web Audio had no output in the AppImage: every context stayed `suspended`. The row then heard nothing
+// and told the person "Nothing arrived … pick another", which is false advice about a device that was
+// given nothing to hear. The exact string is chosen here and written down in #173.
+const TONE_NEVER_STARTED = 'The tone could not play, so there was nothing to hear: the audio output never started';
+for (const resumeRejects of [true, false]) {
+  const { container } = await render({ loaded: CHOSEN, suspended: true, resumeRejects, result: { device: 'x', heard_audio: false, text: '' } });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2700)); });
+  assert.ok(
+    container.textContent.includes(TONE_NEVER_STARTED),
+    `a context that never left \`suspended\` (resume ${resumeRejects ? 'rejects' : 'pends'}) must be named as the tone failing: ${container.textContent.slice(0, 400)}`
+  );
+  assert.ok(!/Nothing arrived/.test(container.textContent), 'and must not tell the person their device is silent');
+}
+// A context that reached some state other than `running` played nothing either.
+{
+  const { container } = await render({ loaded: CHOSEN, initialState: 'interrupted', result: { device: 'x', heard_audio: false, text: '' } });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2700)); });
+  assert.ok(container.textContent.includes(TONE_NEVER_STARTED), `an \`interrupted\` context is not a tone that played: ${container.textContent.slice(0, 300)}`);
+}
+{
+  // Negative control: a context that ran, and a device that heard nothing, is still the device. It
+  // starts \`suspended\` and runs once \`resume()\` settles, so the state must be read after the tone.
+  const { container } = await render({ loaded: CHOSEN, suspended: true, startsOnResume: true, result: { device: 'x', heard_audio: false, text: '' } });
+  await act(async () => {
+    byText(container, 'Play a tone and listen').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2700)); });
+  assert.match(container.textContent, /Nothing arrived/, 'a tone that played into a silent device is the device');
 }
 
 // --- 5: the step is offered, not mandatory -------------------------------------------------------
