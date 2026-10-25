@@ -125,6 +125,15 @@ pub async fn status() -> Vec<Status> {
             Some(f) => call::logged_in(cli, &f.path, &child_path(&f.path, world.login_path.as_deref(), world.process_path.as_deref())).await,
             None => None,
         };
+        // The line Stage 2 reads: a screen that says "not found" is otherwise the same with this
+        // command never answering, since the screens treat no answer as none found.
+        log::info!(
+            "Agent CLI status: {} found={} via={:?} logged_in={:?}",
+            cli.provider_id(),
+            found.as_ref().map(|f| f.path.display().to_string()).unwrap_or_else(|| "none".into()),
+            found.as_ref().map(|f| f.source),
+            logged_in
+        );
         out.push(Status {
             id: cli.provider_id(),
             found: found.as_ref().map(|f| tilde(&f.path, &world.home)),
