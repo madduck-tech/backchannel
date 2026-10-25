@@ -15,7 +15,7 @@ fn main() {
         // The swift-rs crate build will be handled in the enhanced_macos crate's build.rs
     }
 
-    alias_vulkan_import_lib_for_msvc();
+    link_vulkan_sdk_for_msvc();
 
     // Download and bundle FFmpeg binary at build-time
     ffmpeg::ensure_ffmpeg_binary();
@@ -23,13 +23,15 @@ fn main() {
     tauri_build::build()
 }
 
-/// transcribe.cpp's link manifest records the Vulkan loader as the Unix `-lvulkan`
-/// (cmake/transcribe-install.cmake), which rustc turns into `vulkan.lib`. The Windows
-/// SDK only ships `vulkan-1.lib`, so the final link fails with LNK1181. Copy it under
-/// the name the manifest asks for and point the linker at the copy.
-/// ponytail: alias instead of a patched fork — drop this once upstream records the
-/// imported target's real path.
-fn alias_vulkan_import_lib_for_msvc() {
+/// Point the MSVC linker at the Vulkan SDK's import libraries.
+///
+/// From transcribe.cpp v0.4.1 the link manifest names the Windows loader `vulkan-1`
+/// (`cmake/transcribe-install.cmake`), but the -sys crate emits the name without a search
+/// directory. The SDK's `Lib` is not on the runner's default path, so the link died with
+/// LNK1181 on `vulkan-1.lib` (#169, measured on the dispatched Windows build). Before v0.4.1
+/// the manifest said `vulkan`, and this function copied `vulkan-1.lib` to `vulkan.lib`; that
+/// alias is gone with the name it stood in for.
+fn link_vulkan_sdk_for_msvc() {
     if std::env::var_os("CARGO_FEATURE_VULKAN").is_none()
         || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
     {
@@ -37,13 +39,13 @@ fn alias_vulkan_import_lib_for_msvc() {
     }
 
     let sdk = std::env::var("VULKAN_SDK").expect("VULKAN_SDK must be set to build with --features vulkan");
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let source = std::path::Path::new(&sdk).join("Lib").join("vulkan-1.lib");
-    let alias = std::path::Path::new(&out_dir).join("vulkan.lib");
-
-    std::fs::copy(&source, &alias)
-        .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", source.display(), alias.display()));
-    println!("cargo:rustc-link-search=native={out_dir}");
+    let lib = std::path::Path::new(&sdk).join("Lib");
+    assert!(
+        lib.join("vulkan-1.lib").is_file(),
+        "{} has no vulkan-1.lib; is VULKAN_SDK the SDK's root?",
+        lib.display()
+    );
+    println!("cargo:rustc-link-search=native={}", lib.display());
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance
