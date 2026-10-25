@@ -17,6 +17,8 @@
 pub mod call;
 pub mod discovery;
 pub mod parse;
+#[cfg(test)]
+mod real;
 
 use serde::Serialize;
 

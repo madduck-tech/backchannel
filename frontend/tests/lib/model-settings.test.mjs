@@ -16,8 +16,9 @@
 //   5. When the backend refuses to store the custom config, `onSave` is **not** called. Otherwise
 //      the parent believes a configuration the backend does not have.
 //   6. The confirmed model is remembered per provider in `providerModelMap`.
+//   7. An agent CLI (#212) is saveable only when found and logged in, and is saved with no key.
 //
-// Six behaviours, **seven** controls: behaviour 2 owes two, because its guard is two clauses
+// Seven behaviours; the first six owe **seven** controls: behaviour 2 owes two, because its guard is two clauses
 // (`!endpoint.trim() || !model.trim()`) and blanking both at once lets either one carry the
 // assertion alone.
 //
@@ -44,7 +45,7 @@ const BASE = {
   ollamaEndpoint: 'http://localhost:11434',
 };
 
-function harness({ config = {}, failCustomSave = false } = {}) {
+function harness({ config = {}, failCustomSave = false, agents = [] } = {}) {
   const seen = { saved: [], set: [] };
   const stubs = tauriStubs({
     extra: {
@@ -59,6 +60,7 @@ function harness({ config = {}, failCustomSave = false } = {}) {
       get_groq_models: [],
       get_openrouter_models: [],
       builtin_ai_list_models: [],
+      agent_cli_status: agents,
       api_save_custom_openai_config: () => {
         if (failCustomSave) throw new Error('backend refused');
         return null;
@@ -256,8 +258,69 @@ const click = async (el) => {
   );
 }
 
+// --- 7: an agent CLI (#212) is saved only when it is found and logged in, and with no key --------
+//
+// The approved `settings-summariser-agents.html`: the status line under the list says found (with
+// the path and the model), not logged in, or not on PATH, and only the first can be saved.
+{
+  const statusOf = (c) => c.querySelector('[data-agent-status]')?.textContent ?? '';
+  const ready = await render({
+    agents: [{ id: 'claude-code', found: '~/.local/bin/claude', loggedIn: true }],
+    // A key left over from the provider the list was on before: it must not be saved with the agent.
+    config: { provider: 'claude-code', model: '', apiKey: 'sk-left-behind' },
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  assert.ok(statusOf(ready.container).includes('Found: ~/.local/bin/claude'), statusOf(ready.container));
+  assert.ok(statusOf(ready.container).includes('Model: as set in Claude Code'), statusOf(ready.container));
+  assert.ok(statusOf(ready.container).includes('Summaries run with no tools and save no session.'), statusOf(ready.container));
+  assert.equal(
+    ready.container.querySelector('input[type="password"]'),
+    null,
+    'an agent CLI uses its own login, so Settings must not ask for a key'
+  );
+  assert.equal(
+    ready.container.querySelectorAll('[role="combobox"]').length,
+    1,
+    'only the provider list: an agent CLI uses its own default model, so there is no model to pick'
+  );
+  assert.equal(saveButton(ready.container).disabled, false, 'a found, logged-in CLI can be saved');
+  await click(saveButton(ready.container));
+  assert.deepEqual(
+    { provider: ready.seen.saved[0]?.provider, apiKey: ready.seen.saved[0]?.apiKey },
+    { provider: 'claude-code', apiKey: null },
+    'the agent is saved as the provider with no key, not with the one the field still held'
+  );
+
+  const loggedOut = await render({
+    agents: [{ id: 'codex', found: '~/.local/bin/codex', loggedIn: false }],
+    config: { provider: 'codex', model: '' },
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  assert.ok(
+    statusOf(loggedOut.container).includes('Not logged in. Run codex once in a terminal to log in, then come back here.'),
+    statusOf(loggedOut.container)
+  );
+  assert.equal(saveButton(loggedOut.container).disabled, true, 'a logged-out CLI cannot be saved');
+
+  // The shape `agent_cli_status` sends: both CLIs, always, with `found: null` for one not found.
+  const missing = await render({
+    agents: [
+      { id: 'claude-code', found: null, loggedIn: null },
+      { id: 'codex', found: '~/.local/bin/codex', loggedIn: true },
+    ],
+    config: { provider: 'claude-code', model: '' },
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  assert.ok(
+    statusOf(missing.container).includes("Claude Code is not in your shell's PATH. Install claude and log in, then come back here."),
+    statusOf(missing.container)
+  );
+  assert.equal(saveButton(missing.container).disabled, true, 'a CLI that was not found cannot be saved');
+}
+
 console.log(
   'ok - model settings: a keyless provider and a blank custom endpoint cannot be saved, the key ' +
     'is trimmed, another provider\'s custom fields are dropped, a refused backend save produces no ' +
-    'onSave, and the model is remembered per provider'
+    'onSave, the model is remembered per provider, and an agent CLI is saved only when usable and ' +
+    'with no key'
 );

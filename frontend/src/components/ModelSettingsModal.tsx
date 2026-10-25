@@ -627,7 +627,9 @@ export function ModelSettingsModal({
 
     const updatedConfig = {
       ...modelConfig,
-      apiKey: typeof apiKey === 'string' ? apiKey.trim() || null : null,
+      // An agent CLI has no key (#212). The field keeps the last provider's key when the list moves
+      // to one that needs none, and it must not travel with the agent's configuration.
+      apiKey: isAgent ? null : typeof apiKey === 'string' ? apiKey.trim() || null : null,
       ollamaEndpoint: modelConfig.provider === 'ollama'
         ? (ollamaEndpoint.trim() || null)
         : (modelConfig.ollamaEndpoint || null),
