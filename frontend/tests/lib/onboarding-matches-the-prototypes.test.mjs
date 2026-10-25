@@ -115,24 +115,26 @@ const holds = (what, cond, why) => {
   );
 }
 
-// --- the summariser offers the seven the prototype offers, in its order ------------------------------
+// --- the summariser offers what the prototype offers, in its order -----------------------------------
 //
-// The heading counts them out loud -- "Seven choices" -- so a sixth or an eighth makes the screen
-// contradict itself. Read from the prototype's own `P = [...]` rather than retyped here, so a change
-// there is a stale check rather than a silent disagreement.
+// The heading counts the choices out loud -- "Eight choices": seven providers and the agent option,
+// whose two CLIs open inside it (#212) -- so a ninth makes the screen contradict itself. Read from the
+// prototype's own `P = [...]` and `A = [...]` rather than retyped here, so a change there is a stale
+// check rather than a silent disagreement.
 {
-  const p = proto('onboarding-summariser');
-  const wanted = [...p.matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1]);
+  const p = proto('onboarding-summariser-agents');
+  // `agent` is the prototype's own name for the open group row, not a provider anyone saves.
+  const wanted = [...p.matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1]).filter((id) => id !== 'agent');
   assert.equal(
-    wanted.length, 7,
-    `the approved summariser lists ${wanted.length} providers; this check assumes the seven its ` +
-      'heading counts'
+    wanted.length, 9,
+    `the approved summariser lists ${wanted.length} providers and agent CLIs; this check assumes the ` +
+      'seven and two its heading counts as eight choices'
   );
 
   const step = impl('src/components/onboarding/steps/SummariserStep.tsx');
   const got = [...step.matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
   holds(
-    'the summariser offers the approved seven, in the approved order',
+    'the summariser offers the approved seven and the agent CLIs, in the approved order',
     JSON.stringify(got) === JSON.stringify(wanted),
     `The prototype's order is what a person reads down: what runs here first, what leaves second.\n` +
       `  prototype: ${wanted.join(', ')}\n  screen:    ${got.join(', ')}`
@@ -161,7 +163,7 @@ const holds = (what, cond, why) => {
 
 // --- the summariser: the chosen option is scrolled to the top, not the field into minimum view -------
 {
-  const p = proto('onboarding-summariser');
+  const p = proto('onboarding-summariser-agents');
   holds(
     'the approved summariser scrolls the chosen option to the top',
     /scrollTop\s*=\s*Math\.max\(0,\s*o\.offsetTop/.test(p),

@@ -29,7 +29,7 @@ interface OnboardingStatus {
  * `complete_onboarding` as it stands. `a-resumed-first-run-keeps-its-choices.test.mjs` holds this list
  * equal to the screen's.
  */
-export const SUMMARISER_IDS = ['builtin-ai', 'ollama', 'claude', 'openai', 'groq', 'openrouter', 'custom-openai'] as const;
+export const SUMMARISER_IDS = ['builtin-ai', 'ollama', 'claude', 'openai', 'groq', 'openrouter', 'custom-openai', 'claude-code', 'codex'] as const;
 
 interface SummaryModelProgressInfo {
   percent: number;

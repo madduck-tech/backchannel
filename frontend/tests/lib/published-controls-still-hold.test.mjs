@@ -82,7 +82,8 @@ const PUBLISHED = [
   {
     id: '#85 model settings: a refused backend save no longer stops onSave',
     file: 'src/components/ModelSettingsModal.tsx',
-    line: 603,
+    // 603 until #212 added the agent CLIs' status above it.
+    line: 624,
     anchor: 'return;',
     replace: '        // return;',
     check: ['node', 'tests/lib/model-settings.test.mjs'],

@@ -5,7 +5,7 @@ import type { OnboardingContainerProps } from '@/types/onboarding';
 /**
  * The shell every first-run screen sits in, and it is the approved one. (#154)
  *
- * `design/prototypes/onboarding-summariser.html` (`c-inline-scroll`, approved 2026-09-08) is a
+ * `design/prototypes/onboarding-summariser-agents.html` (#212, which keeps `c-inline-scroll`'s frame, approved 2026-09-08) is a
  * fixed-height grid: a step strip, a head that does not move, a region that scrolls, and a footer
  * that stays. Read out of it rather than remembered:
  *

@@ -9,7 +9,9 @@ import { useConfig } from '@/contexts/ConfigContext';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -30,7 +32,7 @@ import { toast } from 'sonner';
 import { RECOMMENDED_SUMMARY_MODEL } from '@/lib/onboarding-summary-model';
 
 export interface ModelConfig {
-  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai' | 'custom-openai';
+  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai' | 'custom-openai' | 'claude-code' | 'codex';
   model: string;
   whisperModel: string;
   apiKey?: string | null;
@@ -217,7 +219,25 @@ export function ModelSettingsModal({
     openrouter: openRouterModels.map((m) => m.id),
     'builtin-ai': builtinAiModels.map((m) => m.name),
     'custom-openai': customOpenAIModel ? [customOpenAIModel] : [], // User specifies model manually
+    // An agent CLI uses its own default model (#212): nothing to pick here.
+    'claude-code': [],
+    codex: [],
   };
+
+  /** An agent CLI on this machine (#212), and what `agent_cli_status` says about each. */
+  const isAgent = modelConfig.provider === 'claude-code' || modelConfig.provider === 'codex';
+  const [agentStatuses, setAgentStatuses] = useState<{ id: string; found: string | null; loggedIn: boolean | null }[] | null>(null);
+  useEffect(() => {
+    if (!isAgent || agentStatuses !== null) return;
+    invoke<{ id: string; found: string | null; loggedIn: boolean | null }[]>('agent_cli_status')
+      .then((s) => setAgentStatuses(s ?? []))
+      .catch((e) => {
+        console.error('Could not look for agent CLIs:', e);
+        setAgentStatuses([]);
+      });
+  }, [isAgent, agentStatuses]);
+  const agentStatus = agentStatuses?.find((a) => a.id === modelConfig.provider);
+  const agentUsable = !!agentStatus?.found && agentStatus.loggedIn !== false;
 
   const requiresApiKey =
     modelConfig.provider === 'claude' ||
@@ -236,6 +256,7 @@ export function ModelSettingsModal({
   );
 
   const isDoneDisabled =
+    (isAgent && !agentUsable) ||
     (requiresApiKey && (!apiKey || (typeof apiKey === 'string' && !apiKey.trim()))) ||
     (modelConfig.provider === 'ollama' && ollamaEndpointChanged) ||
     isCustomOpenAIInvalid;
@@ -843,10 +864,20 @@ export function ModelSettingsModal({
                 <SelectItem value="custom-openai">
                   Custom server — transcripts are sent to the address you enter
                 </SelectItem>
+                {/* The approved `settings-summariser-agents.html` (#212). A label must sit in a group. */}
+                <SelectGroup>
+                  <SelectLabel className="font-mono text-2xs font-normal text-ink-faint">AGENT CLIS ON THIS MACHINE</SelectLabel>
+                  <SelectItem value="claude-code">
+                    Claude Code (local CLI) — uses your Claude Code login, transcripts go to the provider it is set up for (Anthropic by default)
+                  </SelectItem>
+                  <SelectItem value="codex">
+                    Codex (local CLI) — uses your Codex login, transcripts are sent to OpenAI with Codex&apos;s default model, your Codex settings are not used; it can read files on this machine
+                  </SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
 
-            {modelConfig.provider !== 'builtin-ai' && modelConfig.provider !== 'custom-openai' && (
+            {modelConfig.provider !== 'builtin-ai' && modelConfig.provider !== 'custom-openai' && !isAgent && (
               <Popover open={modelComboboxOpen} onOpenChange={setModelComboboxOpen} modal={true}>
                 <PopoverTrigger asChild>
                   <Button
@@ -905,6 +936,36 @@ export function ModelSettingsModal({
             )}
           </div>
         </div>
+
+        {/* The status line under the list, from the approved prototype: found, logged out, or missing. */}
+        {isAgent && (
+          <div className="grid gap-1 rounded-md border px-3 py-2.5" data-agent-status>
+            {agentStatuses === null ? (
+              <span className="text-sm text-ink-faint">Looking on this machine…</span>
+            ) : !agentStatus?.found ? (
+              <span className="text-sm">
+                {modelConfig.provider === 'codex' ? 'Codex' : 'Claude Code'} is not in your shell&apos;s PATH. Install{' '}
+                <code>{modelConfig.provider === 'codex' ? 'codex' : 'claude'}</code> and log in, then come back here.
+              </span>
+            ) : agentStatus.loggedIn === false ? (
+              <>
+                <span className="font-mono text-xs text-ink-faint">Found: {agentStatus.found}</span>
+                <span className="text-sm">
+                  Not logged in. Run <code>{modelConfig.provider === 'codex' ? 'codex' : 'claude'}</code> once in a terminal to
+                  log in, then come back here.
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="font-mono text-xs text-ink-faint">Found: {agentStatus.found}</span>
+                <span className="text-sm text-ink-faint">
+                  Model: {modelConfig.provider === 'codex' ? "Codex's default" : 'as set in Claude Code'}. Summaries run with no
+                  tools and save no session.
+                </span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Custom OpenAI Configuration Section */}
         {modelConfig.provider === 'custom-openai' && (

@@ -391,6 +391,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     openai: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     'builtin-ai': [],
     'custom-openai': [],
+    // An agent CLI uses its own default model (#212).
+    'claude-code': [],
+    codex: [],
   };
 
   // Toggle confidence indicator with localStorage persistence
