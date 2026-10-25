@@ -1,0 +1,27 @@
+{
+  "name": "Standard Meeting Notes",
+  "description": "A standard template for general meetings, focusing on key outcomes and actions.",
+  "sections": [
+    {
+      "title": "Summary",
+      "instruction": "Provide a brief, one-paragraph executive summary of the entire meeting.",
+      "format": "paragraph"
+    },
+    {
+      "title": "Key Decisions",
+      "instruction": "List the most important decisions made during the meeting.",
+      "format": "list"
+    },
+    {
+      "title": "Action Items",
+      "instruction": "List all assigned tasks as an unchecked markdown checklist, one task per line. Always include the owner, the due date, and the referenced transcript segment with its timestamp. Never use a table.",
+      "format": "list",
+      "item_format": "- [ ] **Owner** — Task (due: Due date) — ref: \"transcript segment\" [timestamp]"
+    },
+    {
+      "title": "Discussion Highlights",
+      "instruction": "Summarize the main topics of discussion, key arguments, and important insights.",
+      "format": "paragraph"
+    }
+  ]
+}

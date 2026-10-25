@@ -8,7 +8,6 @@ This directory contains template definitions for meeting summary generation.
 Time-boxed daily updates template designed for engineering/product teams.
 
 **Sections:**
-- Date
 - Attendees
 - Yesterday (completed work)
 - Today (planned work)

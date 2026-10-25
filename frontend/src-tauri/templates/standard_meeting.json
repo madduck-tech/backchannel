@@ -14,9 +14,9 @@
     },
     {
       "title": "Action Items",
-      "instruction": "List all assigned tasks as an unchecked markdown checklist, one task per line. Always include the owner, the due date, and the referenced transcript segment with its timestamp. Never use a table.",
+      "instruction": "List all assigned tasks as an unchecked markdown checklist, one task per line, each with its owner and the referenced transcript segment with its timestamp. Add a due date only if the transcript states one, as (due: <the stated date>) right after the task. Never use a table",
       "format": "list",
-      "item_format": "- [ ] **Owner** — Task (due: Due date) — ref: \"transcript segment\" [timestamp]"
+      "item_format": "- [ ] **Owner** — Task — ref: \"transcript segment\" [timestamp]"
     },
     {
       "title": "Discussion Highlights",

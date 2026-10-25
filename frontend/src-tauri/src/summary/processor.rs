@@ -854,3 +854,183 @@ mod tests {
         assert_eq!(resolve_cached_english(Some("body"), Some("en_GB")), None);
     }
 }
+
+#[cfg(test)]
+mod template_slots {
+    //! What the model is told about values a meeting may not state. (#171)
+    //!
+    //! A summary's action item read `(due: None)`: the template ordered a due date on every item, with a
+    //! fixed slot in its format, and the input carries none. Every slot of that kind, in every shipped
+    //! template, is declared here, and the prompt each template produces is read against it.
+    //!
+    //! This proves what the model is told, not what it writes. ADR 0023's context names that shape as
+    //! weak; the instrument in `due_slots` measures what it writes.
+    use super::build_final_report_system_prompt;
+    use crate::summary::templates::Template;
+    use std::path::Path;
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Kind {
+        /// Asked for in the instruction, only when stated, and never in the item format.
+        Inline,
+        /// A table column: only when stated, otherwise the agreed blank.
+        Table,
+        /// Not asked for at all.
+        Removed,
+    }
+
+    /// file → section → kind → label. Read by reading every `instruction`, `item_format` and
+    /// `example_item_format` in `templates/*.json`.
+    const DECLARED: &[(&str, &str, Kind, &str)] = &[
+        ("standard_meeting.json", "Action Items", Kind::Inline, "due date"),
+        ("retrospective.json", "Sprint", Kind::Inline, "date range"),
+        ("retrospective.json", "Action Items", Kind::Table, "Due Date"),
+        ("retrospective.json", "Action Items", Kind::Table, "Success Metric"),
+        ("daily_standup.json", "Date", Kind::Removed, "YYYY-MM-DD"),
+    ];
+    const BLANK: &str = crate::summary::due_slots::BLANK;
+    const CONDITIONS: &[&str] = &["only if", "only when", "if stated"];
+    const CONNECTIVES: &[&str] = &["otherwise", "else", "if not"];
+    const FILLERS: &[&str] = &["None", "N/A", "TBD", "unknown", "not specified", "not mentioned"];
+
+    /// A sentence is the text between `. `, `.\n`, `;` and `\n`.
+    fn sentences(text: &str) -> Vec<String> {
+        text.replace(". ", "\u{1}").replace(".\n", "\u{1}").replace([';', '\n'], "\u{1}")
+            .split('\u{1}')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// `needle` as a whole word or phrase, case-insensitive.
+    fn has_word(hay: &str, needle: &str) -> bool {
+        let (hay, needle) = (hay.to_lowercase(), needle.to_lowercase());
+        let mut from = 0;
+        while let Some(at) = hay[from..].find(&needle) {
+            let start = from + at;
+            let end = start + needle.len();
+            let before = hay[..start].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let after = hay[end..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+            if before && after {
+                return true;
+            }
+            from = start + needle.len().max(1);
+        }
+        false
+    }
+
+    /// The two lines `to_section_instructions` emits for a section: its instruction, and its format
+    /// line if it has one. Rule 5 of the system prompt sits outside every section.
+    fn section(prompt: &str, title: &str) -> Option<(String, Option<String>)> {
+        let head = format!("- **For the '{title}' section:** ");
+        let mut lines = prompt.lines();
+        while let Some(line) = lines.next() {
+            if let Some(instruction) = line.strip_prefix(&head) {
+                let format = lines
+                    .next()
+                    .and_then(|l| l.strip_prefix("  - Items in this section should follow the format: "))
+                    .map(str::to_string);
+                return Some((instruction.to_string(), format));
+            }
+        }
+        None
+    }
+
+    fn header_cells(format: &str) -> Vec<String> {
+        format
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == '`' || c == '|')
+            .split('|')
+            .map(|c| c.trim().trim_matches('*').trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_template_asks_only_for_what_the_meeting_states() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("templates/ is readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        on_disk.sort();
+        let mut declared: Vec<String> = DECLARED.iter().map(|d| d.0.to_string()).collect();
+        declared.sort();
+        declared.dedup();
+        let mut failures = Vec::new();
+        if on_disk != declared {
+            failures.push(format!("templates/ holds {on_disk:?}, the table declares {declared:?}"));
+        }
+
+        for &(file, title, kind, label) in DECLARED {
+            let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+                failures.push(format!("{file}: not on disk"));
+                continue;
+            };
+            let template: Template = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+            let prompt = build_final_report_system_prompt(&template.to_section_instructions(), &template.to_markdown_structure());
+            let at = format!("{file} › {title} › {label}");
+            match kind {
+                Kind::Removed => {
+                    if section(&prompt, title).is_some() {
+                        failures.push(format!("{at}: the section is still asked for"));
+                    }
+                    if prompt.contains(label) {
+                        failures.push(format!("{at}: `{label}` is still in the prompt"));
+                    }
+                }
+                Kind::Inline => {
+                    let Some((instruction, format)) = section(&prompt, title) else {
+                        failures.push(format!("{at}: no such section"));
+                        continue;
+                    };
+                    if !has_word(&instruction, label) {
+                        failures.push(format!("{at}: the instruction does not name it, so nothing here is checked: {instruction}"));
+                    }
+                    if let Some(f) = format.as_deref().filter(|f| has_word(f, label) || has_word(f, "due")) {
+                        failures.push(format!("{at}: the item format still has a slot for it: {f}"));
+                    }
+                    for s in sentences(&instruction).iter().filter(|s| has_word(s, label)) {
+                        if !CONDITIONS.iter().any(|c| has_word(s, c)) {
+                            failures.push(format!("{at}: \"{s}\" asks for it with no condition"));
+                        }
+                    }
+                    let whole = format!("{instruction}\n{}", format.unwrap_or_default());
+                    for token in CONNECTIVES.iter().chain(FILLERS) {
+                        if has_word(&whole, token) {
+                            failures.push(format!("{at}: the section carries the fallback `{token}`"));
+                        }
+                    }
+                }
+                Kind::Table => {
+                    let Some((instruction, format)) = section(&prompt, title) else {
+                        failures.push(format!("{at}: no such section"));
+                        continue;
+                    };
+                    if !format.as_deref().map(header_cells).unwrap_or_default().iter().any(|c| c.eq_ignore_ascii_case(label)) {
+                        failures.push(format!("{at}: not a header cell of the table, so nothing here is checked"));
+                    }
+                    let naming: Vec<String> = sentences(&instruction).into_iter().filter(|s| has_word(s, label)).collect();
+                    if !naming.iter().any(|s| CONDITIONS.iter().any(|c| has_word(s, c))) {
+                        failures.push(format!("{at}: no sentence asks for it with a condition: {instruction}"));
+                    }
+                    let whole = format!("{instruction}\n{}", format.unwrap_or_default());
+                    for token in FILLERS {
+                        if has_word(&whole, token) {
+                            failures.push(format!("{at}: the section carries the filler `{token}`"));
+                        }
+                    }
+                    for s in sentences(&instruction) {
+                        if CONNECTIVES.iter().any(|c| has_word(&s, c)) && !s.contains(BLANK) {
+                            failures.push(format!("{at}: \"{s}\" leads somewhere other than the agreed blank {BLANK}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+    }
+}
