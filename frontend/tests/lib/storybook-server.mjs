@@ -18,37 +18,25 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
   '.json': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.map': 'application/json' };
 
-/** Newest mtime under the directories a story bundle is built from. */
 /**
- * Files the harness writes into `src/` itself, which are not sources and must not age the build.
+ * Newest mtime under the directories a story bundle is built from.
  *
- * **This is what made the suite fail one run in five, measured 2026-09-10.** `gallery.mjs` writes
- * `src/__gallery_entry.tsx` while it runs. That bumped `newestSource()` mid-suite, so a story test
- * starting afterwards found the build stale, took the lock and **rebuilt while its neighbours were
- * serving** — `build-storybook` empties `storybook-static`, and the pages that were mid-flight got
- * Storybook's own error page:
- *
- *     waited 90000ms for `document.querySelector('[data-pane]')`
- *       page said: Error fetching `/index.json`
- *
- * Two builds in one run, in the log, twice. The lock was never broken: every process took it, as
- * #136 requires. It was the *freshness* that moved, because a generated file was being counted as a
- * source. #143.
+ * It used to skip names starting with `__`, because the gallery wrote `src/__gallery_entry.tsx` mid-
+ * suite and that aged the build (#143, measured one run in five on 2026-09-10). The gallery now writes
+ * outside `src/` (#224), so nothing generated lives there, and the skip would only hide the next file
+ * a test writes into `src/`, which is the defect class #224 closes.
  */
-const GENERATED = /^__/;
-
-function newestSource() {
+export function newestSource(roots = ['src', '.storybook'].map((d) => join(root, d))) {
   let newest = 0;
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
-      if (e.isFile() && GENERATED.test(e.name)) continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
       else newest = Math.max(newest, statSync(p).mtimeMs);
     }
   };
-  for (const d of ['src', '.storybook']) walk(join(root, d));
+  for (const d of roots) walk(d);
   return newest;
 }
 

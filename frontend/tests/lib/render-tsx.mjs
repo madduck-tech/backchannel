@@ -42,7 +42,7 @@ function resolveLocal(spec, fromFile) {
 }
 
 /**
- * @param entry     path relative to the frontend package
+ * @param entry     path relative to the frontend package, or absolute (the gallery's entry lives outside it)
  * @param overrides map of specifier -> module object, consulted before anything else
  */
 export function loadTsx(entry, overrides = {}, barePackages = null) {
@@ -107,7 +107,7 @@ export function loadTsx(entry, overrides = {}, barePackages = null) {
     return module.exports;
   }
 
-  return load(path.join(root, entry));
+  return load(path.isAbsolute(entry) ? entry : path.join(root, entry));
 }
 
 export const renderStatic = (element) => renderToStaticMarkup(element);

@@ -23,6 +23,7 @@
 // context* -- `SidebarProvider` alone is imported under four distinct strings. Providers and
 // component are therefore loaded through one entry file so they share one cache.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -124,8 +125,16 @@ export const KIND = {
   noCard: 'will-not-load',
 };
 
+/**
+ * Where a card's entry module is written: a fresh directory per card under this base, never under
+ * `src/`. The entry used to be `src/__gallery_entry.tsx`, written and deleted while ten other tests
+ * walk or copy `src/`, which failed them with ENOENT (#224, measured twice); and two test files call
+ * `buildCards`, so one shared path let a card load another's entry.
+ */
+export const ENTRY_BASE_DEFAULT = os.tmpdir();
+
 /** Render one component in this process. Called in a child; see `buildCards`. */
-export async function renderOne(file) {
+export async function renderOne(file, base = process.env.GALLERY_ENTRY_BASE || ENTRY_BASE_DEFAULT) {
   const { loadTsx } = await import('./render-tsx.mjs');
   const { boundaryStubs } = await import('./boundary-stubs.mjs');
   const { tauriStubs } = await import('./tauri-stubs.mjs');
@@ -146,14 +155,11 @@ export async function renderOne(file) {
   const { createRoot } = await import('react-dom/client');
   console.error = () => {};
 
-  const entry = path.join(root, 'src/__gallery_entry.tsx');
   const spec = file.replace(/^src\//, '@/').replace(/\.tsx$/, '');
-  fs.writeFileSync(
-    entry,
+  const entrySource =
     PROVIDERS.map(([n, p]) => `import { ${n} } from '${p}';`).join('\n') +
-      `\nimport * as T from '${spec}';\nexport const Target = T;\n` +
-      `export const P = [${PROVIDERS.map(([n]) => n).join(',')}];\n`
-  );
+    `\nimport * as T from '${spec}';\nexport const Target = T;\n` +
+    `export const P = [${PROVIDERS.map(([n]) => n).join(',')}];\n`;
 
   // `tauriStubs` throws on an unstubbed command -- deliberately, so a *test* fails rather than
   // quietly pulling half the application in. It is used **unsoftened** here. A first attempt passed a
@@ -183,10 +189,15 @@ export async function renderOne(file) {
     },
   };
 
+  // Written inside the `try` whose `finally` removes it, so no path out of this function leaves it.
+  let entryDir = null;
   try {
+    entryDir = fs.mkdtempSync(path.join(base, 'gallery-entry-'));
+    const entry = path.join(entryDir, '__gallery_entry.tsx');
+    fs.writeFileSync(entry, entrySource);
     let mod;
     try {
-      mod = loadTsx('src/__gallery_entry.tsx', modules);
+      mod = loadTsx(entry, modules);
     } catch (e) {
       return { file, kind: KIND.noCard, reason: String(e.message).split('\n')[0], html: '' };
     }
@@ -228,7 +239,7 @@ export async function renderOne(file) {
     if (!html.trim()) return { file, kind: KIND.blank, name: picked[0], html: '' };
     return { file, kind: KIND.drawn, name: picked[0], html };
   } finally {
-    fs.rmSync(entry, { force: true });
+    if (entryDir) fs.rmSync(entryDir, { recursive: true, force: true });
   }
 }
 
@@ -236,7 +247,7 @@ export async function renderOne(file) {
  * One card per component in the denominator. A child process each, so an asynchronous throw ends one
  * card rather than the run.
  */
-export function buildCards(files = componentFiles(), { timeoutMs = 60_000, memoryMb = 640 } = {}) {
+export function buildCards(files = componentFiles(), { timeoutMs = 60_000, memoryMb = 640, base = ENTRY_BASE_DEFAULT } = {}) {
   // A **kernel** cap, not just `--max-old-space-size`. Measured 2026-09-06, after two OOM kills of
   // the machine: under a 64 MB heap cap a node process still reached 1.58 GB peak RSS, because the
   // flag bounds the V8 heap and jsdom allocates outside it. And `MemoryMax` alone is not enough
@@ -255,7 +266,7 @@ export function buildCards(files = componentFiles(), { timeoutMs = 60_000, memor
       const argv = [...cap, process.execPath, `--max-old-space-size=${memoryMb}`, path.join(here, 'gallery.mjs')];
       const out = execFileSync(
         argv[0], argv.slice(1),
-        { env: { ...process.env, GALLERY_TARGET: file }, encoding: 'utf8', timeout: timeoutMs,
+        { env: { ...process.env, GALLERY_TARGET: file, GALLERY_ENTRY_BASE: base }, encoding: 'utf8', timeout: timeoutMs,
           stdio: ['ignore', 'pipe', 'ignore'] }
       );
       return JSON.parse(out.trim().split('\n').at(-1));
