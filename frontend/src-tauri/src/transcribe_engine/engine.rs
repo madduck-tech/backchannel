@@ -998,7 +998,6 @@ mod tests {
         let engine = TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
         let entry = &TRANSCRIBE_MODEL_CATALOG[0];
         let decimal = entry.size_mb as u64 * 1_000_000;
-        assert_eq!(TranscribeEngine::available_floor_bytes(entry.size_mb), decimal * 9 / 10);
 
         let status_at = |len: u64| {
             // Sparse: the length is what the floor reads, so no bytes need writing.
@@ -1014,6 +1013,7 @@ mod tests {
         assert!(matches!(at_floor, ModelStatus::Available), "exactly the floor: {at_floor:?}");
         let under = status_at(decimal * 9 / 10 - 1).await;
         assert!(matches!(under, ModelStatus::Corrupted { .. }), "one byte under the floor: {under:?}");
+        assert_eq!(TranscribeEngine::available_floor_bytes(entry.size_mb), decimal * 9 / 10);
     }
 
     /// First run's search matches a model's family, and the family reaches the frontend only through
