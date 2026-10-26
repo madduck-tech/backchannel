@@ -269,6 +269,15 @@ impl TranscribeEngine {
         self.model.read().await.is_some()
     }
 
+    /// The models a download is in flight for right now. (#182)
+    ///
+    /// Read rather than the cached `ModelStatus`, which `discover_models` rebuilds from the file on
+    /// disk: between a download's start and its first bytes the file is absent (`Missing`), and a
+    /// short one reads `Corrupted` until the next progress tick.
+    pub async fn downloads_in_flight(&self) -> HashSet<String> {
+        self.active_downloads.read().await.clone()
+    }
+
     pub async fn get_current_model(&self) -> Option<String> {
         self.current_model.read().await.clone()
     }

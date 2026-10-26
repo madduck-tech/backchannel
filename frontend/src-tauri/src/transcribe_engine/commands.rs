@@ -214,6 +214,158 @@ pub(crate) enum ModelReadiness {
     NeedsLoad(String),
 }
 
+/// The state of the model a recording would use, as the pre-check asks for it, loading nothing.
+/// (#182)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingModelState {
+    /// On disk and usable: today's `Ready` and `NeedsLoad` alike, in this answer only.
+    Ready,
+    Missing,
+    /// A download is in flight for it, whatever its file's size says.
+    Downloading,
+    Corrupted,
+    /// Its status says it failed, or (on-device audio models) it is unknown or cannot hear audio.
+    Error,
+}
+
+/// What `transcribe_recording_model_state` answers.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RecordingModel {
+    pub provider: String,
+    /// The resolved name, even when it is not ready.
+    pub model: String,
+    pub state: RecordingModelState,
+}
+
+/// The resolver's answer. `NeedsLoad` is kept apart from `Ready`, because
+/// [`transcribe_validate_model_ready`] loads only on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Resolution {
+    Ready(String),
+    NeedsLoad(String),
+    /// Not usable, with the message recording's pre-flight refuses with.
+    NotReady { model: String, state: RecordingModelState, message: String },
+}
+
+/// What the resolver reads, gathered first, so that the resolution itself is a pure function.
+pub(crate) struct ResolverInputs<'a> {
+    pub provider: Option<&'a str>,
+    pub configured: Option<&'a str>,
+    /// The model resident in the engine, if one is.
+    pub loaded: Option<&'a str>,
+    /// Every catalogue model's name and status.
+    pub catalogue: &'a [(String, ModelStatus)],
+    pub downloading: &'a std::collections::HashSet<String>,
+}
+
+/// An on-device audio model's files, by name and whether each is on disk; `Err` with the message to
+/// refuse with for an unknown model or one with no projector.
+pub(crate) type BuiltinFiles = Result<Vec<(String, bool)>, String>;
+
+/// Which model a recording would use, and whether it can, without loading anything. One resolver,
+/// for recording's pre-flight and for the pre-check alike (#182).
+///
+/// - `builtin-ai`: the configured Gemma, or the default one, with both its files on disk.
+/// - Otherwise `transcript_settings.model`, or `DEFAULT_TRANSCRIBE_MODEL` when empty. It is never
+///   substituted: decode behaviour is a property of the model, not the app, and swapping a streaming
+///   model for a batch-only one silently turns live transcription into per-utterance batches while
+///   the UI still names the model the user picked.
+/// - A download in flight is checked before the file's size. Past 90% a file reads `Available`
+///   (`engine.rs:171`), and this used to let a partial file through to a load; now it refuses.
+pub(crate) fn resolve_recording_model(inputs: &ResolverInputs, builtin: impl Fn(&str) -> BuiltinFiles) -> Resolution {
+    use RecordingModelState as S;
+    let chosen = |default: &str| inputs.configured.filter(|m| !m.is_empty()).unwrap_or(default).to_string();
+
+    if inputs.provider.is_some_and(crate::config::is_builtin_transcript_provider) {
+        let model = chosen(crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL);
+        return match builtin(&model) {
+            Err(message) => Resolution::NotReady { model, state: S::Error, message },
+            Ok(files) => match files.iter().find(|(_, present)| !present) {
+                Some((file, _)) => Resolution::NotReady {
+                    message: format!("{} is not downloaded yet — {} is missing", model, file),
+                    model,
+                    state: S::Missing,
+                },
+                None => Resolution::Ready(model),
+            },
+        };
+    }
+
+    let model = chosen(DEFAULT_TRANSCRIBE_MODEL);
+    if inputs.loaded == Some(model.as_str()) {
+        return Resolution::Ready(model);
+    }
+    let refuse = |state| Resolution::NotReady {
+        message: format!("Transcription model '{}' is not downloaded yet. Download it in Settings, then start recording.", model),
+        model: model.clone(),
+        state,
+    };
+    if inputs.downloading.contains(&model) {
+        return refuse(S::Downloading);
+    }
+    match inputs.catalogue.iter().find(|(name, _)| *name == model).map(|(_, status)| status) {
+        Some(ModelStatus::Available) => Resolution::NeedsLoad(model),
+        Some(ModelStatus::Downloading { .. }) => refuse(S::Downloading),
+        Some(ModelStatus::Corrupted { .. }) => refuse(S::Corrupted),
+        Some(ModelStatus::Error(_)) => refuse(S::Error),
+        // A stored name the catalogue does not list is as good as absent.
+        Some(ModelStatus::Missing) | None => refuse(S::Missing),
+    }
+}
+
+/// Gather what the resolver reads, and resolve. The provider comes back too, for the pre-check.
+async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolution), String> {
+    let stored = crate::api::api::api_get_transcript_config(app.clone(), app.state(), None).await;
+    let (provider, configured) = match &stored {
+        Ok(Some(config)) => (Some(config.provider.clone()), Some(config.model.clone())),
+        _ => (None, None),
+    };
+    let provider_name = provider.clone().unwrap_or_default();
+
+    if provider.as_deref().is_some_and(crate::config::is_builtin_transcript_provider) {
+        let app_data_dir = app.path().app_data_dir().map_err(|e| format!("Could not resolve the app data directory: {}", e))?;
+        let inputs = ResolverInputs {
+            provider: provider.as_deref(),
+            configured: configured.as_deref(),
+            loaded: None,
+            catalogue: &[],
+            downloading: &Default::default(),
+        };
+        let resolution = resolve_recording_model(&inputs, |model| {
+            let weights = crate::summary::summary_engine::models::get_model_path(&app_data_dir, model).map_err(|e| e.to_string())?;
+            let projector = crate::summary::summary_engine::models::get_mmproj_path(&app_data_dir, model)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{} cannot transcribe audio", model))?;
+            Ok([weights, projector]
+                .iter()
+                .map(|p| (p.file_name().unwrap_or_default().to_string_lossy().into_owned(), p.exists()))
+                .collect())
+        });
+        return Ok((provider_name, resolution));
+    }
+
+    transcribe_init().await?;
+    let engine = engine()?;
+    let loaded = if engine.is_model_loaded().await { engine.get_current_model().await } else { None };
+    let catalogue: Vec<(String, ModelStatus)> = engine
+        .discover_models()
+        .await
+        .map_err(|e| format!("Failed to discover models: {}", e))?
+        .into_iter()
+        .map(|m| (m.name, m.status))
+        .collect();
+    let downloading = engine.downloads_in_flight().await;
+    let inputs = ResolverInputs {
+        provider: provider.as_deref(),
+        configured: configured.as_deref(),
+        loaded: loaded.as_deref(),
+        catalogue: &catalogue,
+        downloading: &downloading,
+    };
+    Ok((provider_name, resolve_recording_model(&inputs, |_| Ok(Vec::new()))))
+}
+
 /// Resolve the configured transcription model and prove its files are on disk,
 /// loading nothing.
 ///
@@ -224,82 +376,24 @@ pub(crate) enum ModelReadiness {
 pub(crate) async fn transcribe_check_model_ready<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<ModelReadiness, String> {
-    let stored =
-        crate::api::api::api_get_transcript_config(app.clone(), app.state(), None).await;
-
-    // A built-in audio model has no catalog GGUF to load; check that both its
-    // files are on disk instead, which is the equivalent failure to catch before
-    // the user starts talking.
-    if let Ok(Some(config)) = &stored {
-        if crate::config::is_builtin_transcript_provider(&config.provider) {
-            let model = if config.model.is_empty() {
-                crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL.to_string()
-            } else {
-                config.model.clone()
-            };
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| format!("Could not resolve the app data directory: {}", e))?;
-
-            let weights = crate::summary::summary_engine::models::get_model_path(
-                &app_data_dir,
-                &model,
-            )
-            .map_err(|e| e.to_string())?;
-            let projector =
-                crate::summary::summary_engine::models::get_mmproj_path(&app_data_dir, &model)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("{} cannot transcribe audio", model))?;
-
-            for path in [&weights, &projector] {
-                if !path.exists() {
-                    return Err(format!(
-                        "{} is not downloaded yet — {} is missing",
-                        model,
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ));
-                }
-            }
-            return Ok(ModelReadiness::Ready(model));
-        }
+    match resolve_now(app).await?.1 {
+        Resolution::Ready(model) => Ok(ModelReadiness::Ready(model)),
+        Resolution::NeedsLoad(model) => Ok(ModelReadiness::NeedsLoad(model)),
+        Resolution::NotReady { message, .. } => Err(message),
     }
+}
 
-    transcribe_init().await?;
-    let engine = engine()?;
-
-    let configured = match stored {
-        Ok(Some(config)) if !config.model.is_empty() => config.model,
-        _ => DEFAULT_TRANSCRIBE_MODEL.to_string(),
+/// The pre-check before a recording: the model the recording would use and its state, from the same
+/// resolver as recording's pre-flight, loading nothing (#182). The frontend used to ask whether *any*
+/// model was on disk, and whether *any* was downloading.
+#[command]
+pub async fn transcribe_recording_model_state<R: Runtime>(app: AppHandle<R>) -> Result<RecordingModel, String> {
+    let (provider, resolution) = resolve_now(app).await?;
+    let (model, state) = match resolution {
+        Resolution::Ready(model) | Resolution::NeedsLoad(model) => (model, RecordingModelState::Ready),
+        Resolution::NotReady { model, state, .. } => (model, state),
     };
-
-    if engine.get_current_model().await.as_deref() == Some(configured.as_str())
-        && engine.is_model_loaded().await
-    {
-        return Ok(ModelReadiness::Ready(configured));
-    }
-
-    let models = engine
-        .discover_models()
-        .await
-        .map_err(|e| format!("Failed to discover models: {}", e))?;
-
-    // No substituting another downloaded model: decode behaviour is a property
-    // of the model, not the app. Swapping a streaming model for a batch-only one
-    // silently turns live transcription into per-utterance batches while the UI
-    // still names the model the user picked. Say what is missing instead.
-    let target = models
-        .iter()
-        .find(|m| m.name == configured && matches!(m.status, ModelStatus::Available))
-        .ok_or_else(|| {
-            format!(
-                "Transcription model '{}' is not downloaded yet. \
-                 Download it in Settings, then start recording.",
-                configured
-            )
-        })?;
-
-    Ok(ModelReadiness::NeedsLoad(target.name.clone()))
+    Ok(RecordingModel { provider, model, state })
 }
 
 /// Ensure a model is loaded and ready before recording starts.
@@ -469,3 +563,108 @@ pub fn transcribe_builtin_models() -> Vec<BuiltinTranscribeModel> {
 pub async fn transcribe_model_languages() -> Result<Option<Vec<String>>, String> {
     Ok(engine()?.model_languages().await)
 }
+
+#[cfg(test)]
+mod recording_model_tests {
+    //! The resolver the pre-flight and the pre-check share, as a pure function. (#182)
+    use super::*;
+    use std::collections::HashSet;
+    use RecordingModelState as S;
+
+    const X: &str = "whisper-tiny-q8";
+    const OTHER: &str = "moonshine-tiny-q8";
+
+    fn resolve(provider: Option<&str>, configured: Option<&str>, loaded: Option<&str>, catalogue: &[(&str, ModelStatus)], downloading: &[&str]) -> Resolution {
+        let catalogue: Vec<(String, ModelStatus)> = catalogue.iter().map(|(n, s)| (n.to_string(), s.clone())).collect();
+        let downloading: HashSet<String> = downloading.iter().map(|s| s.to_string()).collect();
+        let inputs = ResolverInputs { provider, configured, loaded, catalogue: &catalogue, downloading: &downloading };
+        resolve_recording_model(&inputs, |_| unreachable!("not a built-in provider"))
+    }
+
+    fn state(r: &Resolution) -> Option<S> {
+        match r {
+            Resolution::NotReady { state, .. } => Some(*state),
+            _ => None,
+        }
+    }
+
+    fn builtin(files: BuiltinFiles) -> Resolution {
+        let inputs = ResolverInputs { provider: Some("builtin-ai"), configured: Some(""), loaded: None, catalogue: &[], downloading: &HashSet::new() };
+        resolve_recording_model(&inputs, |_| files.clone())
+    }
+
+    #[test]
+    fn an_on_device_model_is_ready_with_both_files_and_says_which_is_missing_otherwise() {
+        let both = vec![("w.gguf".to_string(), true), ("mmproj.gguf".to_string(), true)];
+        assert_eq!(builtin(Ok(both)), Resolution::Ready(crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL.to_string()));
+        let no_projector = builtin(Ok(vec![("w.gguf".to_string(), true), ("mmproj.gguf".to_string(), false)]));
+        assert_eq!(state(&no_projector), Some(S::Missing));
+        assert!(matches!(&no_projector, Resolution::NotReady { message, .. } if message.ends_with("mmproj.gguf is missing")), "{no_projector:?}");
+        let unknown = builtin(Err("gemma9 cannot transcribe audio".into()));
+        assert_eq!(unknown, Resolution::NotReady { model: crate::config::DEFAULT_BUILTIN_TRANSCRIBE_MODEL.into(), state: S::Error, message: "gemma9 cannot transcribe audio".into() });
+    }
+
+    #[test]
+    fn a_model_on_disk_needs_a_load_unless_it_is_the_one_resident() {
+        assert_eq!(resolve(None, Some(X), None, &[(X, ModelStatus::Available)], &[]), Resolution::NeedsLoad(X.into()));
+        // Another model resident is not this one: it needs a load, never `Ready` (validate loads only then).
+        assert_eq!(resolve(None, Some(X), Some(OTHER), &[(X, ModelStatus::Available), (OTHER, ModelStatus::Available)], &[]), Resolution::NeedsLoad(X.into()));
+        assert_eq!(resolve(None, Some(X), Some(X), &[(X, ModelStatus::Available)], &[]), Resolution::Ready(X.into()));
+    }
+
+    #[test]
+    fn another_model_on_disk_does_not_make_the_chosen_one_ready() {
+        let r = resolve(None, Some(X), None, &[(X, ModelStatus::Missing), (OTHER, ModelStatus::Available)], &[]);
+        assert_eq!(state(&r), Some(S::Missing), "{r:?}");
+        // Nor does another model downloading make it "downloading".
+        let r = resolve(None, Some(X), None, &[(X, ModelStatus::Missing), (OTHER, ModelStatus::Downloading { progress: 40 })], &[OTHER]);
+        assert_eq!(state(&r), Some(S::Missing), "{r:?}");
+    }
+
+    #[test]
+    fn a_download_in_flight_is_downloading_below_and_above_ninety_percent() {
+        let below = resolve(None, Some(X), None, &[(X, ModelStatus::Downloading { progress: 40 })], &[X]);
+        assert_eq!(state(&below), Some(S::Downloading));
+        // Past 90% the file reads `Available`; the download in flight is checked first.
+        let above = resolve(None, Some(X), None, &[(X, ModelStatus::Available)], &[X]);
+        assert_eq!(state(&above), Some(S::Downloading), "{above:?}");
+        // Before its first bytes the file is absent, or short: still the download's.
+        assert_eq!(state(&resolve(None, Some(X), None, &[(X, ModelStatus::Missing)], &[X])), Some(S::Downloading));
+    }
+
+    #[test]
+    fn corrupted_and_failed_models_are_not_ready() {
+        let corrupted = resolve(None, Some(X), None, &[(X, ModelStatus::Corrupted { file_size: 10, expected_min_size: 100 })], &[]);
+        assert_eq!(state(&corrupted), Some(S::Corrupted));
+        assert_eq!(state(&resolve(None, Some(X), None, &[(X, ModelStatus::Error("bad".into()))], &[])), Some(S::Error));
+    }
+
+    #[test]
+    fn an_empty_model_falls_back_to_the_default_and_an_unlisted_name_is_missing() {
+        assert_eq!(resolve(None, Some(""), None, &[(DEFAULT_TRANSCRIBE_MODEL, ModelStatus::Available)], &[]), Resolution::NeedsLoad(DEFAULT_TRANSCRIBE_MODEL.into()));
+        assert_eq!(resolve(None, None, None, &[(DEFAULT_TRANSCRIBE_MODEL, ModelStatus::Available)], &[]), Resolution::NeedsLoad(DEFAULT_TRANSCRIBE_MODEL.into()));
+        // `ConfigContext`'s fallback name, which the catalogue does not list.
+        let r = resolve(None, Some("parakeet-tdt-0.6b-v3-int8"), None, &[(DEFAULT_TRANSCRIBE_MODEL, ModelStatus::Available)], &[]);
+        assert_eq!(r.clone(), Resolution::NotReady {
+            model: "parakeet-tdt-0.6b-v3-int8".into(),
+            state: S::Missing,
+            message: "Transcription model 'parakeet-tdt-0.6b-v3-int8' is not downloaded yet. Download it in Settings, then start recording.".into(),
+        });
+    }
+
+    /// Recording's pre-flight refuses every state but ready with today's message (#182 v4).
+    #[test]
+    fn the_pre_flight_refuses_each_state_with_todays_message() {
+        let today = format!("Transcription model '{X}' is not downloaded yet. Download it in Settings, then start recording.");
+        for (status, downloading) in [
+            (ModelStatus::Missing, false),
+            (ModelStatus::Available, true),
+            (ModelStatus::Corrupted { file_size: 1, expected_min_size: 2 }, false),
+            (ModelStatus::Error("x".into()), false),
+        ] {
+            let r = resolve(None, Some(X), None, &[(X, status.clone())], if downloading { &[X] } else { &[] });
+            assert!(matches!(&r, Resolution::NotReady { message, .. } if *message == today), "{status:?}: {r:?}");
+        }
+    }
+}
+
