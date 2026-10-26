@@ -108,7 +108,7 @@ OWN_PROFILE=""
 if [ -z "$PROFILE" ]; then
   PROFILE="$(mktemp -d /tmp/backchannel-onboarding.XXXXXX)"; OWN_PROFILE=1
 fi
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA/models"
 
 # The summary model only. Deliberately no onboarding marker: seeding it is what blinds the other two
@@ -145,7 +145,7 @@ else
   [ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
 fi
 # `resumes` launches the application twice. It is single-instance: it claims
-# com.conversationaly.ai.SingleInstance on the session bus, which HOME/XDG isolation does not scope, so
+# tech.madduck.backchannel.SingleInstance on the session bus, which HOME/XDG isolation does not scope, so
 # a live copy anywhere would capture both launches. Identified by what each process is, as
 # `stage2-ui-check.sh` does, never by `pgrep -f`.
 app_pid() {
@@ -153,7 +153,7 @@ app_pid() {
   for pid in $(ls /proc | grep -E '^[0-9]+$'); do
     [ "$pid" = "$$" ] && continue
     exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-    case "$exe" in */conversationaly) echo "$pid"; return 0 ;; esac
+    case "$exe" in */backchannel|*/conversationaly) echo "$pid"; return 0 ;; esac
   done
   return 1
 }

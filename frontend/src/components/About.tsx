@@ -9,6 +9,9 @@ import { ConsoleToggle } from './ConsoleToggle';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
+// The fork's direct upstream, credited by name (LICENSE.md:4). The one place the old name stays (#228).
+const FORKED_FROM = { name: 'Conversationaly', author: 'Michael Bykovski', url: 'https://github.com/bykof/conversationaly' } as const;
+
 /** What the product actually guarantees, as facts rather than pitch. */
 const FACTS = [
   ['Audio', 'Captured and mixed on this machine'],
@@ -93,10 +96,17 @@ export function About() {
         <ConsoleToggle />
       </div>
 
-      {/* Upstream attribution. Conversationaly is a fork of Meetily; the credit
+      {/* Upstream attribution: the fork's direct upstream, and the one it forked. The credit
           stays regardless of what the product is called. */}
       <p className="mt-4 text-xs leading-relaxed text-ink-faint">
         Built on{' '}
+        <button
+          onClick={() => invoke('open_external_url', { url: FORKED_FROM.url }).catch(console.error)}
+          className="underline underline-offset-2 transition-colors duration-fast hover:text-ink-muted"
+        >
+          {FORKED_FROM.name}
+        </button>{' '}
+        by {FORKED_FROM.author} and{' '}
         <button
           onClick={() =>
             invoke('open_external_url', {

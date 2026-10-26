@@ -113,14 +113,14 @@ impl Notification {
             None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
         };
 
-        Notification::new("Conversationaly", body, NotificationType::RecordingStarted)
+        Notification::new("Backchannel", body, NotificationType::RecordingStarted)
             .with_priority(NotificationPriority::High)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
 
     pub fn recording_stopped() -> Self {
         Notification::new(
-            "Conversationaly",
+            "Backchannel",
             "Recording has been stopped and saved",
             NotificationType::RecordingStopped
         )
@@ -130,7 +130,7 @@ impl Notification {
 
     pub fn recording_paused() -> Self {
         Notification::new(
-            "Conversationaly",
+            "Backchannel",
             "Recording has been paused",
             NotificationType::RecordingPaused
         )
@@ -140,7 +140,7 @@ impl Notification {
 
     pub fn recording_resumed() -> Self {
         Notification::new(
-            "Conversationaly",
+            "Backchannel",
             "Recording has been resumed",
             NotificationType::RecordingResumed
         )
@@ -154,7 +154,7 @@ impl Notification {
             None => "Transcription has been completed".to_string(),
         };
 
-        Notification::new("Conversationaly", body, NotificationType::TranscriptionComplete)
+        Notification::new("Backchannel", body, NotificationType::TranscriptionComplete)
             .with_priority(NotificationPriority::Normal)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
@@ -165,7 +165,7 @@ impl Notification {
             None => format!("Meeting starts in {} minutes", minutes_until),
         };
 
-        Notification::new("Conversationaly", body, NotificationType::MeetingReminder(minutes_until))
+        Notification::new("Backchannel", body, NotificationType::MeetingReminder(minutes_until))
             .with_priority(NotificationPriority::High)
             .with_timeout(NotificationTimeout::Seconds(10))
     }
@@ -173,7 +173,7 @@ impl Notification {
     pub fn system_error(error: impl Into<String>) -> Self {
         let error_string = error.into();
         Notification::new(
-            "Conversationaly Error",
+            "Backchannel Error",
             error_string.clone(),
             NotificationType::SystemError(error_string)
         )
@@ -183,7 +183,7 @@ impl Notification {
 
     pub fn test_notification() -> Self {
         Notification::new(
-            "Conversationaly",
+            "Backchannel",
             "This is a test notification to verify the system is working correctly",
             NotificationType::Test
         )

@@ -39,7 +39,7 @@ chrome.
 ## Theme
 
 Two first-class themes. Default follows `prefers-color-scheme`; a manual override persists to
-`localStorage` (key currently `conversationaly.theme`, renamed with the app rebrand) and is applied
+`localStorage` (key `conversationaly.theme`, kept across the rename to Backchannel so a moved profile keeps its theme, ADR 0029) and is applied
 by an inline script in `<head>` before paint, so there is no flash.
 
 Dark is the primary *working* theme (monitor-lit room, a 90-minute session beside a call). Light is

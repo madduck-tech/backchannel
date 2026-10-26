@@ -31,9 +31,9 @@
 //! # Custom Templates
 //!
 //! Users can add custom templates to:
-//! - macOS: `~/Library/Application Support/Conversationaly/templates/`
-//! - Windows: `%APPDATA%\Conversationaly\templates\`
-//! - Linux: `~/.config/Conversationaly/templates/`
+//! - macOS: `~/Library/Application Support/Backchannel/templates/`
+//! - Windows: `%APPDATA%\Backchannel\templates\`
+//! - Linux: `~/.local/share/Backchannel/templates/` (`dirs::data_dir`, `loader.rs`)
 //!
 //! Custom templates must follow the JSON schema defined in `types::Template`.
 

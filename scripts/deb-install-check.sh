@@ -33,12 +33,14 @@ command -v docker >/dev/null || die "docker is not available; this check needs a
 say ""
 say "--- Depends, as the package declares them ---"
 dpkg-deb -f "$DEB" Depends || true
+say "--- Package, Maintainer and Description: the identity a person sees (#228) ---"
+dpkg-deb -f "$DEB" Package Maintainer Description || true
 say "--- DT_NEEDED of the binary inside ---"
 WORK=$(mktemp -d /tmp/deb-check.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 dpkg-deb -x "$DEB" "$WORK/root"
-BIN=$(find "$WORK/root/usr/bin" -maxdepth 1 -type f -name 'conversationaly*' | head -1)
-[ -n "$BIN" ] || die "the package contains no usr/bin/conversationaly"
+BIN=$(find "$WORK/root/usr/bin" -maxdepth 1 -type f -name 'backchannel*' | head -1)
+[ -n "$BIN" ] || die "the package contains no usr/bin/backchannel"
 readelf -d "$BIN" | sed -n 's/.*NEEDED.*\[\(.*\)\]/  \1/p'
 
 # The container gets the package and nothing else. `apt-get install ./file.deb` resolves and

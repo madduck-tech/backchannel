@@ -53,7 +53,7 @@ case "$MODE" in signal|silence|wrong-sink) ;; *) die "mode must be signal, silen
 for pid in $(ls /proc | grep -E '^[0-9]+$'); do
   [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] && continue
   case "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" in
-    */conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
+    */backchannel|*/conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
   esac
 done
 
@@ -97,7 +97,7 @@ cleanup() {
 trap cleanup EXIT
 
 PROFILE=$(mktemp -d /tmp/backchannel-ui-record.XXXXXX)
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true
@@ -223,7 +223,7 @@ say "recording"
 # The application's own log must name the device that was clicked: a transcript cannot say
 # which channel carried the audio, and a silent fallback to another device would otherwise
 # read as success.
-LOG=$(ls -t "$PROFILE"/home/.local/share/com.conversationaly.ai/logs/*.log 2>/dev/null | head -1 || true)
+LOG=$(ls -t "$PROFILE"/home/.local/share/tech.madduck.backchannel/logs/*.log 2>/dev/null | head -1 || true)
 
 deadline=$((SECONDS + 240))
 FOUND=""
@@ -235,7 +235,10 @@ while [ $SECONDS -lt $deadline ]; do
   sleep 5
 done
 
-LOG=$(ls -t "$PROFILE"/home/.local/share/com.conversationaly.ai/logs/*.log 2>/dev/null | head -1 || true)
+LOG=$(ls -t "$PROFILE"/home/.local/share/tech.madduck.backchannel/logs/*.log 2>/dev/null | head -1 || true)
+# An empty LOG is a wrong path, not an absent line: without this the device check below is skipped
+# without a word (#228).
+[ -n "$LOG" ] || die "the application wrote no log under $PROFILE/home/.local/share/tech.madduck.backchannel/logs"
 if [ -n "$LOG" ] && grep -q "Using preferred system audio" "$LOG"; then
   say "the app opened: $(grep -o "Using preferred system audio: '[^']*'" "$LOG" | tail -1)"
   grep -q "Using preferred system audio: '$PICK'" "$LOG" \

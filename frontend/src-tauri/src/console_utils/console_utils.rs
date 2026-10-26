@@ -51,7 +51,7 @@ pub fn show_console() -> Result<String, String> {
             .arg(r#"
                 tell application "Terminal"
                     activate
-                    do script "log stream --process conversationaly --level info --style compact"
+                    do script "log stream --process backchannel --level info --style compact"
                 end tell
             "#)
             .spawn()
@@ -89,7 +89,7 @@ pub fn hide_console() -> Result<String, String> {
                 tell application "Terminal"
                     set windowList to windows
                     repeat with aWindow in windowList
-                        if contents of selected tab of aWindow contains "log stream --process conversationaly" then
+                        if contents of selected tab of aWindow contains "log stream --process backchannel" then
                             close aWindow
                         end if
                     end repeat
@@ -114,7 +114,7 @@ pub fn hide_console() -> Result<String, String> {
 /// `TargetKind::LogDir { file_name }`; the plugin appends `.log` and writes it
 /// into `app_log_dir()`. Shared rather than spelled twice so the path this
 /// module reports cannot drift from the file the logger actually writes.
-pub const LOG_FILE_STEM: &str = "conversationaly";
+pub const LOG_FILE_STEM: &str = "backchannel";
 
 /// Absolute path of the log file tauri-plugin-log is writing.
 ///

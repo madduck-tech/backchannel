@@ -68,7 +68,7 @@ export function PermissionWarning({
               <div>
                 <p>
                   No microphone was detected, so recording cannot start. Check that
-                  it is connected, that Conversationaly has permission, and that no
+                  it is connected, that Backchannel has permission, and that no
                   other app is holding it exclusively.
                 </p>
               </div>
@@ -84,7 +84,7 @@ export function PermissionWarning({
                 {isMacOS && (
                   <ul className="mt-1.5 list-inside list-disc space-y-0.5">
                     <li>Install a virtual audio device such as BlackHole 2ch</li>
-                    <li>Grant Screen Recording permission to Conversationaly</li>
+                    <li>Grant Screen Recording permission to Backchannel</li>
                     <li>Route your output through it in Audio MIDI Setup</li>
                   </ul>
                 )}

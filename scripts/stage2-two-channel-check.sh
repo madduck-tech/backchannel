@@ -71,7 +71,7 @@ command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo 
 for pid in $(ls /proc | grep -E '^[0-9]+$'); do
   [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] && continue
   case "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" in
-    */conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
+    */backchannel|*/conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
   esac
 done
 
@@ -146,7 +146,7 @@ say "looping $(basename "$SYS_SAMPLE") into $TARGET_SINK (pgid $PLAYER)"
 sleep 2
 
 PROFILE=$(mktemp -d /tmp/backchannel-two-channel.XXXXXX)
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true

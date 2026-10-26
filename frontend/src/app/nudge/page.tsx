@@ -36,7 +36,7 @@ export default function NudgePage() {
         <div>
           <p className="text-sm font-medium text-ink">{headline}</p>
           <p className="mt-0.5 text-2xs text-ink-muted">
-            Conversationaly is not recording.
+            Backchannel is not recording.
           </p>
         </div>
 

@@ -6,7 +6,7 @@
 # expression selected a binary built at 11:53:35, **36 commits behind HEAD**, `test -x` passed it,
 # entry 5 launched it, and the log reported `Application setup complete` with no panic. A full green
 # launch pass against a revision nobody tested. Two builds from different commits also produce the
-# same filename -- the bundle is named from `tauri.conf.json`'s version, `conversationaly_1.4.1_amd64`
+# same filename -- the bundle is named from `tauri.conf.json`'s version, `Backchannel_<version>_amd64`
 # -- so `ls -t` falls through to mtime and a person reading the path sees nothing wrong.
 #
 # The guard for exactly this was already written and never wired: entry 4 did
@@ -48,7 +48,7 @@ else
   # Deliberate. `ls -t` is not a listing here, it is the semantic being preserved: "the newest local
   # build", which is what every entry did before #103 and what a person building locally expects.
   # `find -printf '%T@'` expresses it only with a sort and a cut, and the filenames are produced by
-  # tauri from tauri.conf.json (conversationaly_1.4.1_amd64.AppImage) rather than by a user, so the
+  # tauri from tauri.conf.json (Backchannel_<version>_amd64.AppImage) rather than by a user, so the
   # non-alphanumeric case the rule guards against cannot arise. Silenced with the reason rather than
   # left as a standing info finding nobody reads.
   APP=$(ls -t "$BUNDLE_DIR"/*.AppImage 2>/dev/null | head -1 || true)

@@ -51,9 +51,9 @@ Each template JSON file follows this schema:
 Templates are managed in the app under **Settings → Summary → Summary Templates**,
 which writes JSON into the application data directory:
 
-- **macOS**: `~/Library/Application Support/Conversationaly/templates/`
-- **Windows**: `%APPDATA%\Conversationaly\templates\`
-- **Linux**: `~/.config/Conversationaly/templates/`
+- **macOS**: `~/Library/Application Support/Backchannel/templates/`
+- **Windows**: `%APPDATA%\Backchannel\templates\`
+- **Linux**: `~/.local/share/Backchannel/templates/`
 
 Custom templates override the templates in this directory when the filename matches,
 which is how editing a shipped template works — and deleting the custom copy is what

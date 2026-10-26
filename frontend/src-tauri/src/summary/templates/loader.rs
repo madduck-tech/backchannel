@@ -70,9 +70,9 @@ pub(crate) fn with_custom_templates_dir<T>(path: PathBuf, f: impl FnOnce() -> T)
 /// Get the user's custom templates directory path
 ///
 /// Returns the platform-specific application data directory for custom templates:
-/// - macOS: ~/Library/Application Support/Conversationaly/templates/
-/// - Windows: %APPDATA%\Conversationaly\templates\
-/// - Linux: ~/.config/Conversationaly/templates/
+/// - macOS: ~/Library/Application Support/Backchannel/templates/
+/// - Windows: %APPDATA%\Backchannel\templates\
+/// - Linux: ~/.local/share/Backchannel/templates/ (`dirs::data_dir`)
 fn get_custom_templates_dir() -> Option<PathBuf> {
     if let Some(path) = CUSTOM_TEMPLATES_DIR.read().ok().and_then(|d| d.clone()) {
         return Some(path);
@@ -87,7 +87,7 @@ fn get_custom_templates_dir() -> Option<PathBuf> {
     let mut path = dirs::data_dir()?;
     #[cfg(not(test))]
     {
-        path.push("Conversationaly");
+        path.push("Backchannel");
         path.push("templates");
         Some(path)
     }
