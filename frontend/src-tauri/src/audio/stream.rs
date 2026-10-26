@@ -596,6 +596,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn cpal_capture_round_trip() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let device = super::super::devices::default_input_device()
@@ -664,6 +665,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn system_audio_monitor_round_trip() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let devices = super::super::devices::list_audio_devices()
             .await
             .expect("device enumeration failed");
@@ -745,6 +747,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn stale_preference_from_the_alsa_era_does_not_silently_resolve() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let stale = super::super::devices::AudioDevice::from_name("sof-hda-dsp,  (input)")
             .expect("the stored form should still parse");
 

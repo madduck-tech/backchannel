@@ -487,6 +487,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs real audio devices; run by gopnik.json stage 1"]
     async fn the_real_cpal_path_holds_the_contract() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let snapshot = CpalSnapshot::probe().await.expect("probe the machine's audio devices");
         let devices = snapshot.devices().expect("the snapshot always answers");
         assert!(

@@ -231,6 +231,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         return Err(fail_start(&app, "Recording already in progress".to_string()));
     }
 
+    // One audio host for the whole start, and not ALSA while PulseAudio is back (#223).
+    crate::audio::devices::host::prepare_for_recording();
+
     // Pre-flight only: is the configured model resolvable and on disk? A missing
     // download is the failure users actually hit, and it has to be caught before
     // the microphone opens. The load itself waits until capture is live — see
@@ -500,6 +503,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     if current_recording_state {
         return Err(fail_start(&app, "Recording already in progress".to_string()));
     }
+
+    // One audio host for the whole start, and not ALSA while PulseAudio is back (#223).
+    crate::audio::devices::host::prepare_for_recording();
 
     // Pre-flight only — see the twin comment in
     // `start_recording_with_meeting_name`. The load happens after capture.
