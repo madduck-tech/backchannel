@@ -53,7 +53,7 @@ which writes JSON into the application data directory:
 
 - **macOS**: `~/Library/Application Support/Backchannel/templates/`
 - **Windows**: `%APPDATA%\Backchannel\templates\`
-- **Linux**: `~/.config/Backchannel/templates/`
+- **Linux**: `~/.local/share/Backchannel/templates/`
 
 Custom templates override the templates in this directory when the filename matches,
 which is how editing a shipped template works — and deleting the custom copy is what

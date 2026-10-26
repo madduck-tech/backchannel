@@ -236,6 +236,9 @@ while [ $SECONDS -lt $deadline ]; do
 done
 
 LOG=$(ls -t "$PROFILE"/home/.local/share/tech.madduck.backchannel/logs/*.log 2>/dev/null | head -1 || true)
+# An empty LOG is a wrong path, not an absent line: without this the device check below is skipped
+# without a word (#228).
+[ -n "$LOG" ] || die "the application wrote no log under $PROFILE/home/.local/share/tech.madduck.backchannel/logs"
 if [ -n "$LOG" ] && grep -q "Using preferred system audio" "$LOG"; then
   say "the app opened: $(grep -o "Using preferred system audio: '[^']*'" "$LOG" | tail -1)"
   grep -q "Using preferred system audio: '$PICK'" "$LOG" \

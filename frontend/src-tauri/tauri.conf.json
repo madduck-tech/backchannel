@@ -83,7 +83,7 @@
     "bundle": {
         "active": true,
         "publisher": "Backchannel",
-        "shortDescription": "A local meeting copilot",
+        "shortDescription": "Backchannel, a local meeting copilot",
         "longDescription": "Backchannel records, transcribes and summarises meetings on this machine.",
         "targets": [
             "deb",

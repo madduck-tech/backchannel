@@ -42,7 +42,38 @@ export const KEPT = [
   { token: 'https://github.com/bykof/conversationaly', file: 'src/components/About.tsx' },
 ];
 
-const COMMENT = /^\s*(\/\/|\/\*|\*|\{\/\*|#|<!--)/;
+// A comment line. `#` is not one when it opens a Rust attribute (`#[error("…")]` is code), and a line
+// that opens a block comment and closes it is code again after the `*/`.
+const COMMENT = /^\s*(\/\/|\*|#(?![[!])|<!--)/;
+const BLOCK_OPEN = /^\s*\{?\/\*/;
+
+// What of a line is code: nothing for a comment line, the rest after the close for a closed block comment.
+export function codeOf(line) {
+  if (COMMENT.test(line)) return '';
+  if (BLOCK_OPEN.test(line)) {
+    const end = line.indexOf('*/');
+    return end < 0 ? '' : withoutTrailingComment(line.slice(end + 2));
+  }
+  return withoutTrailingComment(line);
+}
+
+// Cut at a `//` outside a string literal, so a token in a trailing comment excuses nothing and a URL in
+// a string does not hide what follows it.
+function withoutTrailingComment(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+    } else if (c === '/' && line[i + 1] === '/') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
 
 function* walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -75,8 +106,9 @@ export function offenders(root = frontend) {
       .toString('utf8')
       .split('\n')
       .forEach((line, i) => {
-        if (!/conversationaly/i.test(line) || COMMENT.test(line)) return;
-        const rest = KEPT.filter((k) => k.file === rel).reduce((l, k) => l.split(k.token).join(''), line);
+        const code = codeOf(line);
+        if (!/conversationaly/i.test(code)) return;
+        const rest = KEPT.filter((k) => k.file === rel).reduce((l, k) => l.split(k.token).join(''), code);
         if (!/conversationaly/i.test(rest)) return;
         out.push(`${rel}:${i + 1}: ${line.trim()}`);
       });
@@ -91,7 +123,10 @@ test('nothing a person can see names the app Conversationaly', () => {
 
 test('every kept token is still used where it is kept', () => {
   // A token whose line is gone is a stale excuse: the set would keep allowing it for nothing.
-  const stale = KEPT.filter((k) => !fs.readFileSync(path.join(frontend, k.file), 'utf8').includes(k.token));
+  // On a code line: a token that survives only in a comment excuses nothing.
+  const stale = KEPT.filter(
+    (k) => !fs.readFileSync(path.join(frontend, k.file), 'utf8').split('\n').some((l) => codeOf(l).includes(k.token))
+  );
   assert.deepEqual(stale, [], `kept tokens no longer in their files: ${stale.map((k) => `${k.token} (${k.file})`).join(', ')}`);
 });
 
