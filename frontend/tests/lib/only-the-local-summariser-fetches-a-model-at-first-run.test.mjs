@@ -41,7 +41,7 @@ function load(stubs) {
   });
 }
 
-function backend() {
+function backend({ ready = false } = {}) {
   return tauriStubs({
     extra: {
       transcribe_init: null,
@@ -52,7 +52,7 @@ function backend() {
       builtin_ai_download_model: null,
       builtin_ai_list_models: [],
       builtin_ai_get_recommended_model: 'gemma4:e2b',
-      builtin_ai_is_model_ready: false,
+      builtin_ai_is_model_ready: ready,
       get_onboarding_status: null,
       save_onboarding_status: null,
       complete_onboarding: null,
@@ -63,8 +63,8 @@ function backend() {
   });
 }
 
-async function finish(provider, model) {
-  const stubs = backend();
+async function finish(provider, model, opts) {
+  const stubs = backend(opts);
   const { OnboardingProvider, useOnboarding } = load(stubs);
   let ctx = null;
   const Probe = () => { ctx = useOnboarding(); return null; };
@@ -94,9 +94,19 @@ assert.deepEqual(
   'MODEL_LEFT must name every summariser first run offers except builtin-ai'
 );
 
-// The positive sentinel: the on-device summariser still asks for its model.
+// The positive sentinel: the on-device summariser still asks for its model, three ways (the gate's
+// adversary found the sentinel held one: a fill from the recommended model, or a download of a ready
+// one, could be deleted or added unseen).
 const local = await finish('builtin-ai', 'gemma4:e2b');
 assert.deepEqual(local.downloads, ['gemma4:e2b'], 'builtin-ai must still fetch its model, or the checks below prove nothing');
+const localEmpty = await finish('builtin-ai', '');
+assert.deepEqual(
+  { downloads: localEmpty.downloads, saved: localEmpty.done?.model },
+  { downloads: ['gemma4:e2b'], saved: 'gemma4:e2b' },
+  'builtin-ai with no model chosen must fetch, and be completed with, the recommended one'
+);
+const localReady = await finish('builtin-ai', 'gemma4:e2b', { ready: true });
+assert.deepEqual(localReady.downloads, [], 'a builtin-ai model already on disk must not be fetched again');
 
 const failures = [];
 for (const [provider, left] of Object.entries(MODEL_LEFT)) {
@@ -104,7 +114,9 @@ for (const [provider, left] of Object.entries(MODEL_LEFT)) {
     const { downloads, readyChecks, done } = await finish(provider, model);
     if (downloads.length) failures.push(`${provider} ${label}: asked to download ${JSON.stringify(downloads)}`);
     if (readyChecks.length) failures.push(`${provider} ${label}: asked whether ${JSON.stringify(readyChecks)} is ready`);
-    // What (b) and (c) save is #181's out-of-scope configuration; only (a)'s is asserted.
+    // What (b) and (c) save is #181's out-of-scope configuration; only (a)'s is asserted. A request made
+    // after `completeOnboarding` resolves is outside this window by design; Stage 2's settle covers it
+    // for Claude.
     if (label.startsWith('(a)') && (done?.provider !== provider || done?.model !== left)) {
       failures.push(`${provider} (a): completed as ${JSON.stringify(done)}, not ${JSON.stringify({ provider, model: left })}`);
     }
