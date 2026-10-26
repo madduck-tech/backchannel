@@ -660,13 +660,13 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     Ok(())
 }
 
-/// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
+/// Stop recording. Waits for the transcriber to commit every row before it returns (#210).
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
 ) -> Result<(), String> {
     info!(
-        "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
+        "🛑 Stopping the recording; the transcriber will be waited for until it has finished"
     );
 
     // One stop at a time. Stopping takes as long as the decoder needs to drain,
@@ -749,14 +749,14 @@ pub async fn stop_recording<R: Runtime>(
         }),
     );
 
-    // Wait for transcription task with enhanced progress monitoring (NO TIMEOUT - we must process all chunks)
+    // Wait for the transcription task, with progress events, and no limit (#210).
     let transcription_task = {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         global_task.take()
     };
 
     if let Some(task_handle) = transcription_task {
-        info!("⏳ Waiting for ALL transcription chunks to be processed (no timeout - preserving every chunk)");
+        info!("⏳ Waiting for the transcriber to finish the queued audio (no limit)");
 
         // Enhanced progress monitoring during shutdown
         let progress_app = app.clone();
@@ -781,8 +781,7 @@ pub async fn stop_recording<R: Runtime>(
             }
         });
 
-        // Wait up to 10 minutes for transcription completion to prevent indefinite hangs
-        super::transcription::await_transcription_task(task_handle, tokio::time::Duration::from_secs(600)).await;
+        super::transcription::await_transcription_task(task_handle).await;
 
         // Stop progress monitoring
         progress_task.abort();
@@ -791,7 +790,7 @@ pub async fn stop_recording<R: Runtime>(
     }
 
     // Only now is it safe to stop persisting transcript rows: the decoder has
-    // drained (or timed out), so nothing further is coming.
+    // ended, so nothing further is coming.
     {
         use tauri::Listener;
         if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
@@ -820,7 +819,7 @@ pub async fn stop_recording<R: Runtime>(
         }),
     );
 
-    info!("🧠 All transcript chunks processed. Leaving the model loaded for the next recording");
+    info!("🧠 Transcriber finished. Leaving the model loaded for the next recording");
     super::common::touch_engine_idle().await;
 
     // Step 4: Finalize recording state and cleanup resources safely
@@ -875,8 +874,8 @@ pub async fn stop_recording<R: Runtime>(
     IS_RECORDING.store(false, Ordering::SeqCst);
 
     // Step 4.5: Prepare metadata for frontend (NO database save)
-    // NOTE: We do NOT save to database here. The frontend will save after all transcripts are displayed.
-    // This ensures the user sees all transcripts streaming in before the database save happens.
+    // NOTE: We do NOT save to database here. The frontend saves after `recording-stopped`; every row
+    // was emitted as `transcript-update` before it, since the transcriber has ended.
     let (folder_path_str, meeting_name_str) = match (&meeting_folder, &meeting_name) {
         (Some(path), Some(name)) => (
             Some(path.to_string_lossy().to_string()),
@@ -889,8 +888,8 @@ pub async fn stop_recording<R: Runtime>(
     info!("   folder_path: {:?}", folder_path_str);
     info!("   meeting_name: {:?}", meeting_name_str);
 
-    // Database save removed - frontend will handle this after receiving all transcripts
-    info!("ℹ️ Skipping database save in Rust - frontend will save after all transcripts received");
+    // Database save removed - the frontend saves after recording-stopped, which follows every row
+    info!("ℹ️ Skipping database save in Rust - the frontend saves after recording-stopped; every row was emitted before it");
 
     // Step 5: Complete shutdown
     let _ = app.emit(
@@ -906,7 +905,7 @@ pub async fn stop_recording<R: Runtime>(
     app.emit(
         "recording-stopped",
         serde_json::json!({
-            "message": "Recording stopped - frontend will save after all transcripts received",
+            "message": "Recording stopped - every transcript row was emitted before this event",
             "folder_path": folder_path_str,
             "meeting_name": meeting_name_str
         }),
@@ -916,7 +915,7 @@ pub async fn stop_recording<R: Runtime>(
     // Update tray menu to reflect stopped state
     crate::tray::update_tray_menu(&app);
 
-    info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
+    info!("🎉 Recording stopped; the transcriber had finished before it");
     Ok(())
 }
 
