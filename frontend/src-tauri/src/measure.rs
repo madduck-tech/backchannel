@@ -30,19 +30,37 @@ fn home_dir() -> PathBuf {
         .expect("HOME or USERPROFILE is set")
 }
 
-/// `samples/<name>` in the checkout of the pinned revision. Cargo names a checkout by the first seven
-/// digits of its revision, under `CARGO_HOME` when it is set, as cargo itself reads it.
-pub fn pinned_sample(name: &str) -> PathBuf {
-    let short = &pinned_engine_revision()[..7];
+/// The transcribe.cpp checkout cargo made for `revision`. Cargo names a checkout by a prefix of its
+/// revision (seven digits, more when seven are ambiguous), under `CARGO_HOME` when it is set, as cargo
+/// itself reads it. Fails, naming the revision, when there is none.
+pub fn checkout_of(revision: &str) -> PathBuf {
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home_dir().join(".cargo"));
     let checkouts = cargo_home.join("git").join("checkouts");
     let found = std::fs::read_dir(&checkouts)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", checkouts.display()))
         .filter_map(|d| d.ok())
         .filter(|d| d.file_name().to_string_lossy().starts_with("transcribe.cpp-"))
-        .map(|d| d.path().join(short).join("samples").join(name))
-        .find(|p| p.is_file());
-    found.unwrap_or_else(|| panic!("no samples/{name} in a transcribe.cpp checkout at {short}; run `cargo fetch`"))
+        .flat_map(|d| std::fs::read_dir(d.path()).into_iter().flatten().filter_map(|c| c.ok()))
+        .find(|c| {
+            let short = c.file_name().to_string_lossy().into_owned();
+            short.len() >= 7 && revision.starts_with(&short) && c.path().is_dir()
+        });
+    found
+        .map(|c| c.path())
+        .unwrap_or_else(|| panic!("no transcribe.cpp checkout at {revision} under {}; run `cargo fetch`", checkouts.display()))
+}
+
+/// The checkout of the revision `Cargo.lock` pins.
+pub fn pinned_checkout() -> PathBuf {
+    checkout_of(&pinned_engine_revision())
+}
+
+/// `samples/<name>` in the checkout of the pinned revision.
+pub fn pinned_sample(name: &str) -> PathBuf {
+    let checkout = pinned_checkout();
+    let path = checkout.join("samples").join(name);
+    assert!(path.is_file(), "no samples/{name} in {}; run `cargo fetch`", checkout.display());
+    path
 }
 
 /// A model file by its catalogue filename, from the stated directory.
