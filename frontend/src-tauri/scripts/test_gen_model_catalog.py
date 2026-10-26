@@ -10,6 +10,7 @@ fails the run rather than skipping it: a test that returns early on a missing in
 
 import concurrent.futures
 import http.client
+import json
 import re
 import subprocess
 import sys
@@ -323,6 +324,46 @@ class TheWordErrorRate(unittest.TestCase):
         self.assertEqual(wrong, [])
         self.assertEqual(covered, len(ROWS), f"covered {covered} of {len(ROWS)} rows")
         self.assertGreater(covered, 0)
+
+
+def mark_of(rust):
+    """A rendered `LicenceMark` as the generator's (mark, revenue) pair."""
+    if rust == "LicenceMark::None":
+        return ("none", None)
+    if rust == "LicenceMark::NonCommercial":
+        return ("non_commercial", None)
+    m = re.fullmatch(r"LicenceMark::RevenueLimit \{ usd: ([0-9_]+) \}", rust)
+    return ("revenue_limit", int(m[1].replace("_", ""))) if m else None
+
+
+def diarizer_licence():
+    block = CONFIG[CONFIG.index("pub const SPEAKER_DIARIZER: DiarizerModel") :]
+    block = block[: block.index("};")]
+    field = lambda name: re.search(rf"^\s+{name}: (.*),$", block, re.M)[1]
+    return field("license_name").strip('"'), field("license_url").strip('"'), mark_of(field("license_mark")), field("upstream_repo").strip('"')
+
+
+class TheLicences(unittest.TestCase):
+    """#197, ADR 0030: every licence is read before a row ships, and the diarizer's is its record's."""
+
+    def test_an_unread_licence_stops_the_generator_naming_the_record_and_the_key(self):
+        record = json.loads(json.dumps(RECORDS["canary-1b"]))
+        record["license"] = {"spdx": "other", "display": "Unread Licence", "name": "unread-licence"}
+        with self.assertRaises(SystemExit) as raised:
+            gen.generate({"canary-1b": record}, hold={})
+        self.assertIn("canary-1b", str(raised.exception))
+        self.assertIn("unread-licence", str(raised.exception))
+
+    def test_the_key_is_the_spdx_id_else_the_name_else_an_alias(self):
+        self.assertEqual(gen.licence_key({"spdx": "mit", "display": "MIT"}), "mit")
+        self.assertEqual(gen.licence_key({"spdx": "other", "name": "openmdw-1.1"}), "openmdw-1.1")
+        self.assertEqual(gen.licence_key({"spdx": "other", "display": "NVIDIA Open Model License"}), "nvidia-open-model-license")
+        self.assertIsNone(gen.licence_key({"spdx": "other", "display": "Something else"}))
+
+    def test_the_diarizer_carries_its_records_licence(self):
+        record = RECORDS["diar_streaming_sortformer_4spk-v2.1"]
+        name, url, mark = gen.LICENCES[gen.licence_key(record["license"])]
+        self.assertEqual(diarizer_licence(), (name, url, mark, record["upstream_repo"]))
 
 
 class TheRepositories(unittest.TestCase):

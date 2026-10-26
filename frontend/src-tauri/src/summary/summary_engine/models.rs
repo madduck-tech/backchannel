@@ -180,6 +180,12 @@ pub struct ModelDef {
     /// Short description for UI
     pub description: String,
 
+    /// The licence as its card names it, the URL its card links (ADR 0030, #197).
+    pub license_name: String,
+    pub license_url: String,
+    /// What the licence asks of the person choosing the model.
+    pub license_mark: crate::config::LicenceMark,
+
     /// Multimodal projector, when this model has one. `Some` means the model can
     /// take audio input and is offered for transcription as well as summaries.
     #[serde(default)]
@@ -211,6 +217,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         // thresholds unevenly once quantized, degrading transcripts (llama.cpp#21421).
         ModelDef {
             name: "gemma4:e2b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://ai.google.dev/gemma/docs/gemma_4_license".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Gemma 4 E2B (Audio + Text)".to_string(),
             gguf_file: "gemma-4-E2B-it-Q4_0.gguf".to_string(),
             template: "gemma4".to_string(),
@@ -233,6 +242,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         // and it wants ~16GB of RAM to stay comfortable.
         ModelDef {
             name: "gemma4:e4b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://ai.google.dev/gemma/docs/gemma_4_license".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Gemma 4 E4B (Audio + Text)".to_string(),
             gguf_file: "gemma-4-E4B-it-Q4_0.gguf".to_string(),
             template: "gemma4".to_string(),
@@ -258,6 +270,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         // and nothing else.
         ModelDef {
             name: "lfm2.5:2.6b".to_string(),
+            license_name: "LFM Open License v1.0".to_string(),
+            license_url: "https://huggingface.co/LiquidAI/LFM2.5-2.6B/blob/main/LICENSE".to_string(),
+            license_mark: crate::config::LicenceMark::RevenueLimit { usd: 10_000_000 },
             display_name: "LFM2.5 2.6B (Text only)".to_string(),
             gguf_file: "LFM2.5-2.6B-Q4_K_M.gguf".to_string(),
             template: "lfm2_nonthinking".to_string(),
@@ -280,6 +295,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         // against the unsloth repos and Qwen's config.json.
         ModelDef {
             name: "qwen3.5:2b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/LICENSE".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Qwen 3.5 2B (Text only)".to_string(),
             gguf_file: "Qwen3.5-2B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
@@ -293,6 +311,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         },
         ModelDef {
             name: "qwen3.5:4b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Qwen 3.5 4B (Text only)".to_string(),
             gguf_file: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
@@ -306,6 +327,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         },
         ModelDef {
             name: "qwen3.5:9b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Qwen 3.5 9B (Text only)".to_string(),
             gguf_file: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
@@ -333,6 +357,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
         // would offer a model that cannot transcribe as a transcriber.
         ModelDef {
             name: "gemma4:26b-a4b".to_string(),
+            license_name: "Apache License 2.0".to_string(),
+            license_url: "https://ai.google.dev/gemma/docs/gemma_4_license".to_string(),
+            license_mark: crate::config::LicenceMark::None,
             display_name: "Gemma 4 26B A4B (Text only)".to_string(),
             gguf_file: "gemma-4-26B_q4_0-it.gguf".to_string(),
             // Hybrid reasoner, unlike the E-tiers: its canonical template closes an

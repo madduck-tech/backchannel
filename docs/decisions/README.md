@@ -31,6 +31,7 @@
 | [0027](0027-a-live-path-that-falls-behind-is-warned-about-not-trimmed.md) | A live path that falls behind is warned about, never trimmed | accepted; supersedes the drop-cap wording of 0008 decision 3 |
 | [0028](0028-an-agent-cli-writes-a-summary-with-no-tools.md) | An agent CLI writes a summary with its tools off, and a tool event discards it | accepted |
 | [0029](0029-backchannel-has-its-own-identity.md) | Backchannel has its own identity, and the old name stays only where it is not seen | accepted |
+| [0030](0030-every-model-is-offered-and-shows-its-licence.md) | Every model is offered, and shows its licence | accepted |
 
 ## Deferred questions
 

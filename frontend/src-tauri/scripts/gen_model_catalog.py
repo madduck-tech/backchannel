@@ -50,15 +50,80 @@ EXCLUDED = {
     # Its repository answers 401 on `resolve` and on the API (#175), so a
     # listed `published_repo` does not prove the files can be downloaded.
     "phonon-2": "repository answers 401",
-    # Licences not yet decided (#197): non-commercial, share-alike, "other".
-    "granite-speech-5.0-470m-turboctc-nc": "licence cc-by-nc-sa-4.0, #197",
-    "orukeet": "licence cc-by-sa-4.0, #197",
+    # Offered by the product owner's decision of 2026-10-26, once the licence is
+    # shown where a model is chosen (ADR 0030).
+    "granite-speech-5.0-470m-turboctc-nc": "waits on its licence being shown, #227",
+    "orukeet": "waits on its licence being shown, #227",
+    # The product owner's decision of 2026-10-26 (ADR 0030): the Moonshine AI
+    # Community License asks for registration and ends above US$1M in annual
+    # revenue. The English moonshine rows are MIT and stay.
     **{
-        f"moonshine-{size}-{lang}": "licence other, #197"
+        f"moonshine-{size}-{lang}": "Moonshine AI Community License, excluded by decision, ADR 0030"
         for size in ("base", "tiny")
         for lang in ("ar", "ja", "ko", "uk", "vi", "zh")
     },
 }
+
+# Every licence a shipped row or the diarizer names, each read from its text on
+# 2026-10-26 (ADR 0030, and #197's licence table). Keyed by the record's SPDX id,
+# or by `license.name` when the id is "other". `mark` is what a person must see
+# where the model is chosen: none, non-commercial only, or a revenue limit in US
+# dollars. A licence nobody has read stops the generator (`licence_of`).
+NONE = ("none", None)
+NON_COMMERCIAL = ("non_commercial", None)
+LICENCES = {
+    "apache-2.0": ("Apache License 2.0", "https://www.apache.org/licenses/LICENSE-2.0", NONE),
+    "mit": ("MIT License", "https://opensource.org/license/mit", NONE),
+    "cc-by-4.0": ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/", NONE),
+    "cc-by-sa-4.0": ("CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/", NONE),
+    "cc-by-nc-4.0": ("CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/", NON_COMMERCIAL),
+    "cc-by-nc-sa-4.0": ("CC BY-NC-SA 4.0", "https://creativecommons.org/licenses/by-nc-sa/4.0/", NON_COMMERCIAL),
+    "nvidia-open-model-license": (
+        "NVIDIA Open Model License",
+        "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        NONE,
+    ),
+    "openmdw-1.1": ("OpenMDW 1.1", "https://openmdw.ai/license/1-1/", NONE),
+    # §3's "for reference and learning purposes only" is read as a disclaimer, not a
+    # use restriction (the product owner, 2026-10-26). FunAudioLLM's own cards for
+    # both Fun-ASR Nano repositories say apache-2.0; the catalog's stricter licence
+    # is the one followed, and the mark is none under either.
+    "funasr-model-license-v1.1": (
+        "FunASR Model License v1.1",
+        "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        NONE,
+    ),
+    # SenseVoice names the same text under another key.
+    "model-license": (
+        "FunASR Model License v1.1",
+        "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        NONE,
+    ),
+}
+
+# A record whose licence carries neither an SPDX id nor a name, by its display.
+# The diarizer's: its card names `nvidia-open-model-license` (read 2026-10-26).
+LICENCE_ALIASES = {"NVIDIA Open Model License": "nvidia-open-model-license"}
+
+
+def licence_key(licence):
+    """The key a record's licence is looked up by: its SPDX id, else its name, else an alias."""
+    licence = licence or {}
+    spdx = licence.get("spdx")
+    if spdx and spdx != "other":
+        return spdx
+    return licence.get("name") or LICENCE_ALIASES.get(licence.get("display"))
+
+
+def licence_of(record):
+    """The read licence for a record, or the generator stops naming the record and the key."""
+    key = licence_key(record.get("license"))
+    if key not in LICENCES:
+        raise SystemExit(
+            f"{record.get('variant')}: its licence {key!r} has not been read. Read it, add it to "
+            f"LICENCES with its mark, and record the reading (ADR 0030)."
+        )
+    return LICENCES[key]
 
 # Streaming-capable variants, for the pre-download "live-capable" label only.
 #
@@ -295,6 +360,7 @@ def entries_for(record):
     # Renaming a row renames a storage key.
     slug = downloads[Q8]["filename"][: -len(f"-{Q8}.gguf")].lower()
     family, fallback = family_of(slug)
+    licence_name, licence_url, (mark, revenue_usd) = licence_of(record)
     wanted = FAMILY_SETS.get(family, DEFAULT_SET)
     native = slug in STREAMING
     streaming = native and slug not in CAPPED_STREAMS
@@ -326,6 +392,11 @@ def entries_for(record):
                 "native": native,
                 "languages": record["languages"],
                 "license": record["license"]["spdx"],
+                "license_name": licence_name,
+                "license_url": licence_url,
+                "license_mark": mark,
+                "license_revenue_usd": revenue_usd,
+                "upstream_repo": record["upstream_repo"],
                 "description": f"{family}{note}",
             }
         )
@@ -357,6 +428,16 @@ def generate(records, hold=None):
     return apply_holds(entries, hold)
 
 
+def rust_mark(mark, revenue_usd):
+    if mark == "none":
+        return "LicenceMark::None"
+    if mark == "non_commercial":
+        return "LicenceMark::NonCommercial"
+    if mark == "revenue_limit":
+        return f"LicenceMark::RevenueLimit {{ usd: {revenue_usd:_} }}"
+    raise SystemExit(f"unknown licence mark {mark!r}")
+
+
 def render(entries):
     lines = [BEGIN]
     for e in entries:
@@ -375,6 +456,10 @@ def render(entries):
         codes = ", ".join(f'"{c}"' for c in e["languages"])
         lines.append(f"        languages: &[{codes}],\n")
         lines.append(f'        license: "{e["license"]}",\n')
+        lines.append(f'        license_name: "{e["license_name"]}",\n')
+        lines.append(f'        license_url: "{e["license_url"]}",\n')
+        lines.append(f"        license_mark: {rust_mark(e['license_mark'], e['license_revenue_usd'])},\n")
+        lines.append(f'        upstream_repo: "{e["upstream_repo"]}",\n')
         lines.append(f'        description: "{e["description"]}",\n')
         lines.append("    },\n")
     lines.append(END)
