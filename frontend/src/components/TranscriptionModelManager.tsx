@@ -173,7 +173,7 @@ export default function TranscriptionModelManager({ selectedModel, onModelSelect
                         {model.wer.toFixed(2)}%
                       </TooltipTrigger>
                       {/* The set is in the tooltip, not the row, because the row has
-                          to stay scannable across 86 models — but it is one hover
+                          to stay scannable across 96 models — but it is one hover
                           away, because 1.27% on English read speech and 8.40% on
                           Russian are not two points on the same scale. */}
                       <TooltipContent side="top">

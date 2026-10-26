@@ -375,7 +375,11 @@ class TheRetry(unittest.TestCase):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_HEAD(self):
                 served.append(self.path)
-                if len(served) == 1 or self.path == "/always":
+                if self.path == "/busy" and served.count("/busy") == 1:
+                    self.send_response(503)  # an overloaded server, once
+                    self.end_headers()
+                    return
+                if self.path != "/busy" and (len(served) == 1 or self.path == "/always"):
                     self.close_connection = True  # read the request, answer nothing
                     return
                 self.send_response(200)
@@ -393,6 +397,7 @@ class TheRetry(unittest.TestCase):
                 self.assertEqual(served, ["/once", "/once"])
                 with self.assertRaises((http.client.HTTPException, ConnectionError)):
                     final_status(f"{base}/always")
+                self.assertEqual(final_status(f"{base}/busy"), 200, "a 503 is retried")
         finally:
             server.shutdown()
 

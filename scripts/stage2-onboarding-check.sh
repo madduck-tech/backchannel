@@ -702,7 +702,10 @@ printf '%s' "$CARD" | grep -q "$CHOSEN_ID" \
   || die "the download screen shows no row naming $CHOSEN_ID; it named a different model or none"
 printf '%s' "$CARD" | grep -qE "(^|[^0-9])${CHOSEN_MB}( |\.)" \
   || die "the row for $CHOSEN_ID does not state its ${CHOSEN_MB} MB: $CARD"
-printf '%s' "$CARD" | grep -qE "\b(740|716)\b" \
+# The default's and nemotron-3.5's sizes, the pair #146 photographed in the wrong place, read from
+# config.rs like the chosen one (716 was nemotron's MiB figure before #175).
+OTHER_SIZES="$(size_mb_of parakeet-tdt-0.6b-v3-q8)|$(size_mb_of nemotron-3.5-asr-streaming-0.6b-q8)" || exit 1
+printf '%s' "$CARD" | grep -qE "\b($OTHER_SIZES)\b" \
   && die "the row states another model's size while fetching $CHOSEN_ID: $CARD"
 say "and it states the chosen model's own size, not the default's"
 

@@ -235,7 +235,7 @@ export function useDownloadProgressToast() {
         displayName: 'Transcription Model',
         progress,
         downloadedMb: downloaded_mb ?? 0,
-        totalMb: total_mb ?? 716,
+        totalMb: total_mb ?? 0,
         speedMbps: speed_mbps ?? 0,
         status: status === 'cancelled'
           ? 'cancelled'
@@ -261,8 +261,8 @@ export function useDownloadProgressToast() {
           modelName,
           displayName: 'Transcription Model',
           progress: 100,
-          downloadedMb: 716,
-          totalMb: 716,
+          downloadedMb: 0,
+          totalMb: 0,
           speedMbps: 0,
           status: 'completed',
         };
@@ -281,7 +281,7 @@ export function useDownloadProgressToast() {
           displayName: 'Transcription Model',
           progress: 0,
           downloadedMb: 0,
-          totalMb: 716,
+          totalMb: 0,
           speedMbps: 0,
           status: 'error',
           error: categorizeError(error),

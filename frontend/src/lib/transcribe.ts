@@ -20,8 +20,8 @@ export type ModelStatus =
 
 export interface ModelInfo {
   name: string;
-  /** The catalogue's family, such as "GigaAM". Not recoverable from `name`: for 13 of 22 families
-   *  some id does not contain the family's text, case-insensitively. First run's search matches on it
+  /** The catalogue's family, such as "GigaAM". Not recoverable from `name`: for 13 of the 22
+   *  families of #166's time some id does not contain the family's text, case-insensitively. First run's search matches on it
    *  (#166). */
   family: string;
   path: string;

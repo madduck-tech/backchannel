@@ -49,7 +49,7 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 #             that fix is reverted. Russian-only, so the English sample comes back as phonetic
 #             Cyrillic -- correct behaviour of that model, and why this mode asserts that rows
 #             arrived rather than what they say.
-#   long      moonshine-streaming-small-q8 (189 MB), one of first run's four, over dots-full.wav (305 s)
+#   long      moonshine-streaming-small-q8 (199 MB), one of first run's four, over dots-full.wav (305 s)
 #             for about 150 s of recording. **#200's run.** That family streams natively, but one stream
 #             holds at most 81.9 s and committed only a meeting's first seconds, so the application
 #             decodes it in VAD segments. The oracle: rows whose recording-relative audio starts past
@@ -58,11 +58,11 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 #             catalogue, not on the recommended list it also sits on, and the pass does not summarise.
 #             What it leaves alone: small only (tiny and medium reach first run through the instrument
 #             `a_capped_stream_keeps_the_whole_meeting`), the CPU, and the same sample on both channels.
-#             What its seeding hides: the first-run download of the 189 MB row, which is on disk before
+#             What its seeding hides: the first-run download of the 199 MB row, which is on disk before
 #             first run starts.
-#   empty     moonshine-tiny-q8 (34 MB). The **larger** half of #162 and the one the other two cannot
+#   empty     moonshine-tiny-q8 (35 MB). The **larger** half of #162 and the one the other two cannot
 #             reach: both of them build token rows, so reverting the `tokens.is_empty()` guard turns
-#             neither red. 53 of the catalogue's 86 rows come from an architecture that builds none,
+#             neither red. 53 of the 86 rows the catalogue had at #162 come from an architecture that builds none,
 #             and for all of them a fabricated 1.0 used to reach the tooltip as *"Decode confidence
 #             100%"*. This mode is that class.
 #

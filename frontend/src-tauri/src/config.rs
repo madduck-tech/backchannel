@@ -34,7 +34,7 @@ pub fn is_builtin_transcript_provider(provider: &str) -> bool {
 }
 
 /// Default transcribe.cpp model. Chosen on WER: 1.94% on LibriSpeech test-clean
-/// against nemotron-3.5's 3.06%, at the same download size.
+/// against nemotron-3.5's 3.05%, at about the same download size.
 ///
 /// Batch-only, so the live path segments with VAD and decodes each segment whole:
 /// no `transcript-partial` events, and text lands one segment at a time

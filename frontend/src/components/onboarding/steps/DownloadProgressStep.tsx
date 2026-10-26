@@ -69,7 +69,7 @@ export function DownloadProgressStep() {
   });
 
   // The size beside the name before the first progress event. The frontend carries the recommended
-  // four's sizes; every other model's is the catalogue's, read from the backend. Without it the 82
+  // four's sizes; every other model's is the catalogue's, read from the backend. Without it the 92
   // others read "0 of 0 MB" until the HTTP response arrived (#166). A progress event's total, once
   // one has come, is never overwritten.
   useEffect(() => {
