@@ -36,3 +36,7 @@ ADR 0003 decision 5 already forbids dropping audio when behind. So does `.claude
 - **The toast now reaches the default model and the built-in Gemma.** On the built-in Gemma, "pick a faster model" may have nothing faster to offer. And the sidecar's 5-minute idle shutdown during a recording can spend the warning on a reload (#213).
 - **A backlog costs memory.** It waits in the unbounded channel at 128 KB per second of backlog (2 channels × 16 kHz × f32). For a model at 1.4× real time with both sides speaking (`whisper-large-v3-turbo-q4` on #169's measurements), a 2-hour meeting is about 2000 s of backlog, about 260 MB. Stop cannot drain that within its 600 s (#210).
 - ADR 0003's Context line ("the fork's batch path drops old audio once more than 30 s behind") described the fork as it was. It is left as written; this ADR records that the behaviour it describes is gone.
+
+## Amended by #210 (2026-10-26)
+
+Stop no longer has a 600 s wait. `transcription::await_transcription_task` awaits the decoder until it has ended, with no limit. Under the cap, the decoder was detached when the limit fired, and its rows reached no store of the stopped meeting. The sentences above about "Stop's 600 s wait" describe the code before #210. "Nothing is being lost" stays the product owner's (#215): it is true at Stop now, unless the application is quit during the drain.

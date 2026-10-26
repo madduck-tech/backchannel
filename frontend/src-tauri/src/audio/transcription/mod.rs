@@ -58,8 +58,9 @@ pub fn live_path(capabilities: Option<&transcribe_cpp::Capabilities>) -> LivePat
 /// Wait at Stop for the task [`start_transcription_task`] returned, until it has ended. (#210)
 ///
 /// No limit. This used to be a 600 s `timeout` around the handle, and when it fired the handle was
-/// dropped, which detaches a tokio task rather than stopping it: the decoder ran on, its rows reached
-/// neither of the stopped meeting's stores, and they could land in the next meeting. Dropping speech
+/// dropped, which detaches a tokio task rather than stopping it: the decoder ran on, and its rows
+/// reached neither of the stopped meeting's stores (measured, `stop_waits`). That they could land in
+/// the next meeting is read from source, not shown: its listener takes any `transcript-update`. Dropping speech
 /// when behind is what ADR 0003 decision 5 forbids. The wait ends because Stop closes the feed
 /// channel; a decoder call that never returns would hold it (#216).
 pub async fn await_transcription_task(handle: tokio::task::JoinHandle<()>) {
@@ -495,9 +496,12 @@ mod stop_waits {
         // Read all four before asserting any, so a red run prints all four.
         let rows = record.lock().unwrap().committed.len();
         let at_return = (rows, t0.elapsed() >= S, abort.is_finished(), std::sync::Arc::strong_count(&record));
-        // The fixture sentinel, read once the task has really ended: the span went past L.
+        // The fixture sentinel, read once the decoder has really ended: the span went past L. Waited
+        // for on the sink, which the blocking thread holds, not on the task: an `abort()` finishes the
+        // task while the decoder runs on, and this would then blame the fixture (the gate's
+        // adversary, measured).
         let bound = Instant::now();
-        while !abort.is_finished() && bound.elapsed() < S * 10 {
+        while std::sync::Arc::strong_count(&record) > 1 && bound.elapsed() < S * 10 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let offsets: Vec<u128> = record.lock().unwrap().committed.iter().map(|t| t.parse().unwrap()).collect();
@@ -508,6 +512,26 @@ mod stop_waits {
             (N, true, true, 1),
             "at return: (rows, elapsed ≥ S, task finished, sink's strong count). Later offsets: {offsets:?}"
         );
+    }
+
+    /// A decoder that is done before the old cap: every row in, the task finished, the sink dropped.
+    /// Green on the extraction commit too: the case the cap got right.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_decoder_done_before_the_old_cap_is_waited_for_as_before() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(AudioChunk { data: vec![0.0; 1600], sample_rate: 16_000, timestamp: 0.0, chunk_id: 0, device_type: DeviceType::Microphone }).unwrap();
+        drop(tx);
+        let sink = FakeSink::default();
+        let record = sink.0.clone();
+        let t0 = Instant::now();
+        // One row at S/N, 200 ms: done 300 ms before L. Green under the cap's control too (measured).
+        let handle = tokio::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || service::run(Paced { t0 }, sink, rx)).await;
+        });
+        let abort = handle.abort_handle();
+        let waited = tokio::time::timeout(S * 10, super::await_transcription_task(handle)).await;
+        let at_return = (waited.is_ok(), record.lock().unwrap().committed.len(), abort.is_finished(), std::sync::Arc::strong_count(&record));
+        assert_eq!(at_return, (true, 1, true, 1), "at return: (returned, rows, task finished, sink's strong count)");
     }
 
     struct Panics;
@@ -522,6 +546,8 @@ mod stop_waits {
     }
 
     /// A decoder that panics ends the task, and the wait returns at once instead of holding Stop.
+    /// The replica discards the panic; production logs it ("Transcription task panicked", on both branches' join, read from source).
+    /// Red with a wait that never returns (the gate's adversary, R4: "held … 5.0 s").
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_decoder_that_panics_does_not_hold_stop() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
