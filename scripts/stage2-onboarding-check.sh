@@ -897,11 +897,17 @@ fi
 
 # --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
 #
-# `completeOnboarding` asks for the selected summary model whatever the provider (#181). For a cloud
-# pick that name is the cloud model, which the backend's exact lookup should reject; that is read, not
-# run, so this pass reports what reached models/summary rather than asserting either way.
+# And finishing with Claude asks for no on-device summary model (#181). `completeOnboarding` used to
+# ask `builtin_ai_is_model_ready` and `builtin_ai_download_model` for the model Claude's option leaves,
+# which the backend refuses as `Unknown model` before a byte, so models/summary cannot show it: the
+# oracle is the two lines the backend writes when asked, `' ready check (refresh=` and `Starting
+# download for model:`, after a mark taken before the finishing click, with `Completing onboarding`
+# for Claude as the positive sentinel. models/summary's byte count stays a guard with no control.
+# Inputs left alone: only Claude, with the model its option leaves; an empty model, `gemma4:e2b`, and
+# the other five remote providers are Stage 1's (`only-the-local-summariser-…`).
 if [ "$MODE" = catalogue ]; then
   FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
+  MARK181=$(wc -l < "$LOG")
   [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
   click "$FIN" "the control that finishes first run"
   # False on the audio check: the main screen only exists once first run has reloaded into it.
@@ -930,8 +936,28 @@ except Exception:
   grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG" \
     && die "finishing first run started a download of the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
   say "first run finished and transcript_settings.model is $STORED; the default's file is still absent, and nothing started fetching it"
+  # Into a file named `$L`, and one grep per line: `a-gate-oracle-reads-a-line-the-app-writes`
+  # counts `grep … "$L"` and nothing piped, and with the tail held in a variable it saw none of these
+  # three, so a reworded Rust line would have left both absences passing (#181's gate adversary).
+  L="$PROFILE/after-finish.log"
+  tail -n +"$((MARK181 + 1))" "$LOG" > "$L"
+  DONE=$(grep -F "Completing onboarding: summary=" "$L" || true)
+  # The value by `case`, not a second grep: the census reads every grep on a line naming `"$L"`, and
+  # Claude's id is the run's, not a string the Rust writes.
+  case "$DONE" in
+    *"summary=claude/claude-sonnet-4-5-20250929,"*) ;;
+    *) die "no 'Completing onboarding: summary=claude/claude-sonnet-4-5-20250929' line after the finishing click: the log does not show first run finishing with Claude, so its absences mean nothing" ;;
+  esac
+  READY=$(grep -F "' ready check (refresh=" "$L" || true)
+  FETCH=$(grep -F "Starting download for model:" "$L" || true)
+  [ -z "$READY$FETCH" ] || die "finishing first run with Claude asked for an on-device summary model (#181):
+$(printf '%s\n%s\n' "$READY" "$FETCH" | sed '/^$/d; s/^/    /')"
+  say "finishing with Claude asked for no on-device summary model: no ready check and no download line after the mark, and 'Completing onboarding' for Claude after it"
   SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
-  say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded; #181)"
+  # A guard with no control: on a build with #181's defect the backend refuses Claude's id before a
+  # byte, so this cannot go red; the log lines above are what can.
+  [ "$SUMMARY_BYTES" -le 1000000 ] || die "models/summary holds $SUMMARY_BYTES bytes 5 s after finishing with Claude chosen (nothing was seeded)"
+  say "models/summary holds ${SUMMARY_BYTES} bytes 5 s after finishing with Claude chosen (nothing was seeded)"
 fi
 
 if [ "$MODE" = keeps ]; then
