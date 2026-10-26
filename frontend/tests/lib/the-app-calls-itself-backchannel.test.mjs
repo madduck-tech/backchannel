@@ -42,37 +42,90 @@ export const KEPT = [
   { token: 'https://github.com/bykof/conversationaly', file: 'src/components/About.tsx' },
 ];
 
-// A comment line. `#` is not one when it opens a Rust attribute (`#[error("…")]` is code), and a line
-// that opens a block comment and closes it is code again after the `*/`.
-const COMMENT = /^\s*(\/\/|\*|#(?![[!])|<!--)/;
-const BLOCK_OPEN = /^\s*\{?\/\*/;
+// What of each line is code, per file type: comments are not seen, and everything else is. A small
+// lexer rather than a prefix rule, because every prefix rule tried let a visible line through: a Rust
+// attribute (`#[…]`) or a dereference (`*label = …`) read as a comment, so did the code after a closed
+// block comment, and cutting at every `//` dropped JSX text after a URL (#228 rounds 3 and 4).
+const C_LIKE = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.rs', '.css', '.json']);
+const MARKUP = new Set(['.html', '.xml', '.svg', '.plist', '.md']);
+const HASH = new Set(['.toml', '.sh', '.py', '.yml', '.yaml']);
 
-// What of a line is code: nothing for a comment line, the rest after the close for a closed block comment.
-export function codeOf(line) {
-  if (COMMENT.test(line)) return '';
-  if (BLOCK_OPEN.test(line)) {
-    const end = line.indexOf('*/');
-    return end < 0 ? '' : withoutTrailingComment(line.slice(end + 2));
-  }
-  return withoutTrailingComment(line);
+export function codeLines(text, ext) {
+  const lines = text.split('\n');
+  if (MARKUP.has(ext)) return markupCode(lines);
+  if (HASH.has(ext)) return lines.map((l) => cutAt(l, (line, i) => line[i] === '#'));
+  if (C_LIKE.has(ext)) return cLikeCode(lines, ext === '.rs');
+  return lines;
 }
 
-// Cut at a `//` outside a string literal, so a token in a trailing comment excuses nothing and a URL in
-// a string does not hide what follows it.
-function withoutTrailingComment(line) {
+// Outside a string literal, the first index where `starts` holds, and the line cut there.
+function cutAt(line, starts, quotes = ['"', "'", '`']) {
   let quote = null;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (quote) {
       if (c === '\\') i++;
       else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'" || c === '`') {
+    } else if (quotes.includes(c)) {
       quote = c;
-    } else if (c === '/' && line[i + 1] === '/') {
+    } else if (starts(line, i)) {
       return line.slice(0, i);
     }
   }
   return line;
+}
+
+function cLikeCode(lines, rust) {
+  // In Rust a `'` opens a lifetime as often as a char, so only `"` is a string there.
+  const quotes = rust ? ['"'] : ['"', "'", '`'];
+  let inBlock = false;
+  return lines.map((line) => {
+    let code = '';
+    let rest = line;
+    for (;;) {
+      if (inBlock) {
+        const end = rest.indexOf('*/');
+        if (end < 0) return code;
+        rest = rest.slice(end + 2);
+        inBlock = false;
+      }
+      // A `//` after a `:` is a URL in text, not a comment; a `/*` opens a block (JSX's `{/*` too).
+      let open = -1;
+      let lineComment = false;
+      cutAt(rest, (l, i) => {
+        if (l[i] !== '/') return false;
+        if (l[i + 1] === '/' && l[i - 1] !== ':') return (lineComment = true), (open = i), true;
+        if (l[i + 1] === '*') return (open = i), true;
+        return false;
+      }, quotes);
+      if (open < 0) return code + rest;
+      code += rest.slice(0, open);
+      if (lineComment) return code;
+      inBlock = true;
+      rest = rest.slice(open + 2);
+    }
+  });
+}
+
+function markupCode(lines) {
+  let inComment = false;
+  return lines.map((line) => {
+    let code = '';
+    let rest = line;
+    for (;;) {
+      if (inComment) {
+        const end = rest.indexOf('-->');
+        if (end < 0) return code;
+        rest = rest.slice(end + 3);
+        inComment = false;
+      }
+      const open = rest.indexOf('<!--');
+      if (open < 0) return code + rest;
+      code += rest.slice(0, open);
+      inComment = true;
+      rest = rest.slice(open + 4);
+    }
+  });
 }
 
 function* walk(dir) {
@@ -102,16 +155,14 @@ export function offenders(root = frontend) {
     const bytes = fs.readFileSync(file);
     if (bytes.includes(0)) continue; // a binary asset
     const rel = path.relative(root, file).split(path.sep).join('/');
-    bytes
-      .toString('utf8')
-      .split('\n')
-      .forEach((line, i) => {
-        const code = codeOf(line);
-        if (!/conversationaly/i.test(code)) return;
-        const rest = KEPT.filter((k) => k.file === rel).reduce((l, k) => l.split(k.token).join(''), code);
-        if (!/conversationaly/i.test(rest)) return;
-        out.push(`${rel}:${i + 1}: ${line.trim()}`);
-      });
+    const lines = bytes.toString('utf8').split('\n');
+    const code = codeLines(lines.join('\n'), path.extname(file));
+    lines.forEach((line, i) => {
+      if (!/conversationaly/i.test(code[i])) return;
+      const rest = KEPT.filter((k) => k.file === rel).reduce((l, k) => l.split(k.token).join(''), code[i]);
+      if (!/conversationaly/i.test(rest)) return;
+      out.push(`${rel}:${i + 1}: ${line.trim()}`);
+    });
   }
   return out;
 }
@@ -125,7 +176,7 @@ test('every kept token is still used where it is kept', () => {
   // A token whose line is gone is a stale excuse: the set would keep allowing it for nothing.
   // On a code line: a token that survives only in a comment excuses nothing.
   const stale = KEPT.filter(
-    (k) => !fs.readFileSync(path.join(frontend, k.file), 'utf8').split('\n').some((l) => codeOf(l).includes(k.token))
+    (k) => !codeLines(fs.readFileSync(path.join(frontend, k.file), 'utf8'), path.extname(k.file)).some((l) => l.includes(k.token))
   );
   assert.deepEqual(stale, [], `kept tokens no longer in their files: ${stale.map((k) => `${k.token} (${k.file})`).join(', ')}`);
 });
