@@ -146,7 +146,7 @@ say "looping $(basename "$SYS_SAMPLE") into $TARGET_SINK (pgid $PLAYER)"
 sleep 2
 
 PROFILE=$(mktemp -d /tmp/backchannel-two-channel.XXXXXX)
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true

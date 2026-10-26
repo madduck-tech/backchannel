@@ -17,7 +17,7 @@ const Info = React.forwardRef<HTMLButtonElement, { isCollapsed?: boolean }>(
           <DialogTrigger asChild>
             <button
               ref={ref}
-              aria-label="About Conversationaly"
+              aria-label="About Backchannel"
               className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors duration-fast hover:bg-ink/5 hover:text-ink active:bg-ink/10"
             >
               <InfoIcon className="h-4 w-4" />
@@ -28,7 +28,7 @@ const Info = React.forwardRef<HTMLButtonElement, { isCollapsed?: boolean }>(
       </Tooltip>
       <DialogContent className="max-w-lg">
         <VisuallyHidden>
-          <DialogTitle>About Conversationaly</DialogTitle>
+          <DialogTitle>About Backchannel</DialogTitle>
         </VisuallyHidden>
         <About />
       </DialogContent>

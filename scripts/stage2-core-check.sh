@@ -127,7 +127,7 @@ PICK="Monitor of $SINK_DESC"
 say "system audio pinned to '$PICK' — this pass records its own sample, never the room"
 
 PROFILE=$(mktemp -d /tmp/backchannel-core.XXXXXX)
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
 # **No onboarding marker.** The Settings catalogue lists every model but offers no control to select

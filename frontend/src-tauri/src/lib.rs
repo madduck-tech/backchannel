@@ -51,7 +51,6 @@ pub mod call_detector;
 pub mod config;
 pub mod console_utils;
 pub mod database;
-pub mod migrate;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -428,9 +427,6 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             log::info!("Starting application...");
-
-            // Before anything reads the data dirs.
-            migrate::migrate_legacy_data_dirs(_app.handle());
 
             log::info!("Application setup complete");
 

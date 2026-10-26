@@ -44,7 +44,7 @@ impl Default for RecordingPreferences {
 /// Never returns a relative path. It used to fall back to `PathBuf::from(".")` when the
 /// platform's media directory was unknown, and under the AppImage that is fatal rather than
 /// merely untidy: the AppImage runtime chdirs into its own read-only FUSE mount, so
-/// `./conversationaly-recordings` resolves inside it, `mkdir` returns EROFS, and the
+/// `./backchannel-recordings` resolves inside it, `mkdir` returns EROFS, and the
 /// recording then runs with no meeting folder at all -- no audio, no transcript files. The
 /// application logged the error and carried on, so the only symptom was an empty folder.
 fn recordings_dir_fallback() -> PathBuf {
@@ -53,41 +53,41 @@ fn recordings_dir_fallback() -> PathBuf {
     dirs::home_dir()
         .or_else(dirs::data_local_dir)
         .unwrap_or_else(std::env::temp_dir)
-        .join("conversationaly-recordings")
+        .join("backchannel-recordings")
 }
 
 pub fn get_default_recordings_folder() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        // Windows: %USERPROFILE%\Music\conversationaly-recordings
+        // Windows: %USERPROFILE%\Music\backchannel-recordings
         if let Some(music_dir) = dirs::audio_dir() {
-            music_dir.join("conversationaly-recordings")
+            music_dir.join("backchannel-recordings")
         } else {
             // Fallback to Documents if Music folder is not available
             dirs::document_dir()
-                .map(|d| d.join("conversationaly-recordings"))
+                .map(|d| d.join("backchannel-recordings"))
                 .unwrap_or_else(recordings_dir_fallback)
         }
     }
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: ~/Movies/conversationaly-recordings
+        // macOS: ~/Movies/backchannel-recordings
         if let Some(movies_dir) = dirs::video_dir() {
-            movies_dir.join("conversationaly-recordings")
+            movies_dir.join("backchannel-recordings")
         } else {
             // Fallback to Documents if Movies folder is not available
             dirs::document_dir()
-                .map(|d| d.join("conversationaly-recordings"))
+                .map(|d| d.join("backchannel-recordings"))
                 .unwrap_or_else(recordings_dir_fallback)
         }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // Linux/Others: ~/Documents/conversationaly-recordings
+        // Linux/Others: ~/Documents/backchannel-recordings
         dirs::document_dir()
-            .map(|d| d.join("conversationaly-recordings"))
+            .map(|d| d.join("backchannel-recordings"))
             .unwrap_or_else(recordings_dir_fallback)
     }
 }
@@ -368,6 +368,16 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new install records into `backchannel-recordings`, the product owner's choice for the
+    /// rename (#228); a saved preference keeps its own absolute path, so no recording moves.
+    #[test]
+    fn a_new_install_records_into_backchannel_recordings() {
+        for dir in [get_default_recordings_folder(), recordings_dir_fallback()] {
+            assert_eq!(dir.file_name().and_then(|n| n.to_str()), Some("backchannel-recordings"), "{}", dir.display());
+            assert!(dir.is_absolute(), "{}", dir.display());
+        }
+    }
 
     /// Every id this command hands the frontend must parse back into the backend it names.
     ///

@@ -114,7 +114,7 @@ pub fn hide_console() -> Result<String, String> {
 /// `TargetKind::LogDir { file_name }`; the plugin appends `.log` and writes it
 /// into `app_log_dir()`. Shared rather than spelled twice so the path this
 /// module reports cannot drift from the file the logger actually writes.
-pub const LOG_FILE_STEM: &str = "conversationaly";
+pub const LOG_FILE_STEM: &str = "backchannel";
 
 /// Absolute path of the log file tauri-plugin-log is writing.
 ///

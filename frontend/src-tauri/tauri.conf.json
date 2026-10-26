@@ -1,8 +1,8 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "conversationaly",
+    "productName": "Backchannel",
     "version": "1.4.1",
-    "identifier": "com.conversationaly.ai",
+    "identifier": "tech.madduck.backchannel",
     "build": {
         "frontendDist": "../out",
         "devUrl": "http://localhost:3118",
@@ -12,7 +12,7 @@
     "app": {
         "windows": [
             {
-                "title": "Conversationaly",
+                "title": "Backchannel",
                 "width": 1100,
                 "height": 700,
                 "minWidth": 720,
@@ -81,6 +81,9 @@
     },
     "bundle": {
         "active": true,
+        "publisher": "Backchannel",
+        "shortDescription": "A local meeting copilot",
+        "longDescription": "Backchannel records, transcribes and summarises meetings on this machine.",
         "targets": [
             "deb",
             "appimage",
@@ -108,6 +111,9 @@
             "hardenedRuntime": true
         },
         "windows": {
+            "wix": {
+                "upgradeCode": "754F497D-5DE8-4E51-A036-CD0DBA94C65D"
+            },
             "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
         },
         "linux": {

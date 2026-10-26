@@ -1,10 +1,10 @@
 [package]
 name = "conversationaly"
 version = "1.4.1"
-description = "A Tauri App for meeting minutes"
-authors = ["Sujith S"]
+description = "Backchannel, a local meeting copilot"
+authors = ["Backchannel"]
 license = "MIT"
-repository = "https://github.com/bykof/conversationaly"
+repository = "https://github.com/madduck-tech/backchannel"
 edition.workspace = true
 rust-version.workspace = true
 

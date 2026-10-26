@@ -82,7 +82,7 @@ CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
 # required, so that "the screen is absent because we skipped it" stops being indistinguishable from
 # "the screen is absent because its buttons were renamed" (#130).
 SEEDED_ONBOARDING=0
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 
 say "launching $APP on $PROFILE"
 mkdir -p "$PROFILE/home"
@@ -107,7 +107,7 @@ fi
 # suffix, and the store lives in the *data* directory rather than the config one -- both
 # settled by experiment, both easy to get wrong.
 if [ -n "${BC_PREFERRED_SYSTEM_DEVICE:-}" ]; then
-  store="$PROFILE/home/.local/share/com.conversationaly.ai"
+  store="$PROFILE/home/.local/share/tech.madduck.backchannel"
   mkdir -p "$store" "$PROFILE/rec"
   printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":null,"preferred_system_device":"%s"}}' \
     "$PROFILE/rec" "$BC_PREFERRED_SYSTEM_DEVICE" > "$store/recording_preferences.json"

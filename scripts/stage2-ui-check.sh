@@ -54,7 +54,7 @@ command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo 
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not an executable AppImage: $APP"
 
-# The application is single-instance: it claims com.conversationaly.ai.SingleInstance on the
+# The application is single-instance: it claims tech.madduck.backchannel.SingleInstance on the
 # session bus, and a second copy hands its argv to the first and exits. Under the driver that
 # looks like nothing at all -- the automation handshake never completes, five session attempts
 # fail, and the driver log says `hyper::Error(IncompleteMessage)`, which names the symptom and
@@ -82,7 +82,7 @@ done
     Stop it and re-run."
 
 if [ -z "$PROFILE" ]; then PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1; fi
-APPDATA="$PROFILE/home/.local/share/com.conversationaly.ai"
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA"
 # The onboarding marker alone -- no models. This pass never records, so it does not need them,
 # and that is what makes it cheap enough to run on every gate.
