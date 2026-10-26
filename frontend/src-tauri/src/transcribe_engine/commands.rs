@@ -318,10 +318,7 @@ pub(crate) fn resolve_recording_model(inputs: &ResolverInputs, builtin: impl Fn(
 /// Gather what the resolver reads, and resolve. The provider comes back too, for the pre-check.
 async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolution), String> {
     let stored = crate::api::api::api_get_transcript_config(app.clone(), app.state(), None).await;
-    let (provider, configured) = match &stored {
-        Ok(Some(config)) => (Some(config.provider.clone()), Some(config.model.clone())),
-        _ => (None, None),
-    };
+    let (provider, configured) = stored_choice(&stored);
     let provider_name = provider.clone().unwrap_or_default();
 
     if provider.as_deref().is_some_and(crate::config::is_builtin_transcript_provider) {
@@ -333,22 +330,35 @@ async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolutio
             catalogue: &[],
             downloading: &Default::default(),
         };
-        let resolution = resolve_recording_model(&inputs, |model| {
-            let weights = crate::summary::summary_engine::models::get_model_path(&app_data_dir, model).map_err(|e| e.to_string())?;
-            let projector = crate::summary::summary_engine::models::get_mmproj_path(&app_data_dir, model)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("{} cannot transcribe audio", model))?;
-            Ok([weights, projector]
-                .iter()
-                .map(|p| (p.file_name().unwrap_or_default().to_string_lossy().into_owned(), p.exists()))
-                .collect())
-        });
+        let resolution = resolve_recording_model(&inputs, |model| builtin_files(&app_data_dir, model));
         return Ok((provider_name, resolution));
     }
 
     transcribe_init().await?;
     let engine = engine()?;
     Ok((provider_name, resolve_with_engine(&engine, provider.as_deref(), configured.as_deref()).await?))
+}
+
+/// The provider and model the stored transcript config names; neither when it cannot be read, or
+/// says nothing, so the resolver falls back to the defaults.
+fn stored_choice(stored: &Result<Option<crate::api::api::TranscriptConfig>, String>) -> (Option<String>, Option<String>) {
+    match stored {
+        Ok(Some(config)) => (Some(config.provider.clone()), Some(config.model.clone())),
+        _ => (None, None),
+    }
+}
+
+/// An on-device audio model's two files under `app_data_dir`, the weights first, each by name and
+/// whether it is on disk; `Err` for an unknown model or one with no projector.
+fn builtin_files(app_data_dir: &std::path::PathBuf, model: &str) -> BuiltinFiles {
+    let weights = crate::summary::summary_engine::models::get_model_path(app_data_dir, model).map_err(|e| e.to_string())?;
+    let projector = crate::summary::summary_engine::models::get_mmproj_path(app_data_dir, model)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{} cannot transcribe audio", model))?;
+    Ok([weights, projector]
+        .iter()
+        .map(|p| (p.file_name().unwrap_or_default().to_string_lossy().into_owned(), p.exists()))
+        .collect())
 }
 
 /// The catalogue half of what the resolver reads, gathered from `engine`, and resolved. Split out of
@@ -731,6 +741,51 @@ mod recording_model_tests {
         engine.mark_download_in_flight(entry.name).await;
         let r = resolve_with_engine(&engine, None, Some(entry.name)).await.unwrap();
         assert_eq!(state(&r), Some(S::Downloading), "{r:?}");
+    }
+
+    /// The stored config's provider and model reach the resolver: a pre-check that read neither would
+    /// ask about the default model, which is #182's defect again (the gate's round-2 adversary, M8).
+    #[test]
+    fn the_stored_choice_is_what_the_resolver_is_asked_about() {
+        use crate::api::api::TranscriptConfig;
+        let stored = Ok(Some(TranscriptConfig { provider: "transcribe-cpp".into(), model: X.into(), api_key: None }));
+        assert_eq!(stored_choice(&stored), (Some("transcribe-cpp".to_string()), Some(X.to_string())));
+        assert_eq!(stored_choice(&Ok(None)), (None, None));
+        assert_eq!(stored_choice(&Err("no database".into())), (None, None));
+    }
+
+    /// The production file list for an on-device model: the configured model's own files, the
+    /// weights and the projector, each read from disk (M5, M6).
+    #[test]
+    fn an_on_device_models_files_are_its_own_and_both_are_read_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_data_dir = dir.path().to_path_buf();
+        let paths = |model: &str| {
+            let weights = crate::summary::summary_engine::models::get_model_path(&app_data_dir, model).unwrap();
+            let projector = crate::summary::summary_engine::models::get_mmproj_path(&app_data_dir, model).unwrap().unwrap();
+            (weights, projector)
+        };
+        let (e4b_weights, e4b_projector) = paths("gemma4:e4b");
+        let (e2b_weights, _) = paths("gemma4:e2b");
+        assert_ne!(e4b_weights, e2b_weights, "precondition: the two tiers have different weights");
+
+        let names = |files: &BuiltinFiles| files.as_ref().unwrap().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+        let present = |files: &BuiltinFiles| files.as_ref().unwrap().iter().map(|(_, p)| *p).collect::<Vec<_>>();
+        let files = builtin_files(&app_data_dir, "gemma4:e4b");
+        assert_eq!(
+            names(&files),
+            vec![e4b_weights.file_name().unwrap().to_string_lossy().into_owned(), e4b_projector.file_name().unwrap().to_string_lossy().into_owned()]
+        );
+        assert_eq!(present(&files), vec![false, false]);
+
+        for p in [&e4b_weights, &e4b_projector] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        assert_eq!(present(&builtin_files(&app_data_dir, "gemma4:e4b")), vec![true, true]);
+        std::fs::remove_file(&e4b_weights).unwrap();
+        assert_eq!(present(&builtin_files(&app_data_dir, "gemma4:e4b")), vec![false, true], "the weights are read from disk too");
+        assert!(builtin_files(&app_data_dir, "no-such-model").is_err());
     }
 
     /// Recording's pre-flight refuses every state but ready with today's message (#182 v4).
