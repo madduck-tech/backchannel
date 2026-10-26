@@ -54,10 +54,16 @@ test('a card leaves src/ exactly as it found it, and writes under its own base',
   try {
     const baseBefore = fs.statSync(base, { bigint: true }).mtimeNs;
     const before = snapshot(src);
+    const target = path.join(src, 'components', 'Logo.tsx');
+    assert.ok(before[target], 'precondition: the snapshot walked the card\'s own target');
     const [card] = buildCards(['src/components/Logo.tsx'], { base });
+    // And a card with no options: the path both callers and CI's gallery take, where a default
+    // pointing under src/ is seen only (round 3 measured all three checks green with it).
+    const [byDefault] = buildCards(['src/components/Logo.tsx']);
     const after = snapshot(src);
-    // Positive sentinels from the same run: the card drew, and it wrote (and removed) under `base`.
+    // Positive sentinels from the same run: the cards drew, and the first wrote (and removed) under `base`.
     assert.equal(card.kind, 'drawn', `the card did not draw: ${card.reason ?? ''}`);
+    assert.equal(byDefault.kind, 'drawn', `the default card did not draw: ${byDefault.reason ?? ''}`);
     assert.notEqual(fs.statSync(base, { bigint: true }).mtimeNs, baseBefore, 'the card wrote nothing under its base');
     const changed = Object.keys({ ...before, ...after }).filter((p) => before[p] !== after[p]);
     assert.deepEqual(changed, [], `a card changed src/:\n  ${changed.join('\n  ')}`);
