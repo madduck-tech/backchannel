@@ -35,9 +35,10 @@ const NOT_RUN_BY_THE_GATE = new Map([
    { coveredBy: 'test_chunked_resample_matches_single_pass',
      why: 'needs a media file and a loaded model, minutes per run; the decode arithmetic is asserted there' }],
   ['frontend/src-tauri/src/transcribe_engine/measurements.rs::every_family_decodes_on_the_pinned_engine',
-   { blocker: 'needs about 16.7 GB of models, one row per upstream family plus the default and the ' +
-              'repositories whose bytes changed (#169 condition 5); run by name and its output pasted ' +
-              'into the verdict of the change that moves the engine' }],
+   { blocker: 'needs about 20.5 GB of models, one row per upstream family plus the default, the ' +
+              'repositories whose bytes changed (#169 condition 5) and the repositories #175 added (its ' +
+              'condition 5); run by name and its output pasted into the verdict of the change that moves ' +
+              'the engine or the catalogue' }],
   ['frontend/src-tauri/src/transcribe_engine/measurements.rs::a_stream_commits_append_only_and_finalize_emits_the_tail',
    { blocker: 'needs 501 MB of streaming models (#169 condition 6); run by name and its output pasted ' +
               'into the verdict of the change that moves the engine' }],

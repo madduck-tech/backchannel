@@ -156,8 +156,9 @@ const fn fixture_row(name: &'static str, sample: &'static str, language: Option<
     Row { name, sample, language, rule, p, fixture: Some(fixture) }
 }
 
-/// One row per upstream family (16, by v0.4.1's `catalog/*.json`), the default, and one row per
-/// repository whose bytes changed where the family's smallest row is not already it. The `p` class is
+/// One row per upstream family (16, by v0.4.1's `catalog/*.json`), the default, one row per
+/// repository whose bytes changed where the family's smallest row is not already it, and one row per
+/// repository #175 added (granite_speech5_ctc is the seventeenth family). The `p` class is
 /// what the source says for the five token-building architectures (`engine.rs`, above
 /// `scored_confidence`), and None for every other.
 const ROWS: &[Row] = &[
@@ -190,6 +191,15 @@ const ROWS: &[Row] = &[
     row("parakeet-tdt-0.6b-v3-q8", "jfk.wav", "en", JFK, PClass::Real),
     row("multitalker-parakeet-streaming-0.6b-v1-q4", "jfk.wav", "en", JFK, PClass::Real),
     row("whisper-large-v3-turbo-q4", "jfk.wav", "en", JFK, PClass::None),
+    // One row per repository #175's regeneration added (its condition 5), each on a sample in a
+    // language the model advertises. The Arabic and German words are the ones whisper-large-v3-turbo,
+    // another family, also wrote for the same sample (#175's verdict). granite_speech5_ctc's class was
+    // measured with `what_a_family_puts_in_token_p` on jfk.wav: 22 finite rows, mean 0.987.
+    row("breeze-asr-25-q4", "zh.wav", "zh", Rule::Han { min: 6 }, PClass::None),
+    row("cohere-transcribe-arabic-07-2026-q4", "ar-short.wav", "ar", Rule::Words(&["النوم", "عملية", "الاستيقاظ", "فترة"]), PClass::None),
+    row("granite-speech-5.0-470m-turboctc-q4", "jfk.wav", "en", JFK, PClass::Real),
+    row("parakeet-primeline-q4", "fleurs-de.wav", "de", Rule::Words(&["griff", "wasser", "dinosaurier", "gewachsen"]), PClass::Real),
+    row("parakeet-ultra-q4", "jfk.wav", "en", JFK, PClass::Real),
 ];
 
 /// The fixture's text, after checking it is a `553f109` fixture recorded with `language`.
@@ -205,7 +215,7 @@ fn fixture_text(file: &str, language: Option<&str>) -> String {
 /// class, and, for the two ITN families, the ITN-off signature and the `553f109` words. (#169
 /// condition 5)
 #[test]
-#[ignore = "needs about 16.7 GB of models by the catalogue's size_mb (crate::measure); run by name, output pasted into #169's verdict"]
+#[ignore = "needs about 20.5 GB of models by the catalogue's size_mb (crate::measure); run by name, output pasted into #169's and #175's verdicts"]
 fn every_family_decodes_on_the_pinned_engine() {
     let dir = measure_model("moonshine-tiny-Q8_0.gguf").parent().unwrap().to_path_buf();
     let rt = tokio::runtime::Runtime::new().expect("a runtime");
