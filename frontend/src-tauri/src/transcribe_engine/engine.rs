@@ -1016,6 +1016,62 @@ mod tests {
         assert_eq!(TranscribeEngine::available_floor_bytes(entry.size_mb), decimal * 9 / 10);
     }
 
+    /// Each row against upstream's record at `revision`: its file's `size_bytes` must clear the row's
+    /// Available floor. Every failure is collected, with the joined count, before the test fails, so
+    /// one output says which rows and how many. (#190)
+    fn rows_against_the_pinned_records(rows: &[crate::config::TranscribeModel], revision: &str) -> Vec<String> {
+        let catalog = crate::measure::checkout_of(revision).join("catalog");
+        assert!(catalog.is_dir(), "no catalog/ at {} for transcribe.cpp {revision}", catalog.display());
+        let owner = crate::config::TRANSCRIBE_MODEL_BASE_URL.rsplit('/').next().unwrap();
+        let mut sizes: std::collections::HashMap<(String, String), u64> = std::collections::HashMap::new();
+        for entry in std::fs::read_dir(&catalog).unwrap().flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if file.starts_with('_') || !file.ends_with(".json") {
+                continue;
+            }
+            let record: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
+            let repo = record["published_repo"].as_str().unwrap_or_default().to_string();
+            for download in record["downloads"].as_array().into_iter().flatten() {
+                if let (Some(name), Some(bytes)) = (download["filename"].as_str(), download["size_bytes"].as_u64()) {
+                    sizes.insert((repo.clone(), name.to_string()), bytes);
+                }
+            }
+        }
+
+        let mut failures = Vec::new();
+        if rows.is_empty() {
+            failures.push("the catalogue has no rows".to_string());
+        }
+        let mut joined = 0;
+        for row in rows.iter() {
+            let key = (format!("{owner}/{}", row.hf_repo), row.filename.to_string());
+            match sizes.get(&key) {
+                None => failures.push(format!("{}: no record for {}/{}", row.name, key.0, key.1)),
+                Some(&bytes) => {
+                    joined += 1;
+                    let floor = TranscribeEngine::available_floor_bytes(row.size_mb);
+                    if bytes < floor {
+                        failures.push(format!("{}: {bytes} bytes, under its floor of {floor} (size_mb {})", row.name, row.size_mb));
+                    }
+                }
+            }
+        }
+        if joined != rows.len() {
+            failures.push(format!("joined {joined} of {} rows", rows.len()));
+        }
+        eprintln!("joined {joined} of {} rows against catalog/ at {revision}", rows.len());
+        failures
+    }
+
+    /// A complete download reads Available: every row's published size, upstream's record at the
+    /// pinned revision, clears its floor. `qwen3-asr-0.6b-q4`'s whole file did not, so it read
+    /// "Damaged download" as soon as Settings refreshed (#190).
+    #[test]
+    fn every_catalogue_row_clears_its_floor_by_the_pinned_record() {
+        let failures = rows_against_the_pinned_records(TRANSCRIBE_MODEL_CATALOG, &crate::measure::pinned_engine_revision());
+        assert!(failures.is_empty(), "RED:\n{}", failures.join("\n"));
+    }
+
     /// First run's search matches a model's family, and the family reaches the frontend only through
     /// this list (#166 condition 1g). Read from `discover_models`' own output, which is what
     /// `transcribe_get_available_models` returns, so a story's stub cannot stand in for it.
