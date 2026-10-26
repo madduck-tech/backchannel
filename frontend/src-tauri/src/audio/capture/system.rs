@@ -175,6 +175,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a machine with real output devices; run by gopnik.json stage 1"]
     async fn listing_system_audio_devices_returns_usable_names() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let device_list =
             super::list_system_audio_devices().expect("enumerating output devices failed on a machine that has them");
 

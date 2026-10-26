@@ -245,6 +245,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a real audio output device; run by gopnik.json stage 1"]
     async fn the_active_output_device_reports_usable_fields() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let info = get_active_audio_output()
             .await
             .expect("this machine has an audio output device");

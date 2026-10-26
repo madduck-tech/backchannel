@@ -63,6 +63,8 @@ pub(crate) enum Kind {
 pub(crate) struct Built<T> {
     pub value: T,
     pub kind: Kind,
+    /// The preferred value was tried and its construction timed out, leaking a thread.
+    pub timed_out: bool,
 }
 
 /// What a liveness check found.
@@ -70,6 +72,9 @@ pub(crate) struct Built<T> {
 pub(crate) enum Liveness {
     Alive,
     Dead,
+    /// No answer within the deadline: dead, and its thread is left waiting, so it counts toward
+    /// the timeout cap.
+    TimedOut,
 }
 
 /// What a retry of the preferred value gave.
@@ -78,8 +83,10 @@ pub(crate) enum Retry<T> {
     Failed { timed_out: bool },
 }
 
-/// Timed-out retries after which the process stops retrying: each one leaks a thread.
-const MAX_TIMED_OUT_RETRIES: u32 = 3;
+/// Timeouts after which the preferred value is not tried again: each one leaks a thread, and a
+/// check past its deadline may leave a still-connected client behind. Checks, rebuilds and retries
+/// all count.
+const MAX_TIMEOUTS: u32 = 3;
 
 struct Slot<T> {
     value: Arc<T>,
@@ -87,7 +94,7 @@ struct Slot<T> {
     generation: u64,
     checked: Instant,
     retried: Instant,
-    timed_out_retries: u32,
+    timeouts: u32,
 }
 
 /// One value built on first use and shared, rebuilt only when a liveness check says the shared one
@@ -106,11 +113,12 @@ impl<T> Shared<T> {
     }
 
     /// The shared value. The lock is held while a check, a build or a retry runs, so concurrent
-    /// callers that find one dead value build exactly one replacement.
+    /// callers that find one dead value build exactly one replacement. `build` is told whether the
+    /// preferred value may still be tried.
     pub(crate) fn get(
         &self,
         hold: bool,
-        build: impl Fn() -> Built<T>,
+        build: impl Fn(bool) -> Built<T>,
         check: impl Fn(&Arc<T>) -> Liveness,
         retry: impl Fn() -> Retry<T>,
     ) -> Arc<T> {
@@ -118,37 +126,20 @@ impl<T> Shared<T> {
         let now = Instant::now();
         match slot.as_mut() {
             None => {
-                let built = build();
+                let built = build(true);
                 *slot = Some(Slot {
                     value: Arc::new(built.value),
                     kind: built.kind,
                     generation: 1,
                     checked: now,
                     retried: now,
-                    timed_out_retries: 0,
+                    timeouts: u32::from(built.timed_out),
                 });
             }
             Some(s) if !hold && s.kind == Kind::Preferred && now.duration_since(s.checked) >= self.check_every => {
-                s.checked = now;
-                if check(&s.value) == Liveness::Dead {
-                    let built = build();
-                    s.value = Arc::new(built.value);
-                    s.kind = built.kind;
-                    s.generation += 1;
-                    s.retried = now;
-                    log::warn!(
-                        "The shared audio host stopped answering; rebuilt it (generation {}){}",
-                        s.generation,
-                        if built.kind == Kind::Fallback { " on the fallback, retrying the preferred host" } else { "" }
-                    );
-                }
+                Self::check_and_rebuild(s, now, &build, &check);
             }
-            Some(s)
-                if !hold
-                    && s.kind == Kind::Fallback
-                    && s.timed_out_retries < MAX_TIMED_OUT_RETRIES
-                    && now.duration_since(s.retried) >= self.retry_every =>
-            {
+            Some(s) if !hold && s.kind == Kind::Fallback && s.timeouts < MAX_TIMEOUTS && now.duration_since(s.retried) >= self.retry_every => {
                 Self::try_preferred(s, now, &retry);
             }
             Some(_) => {}
@@ -156,15 +147,42 @@ impl<T> Shared<T> {
         slot.as_ref().map(|s| s.value.clone()).expect("the slot was filled above")
     }
 
-    /// Retry the preferred value now, whatever the interval, if the fallback is being served and
-    /// the timeout cap is not reached. What a recording start does first. (#223)
-    pub(crate) fn retry_now(&self, retry: impl Fn() -> Retry<T>) {
+    /// What a recording start does before the host is held for it, whatever the intervals: on the
+    /// preferred value, the liveness check and a rebuild if it is dead; on the fallback, a retry,
+    /// unless the timeout cap is reached. Without the check, a start after a sound-server restart
+    /// would find the dead host held, fail, and hold it again at every press. (#223)
+    pub(crate) fn refresh_now(&self, build: impl Fn(bool) -> Built<T>, check: impl Fn(&Arc<T>) -> Liveness, retry: impl Fn() -> Retry<T>) {
         let mut slot = self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(s) = slot.as_mut() {
-            if s.kind == Kind::Fallback && s.timed_out_retries < MAX_TIMED_OUT_RETRIES {
-                Self::try_preferred(s, Instant::now(), &retry);
-            }
+        let now = Instant::now();
+        match slot.as_mut() {
+            Some(s) if s.kind == Kind::Preferred => Self::check_and_rebuild(s, now, &build, &check),
+            Some(s) if s.kind == Kind::Fallback && s.timeouts < MAX_TIMEOUTS => Self::try_preferred(s, now, &retry),
+            _ => {}
         }
+    }
+
+    fn check_and_rebuild(s: &mut Slot<T>, now: Instant, build: &impl Fn(bool) -> Built<T>, check: &impl Fn(&Arc<T>) -> Liveness) {
+        s.checked = now;
+        let verdict = check(&s.value);
+        if verdict == Liveness::Alive {
+            return;
+        }
+        if verdict == Liveness::TimedOut {
+            s.timeouts += 1;
+        }
+        let built = build(s.timeouts < MAX_TIMEOUTS);
+        if built.timed_out {
+            s.timeouts += 1;
+        }
+        s.value = Arc::new(built.value);
+        s.kind = built.kind;
+        s.generation += 1;
+        s.retried = now;
+        log::warn!(
+            "The shared audio host stopped answering ({verdict:?}); rebuilt it (generation {}){}",
+            s.generation,
+            if built.kind == Kind::Fallback { " on the fallback" } else { "" }
+        );
     }
 
     fn try_preferred(s: &mut Slot<T>, now: Instant, retry: &impl Fn() -> Retry<T>) {
@@ -179,9 +197,9 @@ impl<T> Shared<T> {
             }
             Retry::Failed { timed_out: false } => {}
             Retry::Failed { timed_out: true } => {
-                s.timed_out_retries += 1;
-                if s.timed_out_retries == MAX_TIMED_OUT_RETRIES {
-                    log::warn!("The preferred audio host timed out {MAX_TIMED_OUT_RETRIES} times; no more retries in this process");
+                s.timeouts += 1;
+                if s.timeouts == MAX_TIMEOUTS {
+                    log::warn!("The preferred audio host timed out {MAX_TIMEOUTS} times; no more attempts in this process");
                 }
             }
         }
@@ -197,11 +215,21 @@ pub(crate) fn within<R: Send + 'static>(deadline: Duration, f: impl FnOnce() -> 
     rx.recv_timeout(deadline).ok()
 }
 
+/// One host-level `request` on `value`, as liveness, within `deadline`: past it, `TimedOut`.
+pub(crate) fn check_within<T: Send + Sync + 'static>(
+    value: &Arc<T>,
+    deadline: Duration,
+    request: fn(&T) -> Result<(), cpal::Error>,
+) -> Liveness {
+    let value = value.clone();
+    within(deadline, move || liveness(request(&value))).unwrap_or(Liveness::TimedOut)
+}
+
 /// cpal's `INIT_TIMEOUT` (`host/pulseaudio/mod.rs:26`), used as the deadline for a liveness check.
 const CHECK_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Whether a failed construction timed out. A real timeout cannot return before cpal's 2 s, so
-/// none is missed; a slow refusal is over-counted, which only stops retries early. cpal reports
+/// none is missed; a slow refusal is over-counted, which only stops attempts early. cpal reports
 /// `HostUnavailable` for a timeout and for a missing socket alike, so the kind cannot tell them.
 /// The 1.5 s rests on a private cpal constant: a cpal update re-checks it.
 pub(crate) fn construction_timed_out(elapsed: Duration) -> bool {
@@ -217,15 +245,20 @@ fn now_ms() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// Whether the host may not change now: a recording runs, or a start began less than 30 s ago.
-fn held() -> bool {
-    crate::audio::recording_commands::is_recording_now() || now_ms() < HELD_UNTIL_MS.load(Ordering::SeqCst)
+/// Whether the host may not change: a recording runs, or a start began less than 30 s ago.
+pub(crate) fn held_at(recording: bool, now_ms: u64, held_until_ms: u64) -> bool {
+    recording || now_ms < held_until_ms
 }
 
-/// Called by a recording start before it asks for any device: a due retry happens now, so the
-/// start does not begin on ALSA while PulseAudio is back, and then the host is held for the start.
+fn held() -> bool {
+    held_at(crate::audio::recording_commands::is_recording_now(), now_ms(), HELD_UNTIL_MS.load(Ordering::SeqCst))
+}
+
+/// Called by a recording start before it asks for any device. The host is checked, and rebuilt if
+/// dead, or on ALSA PulseAudio is retried, now; then it is held for the start, so one start never
+/// mixes hosts (#223, the 11:01 recording).
 pub fn prepare_for_recording() {
-    HOST.retry_now(retry_preferred);
+    HOST.refresh_now(build_host, check_host, retry_preferred);
     HELD_UNTIL_MS.store(now_ms() + START_HOLD.as_millis() as u64, Ordering::SeqCst);
 }
 
@@ -240,30 +273,41 @@ pub fn audio_host() -> Arc<cpal::Host> {
     HOST.get(held(), build_host, check_host, retry_preferred)
 }
 
-/// One host-level request on the shared host, within the deadline. Past it, the host counts as
-/// dead: a server that stays connected and never answers is no use to a recording either.
+/// One host-level request on the shared host, within the deadline. Listing the outputs is two
+/// round trips on the shared connection (`list_sinks`, `list_sources`).
 fn check_host(host: &Arc<cpal::Host>) -> Liveness {
-    let host = host.clone();
-    within(CHECK_DEADLINE, move || liveness(host.output_devices().map(|_| ()))).unwrap_or(Liveness::Dead)
+    check_within(host, CHECK_DEADLINE, |h| h.output_devices().map(|_| ()))
 }
 
-/// On Linux, PulseAudio, and ALSA if PulseAudio cannot be constructed (ADR 0015): each by its id,
-/// not through `default_host()`, which hides PulseAudio's error behind ALSA and probes it twice
-/// (`cpal/src/platform/mod.rs:833-847`). Elsewhere the default host is the only host.
-fn build_host() -> Built<cpal::Host> {
+/// On Linux, PulseAudio when it may still be tried, and ALSA otherwise or if PulseAudio cannot be
+/// constructed (ADR 0015): each by its id, not through `default_host()`, which hides PulseAudio's
+/// error behind ALSA and probes it twice (`cpal/src/platform/mod.rs:833-847`). Elsewhere the
+/// default host is the only host.
+fn build_host(preferred_allowed: bool) -> Built<cpal::Host> {
     #[cfg(test)]
     tests::refuse_unless_opted_in();
     #[cfg(target_os = "linux")]
-    let built = match cpal::host_from_id(cpal::HostId::PulseAudio) {
-        Ok(host) => Built { value: host, kind: Kind::Preferred },
-        Err(e) => {
-            log::warn!("PulseAudio is unavailable ({e}); using ALSA and retrying PulseAudio every 10 s");
-            let host = cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host());
-            Built { value: host, kind: Kind::Fallback }
+    let built = {
+        let started = Instant::now();
+        let attempt = if preferred_allowed { Some(cpal::host_from_id(cpal::HostId::PulseAudio)) } else { None };
+        match attempt {
+            Some(Ok(host)) => Built { value: host, kind: Kind::Preferred, timed_out: false },
+            attempt => {
+                let timed_out = matches!(attempt, Some(Err(_))) && construction_timed_out(started.elapsed());
+                match attempt {
+                    Some(Err(e)) => log::warn!("PulseAudio is unavailable ({e}); using ALSA, retrying PulseAudio every 10 s"),
+                    _ => log::warn!("PulseAudio timed out {MAX_TIMEOUTS} times; using ALSA for the rest of this process"),
+                }
+                let host = cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host());
+                Built { value: host, kind: Kind::Fallback, timed_out }
+            }
         }
     };
     #[cfg(not(target_os = "linux"))]
-    let built = Built { value: cpal::default_host(), kind: Kind::Only };
+    let built = {
+        let _ = preferred_allowed;
+        Built { value: cpal::default_host(), kind: Kind::Only, timed_out: false }
+    };
     log::info!("Audio host selected for this process: {:?}", built.value.id());
     built
 }
@@ -344,11 +388,16 @@ pub(crate) mod tests {
     }
 
     /// A counting factory over a plain value: `fallback_from` is the call number from which it
-    /// returns the fallback, as a PulseAudio that refuses would make `default_host()` do.
-    fn factory(count: &AtomicUsize, fallback_from: usize) -> impl Fn() -> Built<usize> + '_ {
-        move || {
+    /// returns the fallback, as a PulseAudio that refuses would; `preferred_allowed` false always
+    /// gives the fallback, as the timeout cap does. `tried_preferred` counts calls that were allowed.
+    fn factory<'a>(count: &'a AtomicUsize, fallback_from: usize, tried_preferred: &'a AtomicUsize) -> impl Fn(bool) -> Built<usize> + 'a {
+        move |preferred_allowed| {
             let n = count.fetch_add(1, Ordering::SeqCst) + 1;
-            Built { value: n, kind: if n >= fallback_from { Kind::Fallback } else { Kind::Preferred } }
+            if preferred_allowed {
+                tried_preferred.fetch_add(1, Ordering::SeqCst);
+            }
+            let fallback = !preferred_allowed || n >= fallback_from;
+            Built { value: n, kind: if fallback { Kind::Fallback } else { Kind::Preferred }, timed_out: false }
         }
     }
 
@@ -364,17 +413,30 @@ pub(crate) mod tests {
     }
 
     const HOUR: Duration = Duration::from_secs(3600);
+    const ALIVE: fn(&Arc<usize>) -> Liveness = |_| Liveness::Alive;
+    const DEAD: fn(&Arc<usize>) -> Liveness = |_| Liveness::Dead;
+    const DEAD_FIRST: fn(&Arc<usize>) -> Liveness = |v| if **v == 1 { Liveness::Dead } else { Liveness::Alive };
+
+    struct Counters {
+        builds: AtomicUsize,
+        retries: AtomicUsize,
+        preferred: AtomicUsize,
+    }
+
+    fn counters() -> Counters {
+        Counters { builds: AtomicUsize::new(0), retries: AtomicUsize::new(0), preferred: AtomicUsize::new(0) }
+    }
 
     #[test]
     fn a_hundred_calls_build_the_host_once() {
         let shared = Shared::new(HOUR, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        let first = shared.get(false, factory(&count, usize::MAX), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+        let c = counters();
+        let first = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         for _ in 0..99 {
-            let next = shared.get(false, factory(&count, usize::MAX), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+            let next = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
             assert!(Arc::ptr_eq(&first, &next));
         }
-        assert_eq!((count.load(Ordering::SeqCst), retries.load(Ordering::SeqCst)), (1, 0));
+        assert_eq!((c.builds.load(Ordering::SeqCst), c.retries.load(Ordering::SeqCst)), (1, 0));
     }
 
     /// The fallback is remembered: a first construction that fell back is not rebuilt. Counted, not
@@ -382,104 +444,127 @@ pub(crate) mod tests {
     #[test]
     fn a_first_construction_that_fell_back_is_not_rebuilt() {
         let shared = Shared::new(Duration::ZERO, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let c = counters();
         for _ in 0..100 {
-            shared.get(false, factory(&count, 1), |_| Liveness::Dead, retry(&retries, Some(false), 0));
+            shared.get(false, factory(&c.builds, 1, &c.preferred), DEAD, retry(&c.retries, Some(false), 0));
         }
-        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(c.builds.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn a_dead_host_is_rebuilt_once_and_later_calls_get_the_new_one() {
         let shared = Shared::new(Duration::ZERO, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        let first = shared.get(false, factory(&count, usize::MAX), |_| Liveness::Alive, retry(&retries, Some(false), 0));
-        let dead_first = |v: &Arc<usize>| if **v == 1 { Liveness::Dead } else { Liveness::Alive };
-        let second = shared.get(false, factory(&count, usize::MAX), dead_first, retry(&retries, Some(false), 0));
+        let c = counters();
+        let first = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        let second = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), DEAD_FIRST, retry(&c.retries, Some(false), 0));
         assert!(!Arc::ptr_eq(&first, &second));
         for _ in 0..100 {
-            assert!(Arc::ptr_eq(&second, &shared.get(false, factory(&count, usize::MAX), dead_first, retry(&retries, Some(false), 0))));
+            assert!(Arc::ptr_eq(&second, &shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), DEAD_FIRST, retry(&c.retries, Some(false), 0))));
         }
-        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert_eq!(c.builds.load(Ordering::SeqCst), 2);
     }
 
+    /// 8 callers find one dead host at once. The check waits up to 200 ms for all 8 to arrive, so a
+    /// seam that let them check concurrently would see all 8 rebuild (9 builds); with the lock held
+    /// across check and rebuild, one arrives at a time and one rebuild happens.
     #[test]
     fn concurrent_callers_that_find_one_dead_host_build_one_replacement() {
         let shared = Shared::new(Duration::ZERO, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        shared.get(false, factory(&count, usize::MAX), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+        let c = counters();
+        shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        let arrived = AtomicUsize::new(0);
+        let check = |v: &Arc<usize>| {
+            arrived.fetch_add(1, Ordering::SeqCst);
+            let until = Instant::now() + Duration::from_millis(200);
+            while arrived.load(Ordering::SeqCst) < 8 && Instant::now() < until {
+                std::thread::yield_now();
+            }
+            if **v == 1 { Liveness::Dead } else { Liveness::Alive }
+        };
         std::thread::scope(|scope| {
             for _ in 0..8 {
-                scope.spawn(|| {
-                    shared.get(
-                        false,
-                        factory(&count, usize::MAX),
-                        |v: &Arc<usize>| if **v == 1 { Liveness::Dead } else { Liveness::Alive },
-                        retry(&retries, Some(false), 0),
-                    )
-                });
+                scope.spawn(|| shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), check, retry(&c.retries, Some(false), 0)));
             }
         });
-        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert_eq!(c.builds.load(Ordering::SeqCst), 2);
     }
 
     /// While on the fallback, the preferred host is retried once per interval, not on every call.
     #[test]
     fn the_fallback_retries_the_preferred_host_at_most_once_per_interval() {
         let shared = Shared::new(Duration::ZERO, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let c = counters();
         for _ in 0..100 {
-            shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+            shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         }
-        assert_eq!(retries.load(Ordering::SeqCst), 0, "no retry before the interval has passed");
+        assert_eq!(c.retries.load(Ordering::SeqCst), 0, "no retry before the interval has passed");
     }
 
     #[test]
     fn a_retry_that_succeeds_makes_the_preferred_host_shared_again() {
         let shared = Shared::new(HOUR, Duration::ZERO);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        let fallback = shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99));
+        let c = counters();
+        let fallback = shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99));
         assert_eq!(*fallback, 1);
-        let back = shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99));
+        let back = shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99));
         assert_eq!(*back, 99, "the preferred host is shared again");
         for _ in 0..100 {
-            assert_eq!(*shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99)), 99);
+            assert_eq!(*shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 99);
         }
-        assert_eq!((count.load(Ordering::SeqCst), retries.load(Ordering::SeqCst)), (1, 1));
+        assert_eq!((c.builds.load(Ordering::SeqCst), c.retries.load(Ordering::SeqCst)), (1, 1));
     }
 
-    /// Only a timed-out retry leaks a thread, so only those are capped; fast failures go on.
+    /// Only a timed-out attempt leaks a thread, so only those are capped; fast failures go on.
     #[test]
     fn timed_out_retries_stop_after_three_and_fast_failures_go_on() {
         let shared = Shared::new(HOUR, Duration::ZERO);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let c = counters();
         for _ in 0..100 {
-            shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, Some(true), 0));
+            shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(true), 0));
         }
-        assert_eq!(retries.load(Ordering::SeqCst), 3);
+        assert_eq!(c.retries.load(Ordering::SeqCst), 3);
 
         let shared = Shared::new(HOUR, Duration::ZERO);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+        let c = counters();
+        shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         for _ in 0..100 {
-            shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+            shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         }
-        assert_eq!(retries.load(Ordering::SeqCst), 100);
+        assert_eq!(c.retries.load(Ordering::SeqCst), 100);
+    }
+
+    /// A check past its deadline counts toward the cap; at the cap, a dead host is rebuilt on the
+    /// fallback without trying the preferred one again. A slow server then costs at most 3 clients.
+    #[test]
+    fn checks_past_their_deadline_count_toward_the_cap() {
+        let shared = Shared::new(Duration::ZERO, HOUR);
+        let c = counters();
+        shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        for _ in 0..10 {
+            shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), |_| Liveness::TimedOut, retry(&c.retries, Some(false), 0));
+        }
+        // The first build and the rebuilds after the first two timed-out checks try the preferred
+        // host (3 in all); the third timeout reaches the cap, so that rebuild is the fallback (build
+        // 4), which is never checked again.
+        assert_eq!(c.preferred.load(Ordering::SeqCst), 3, "the preferred host was tried past the cap");
+        assert_eq!(*shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 4);
+        assert_eq!(c.retries.load(Ordering::SeqCst), 0, "a retry past the cap");
     }
 
     /// The check runs at most once per interval: a dead answer inside it changes nothing.
     #[test]
     fn the_liveness_check_runs_at_most_once_per_interval() {
         let shared = Shared::new(HOUR, HOUR);
-        let (count, retries, checks) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
+        let c = counters();
+        let checks = AtomicUsize::new(0);
         let check = |_: &Arc<usize>| {
             checks.fetch_add(1, Ordering::SeqCst);
             Liveness::Dead
         };
         for _ in 0..100 {
-            shared.get(false, factory(&count, usize::MAX), check, retry(&retries, Some(false), 0));
+            shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), check, retry(&c.retries, Some(false), 0));
         }
-        assert_eq!((count.load(Ordering::SeqCst), checks.load(Ordering::SeqCst)), (1, 0));
+        assert_eq!((c.builds.load(Ordering::SeqCst), checks.load(Ordering::SeqCst)), (1, 0));
     }
 
     /// While a recording holds the host, neither a dead answer nor a due retry changes it; once
@@ -487,51 +572,71 @@ pub(crate) mod tests {
     #[test]
     fn a_held_host_does_not_change_until_released() {
         let shared = Shared::new(Duration::ZERO, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        let first = shared.get(false, factory(&count, usize::MAX), |_| Liveness::Alive, retry(&retries, Some(false), 0));
+        let c = counters();
+        let first = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         for _ in 0..10 {
-            let held = shared.get(true, factory(&count, usize::MAX), |_| Liveness::Dead, retry(&retries, Some(false), 0));
+            let held = shared.get(true, factory(&c.builds, usize::MAX, &c.preferred), DEAD, retry(&c.retries, Some(false), 0));
             assert!(Arc::ptr_eq(&first, &held), "the host changed while held");
         }
-        let released = shared.get(false, factory(&count, usize::MAX), |_| Liveness::Dead, retry(&retries, Some(false), 0));
+        let released = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), DEAD, retry(&c.retries, Some(false), 0));
         assert!(!Arc::ptr_eq(&first, &released), "the dead host was not rebuilt once released");
 
         let shared = Shared::new(HOUR, Duration::ZERO);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99));
-        assert_eq!(*shared.get(true, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99)), 1, "retried while held");
-        assert_eq!(*shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99)), 99);
+        let c = counters();
+        shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99));
+        assert_eq!(*shared.get(true, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 1, "retried while held");
+        assert_eq!(*shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 99);
     }
 
-    /// A start retries the preferred host at once, inside the interval, unless the cap is reached.
+    /// A start, before its hold, checks a preferred host and rebuilds it if dead, inside the check
+    /// interval; on the fallback it retries inside the retry interval, but not past the cap.
     #[test]
-    fn a_start_retries_the_preferred_host_without_waiting_for_the_interval() {
+    fn a_start_refreshes_the_host_whatever_the_intervals() {
         let shared = Shared::new(HOUR, HOUR);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99));
-        shared.retry_now(retry(&retries, None, 99));
-        assert_eq!(*shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, None, 99)), 99);
+        let c = counters();
+        let first = shared.get(false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        shared.refresh_now(factory(&c.builds, usize::MAX, &c.preferred), DEAD_FIRST, retry(&c.retries, Some(false), 0));
+        let after = shared.get(true, factory(&c.builds, usize::MAX, &c.preferred), DEAD_FIRST, retry(&c.retries, Some(false), 0));
+        assert!(!Arc::ptr_eq(&first, &after), "a start found the dead host and kept it");
+
+        let shared = Shared::new(HOUR, HOUR);
+        let c = counters();
+        shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99));
+        shared.refresh_now(factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99));
+        assert_eq!(*shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 99);
 
         let shared = Shared::new(HOUR, Duration::ZERO);
-        let (count, retries) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let c = counters();
         for _ in 0..10 {
-            shared.get(false, factory(&count, 1), |_| Liveness::Alive, retry(&retries, Some(true), 0));
+            shared.get(false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(true), 0));
         }
-        shared.retry_now(retry(&retries, Some(true), 0));
-        assert_eq!(retries.load(Ordering::SeqCst), 3, "a start retried past the timeout cap");
+        shared.refresh_now(factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(true), 0));
+        assert_eq!(c.retries.load(Ordering::SeqCst), 3, "a start retried past the timeout cap");
+    }
+
+    #[test]
+    fn the_host_is_held_while_recording_and_for_the_start_window() {
+        assert!(held_at(true, 100_000, 0), "a running recording holds the host");
+        assert!(held_at(false, 10_000, 30_000), "a start holds it for its window");
+        assert!(!held_at(false, 30_000, 30_000), "and releases it after");
     }
 
     /// The liveness check cannot hold its caller past the deadline, however long the request hangs.
     #[test]
-    fn a_check_that_never_answers_gives_up_at_its_deadline() {
+    fn a_check_that_never_answers_times_out_at_its_deadline() {
+        struct Hung(Mutex<mpsc::Receiver<()>>);
         let (never_tx, never_rx) = mpsc::channel::<()>();
+        let hung = Arc::new(Hung(Mutex::new(never_rx)));
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let answer = within(Duration::from_millis(100), move || never_rx.recv().ok());
-            let _ = done_tx.send(answer);
+            let verdict = check_within(&hung, Duration::from_millis(100), |h: &Hung| {
+                let _ = h.0.lock().unwrap().recv();
+                Ok(())
+            });
+            let _ = done_tx.send(verdict);
         });
-        let answer = done_rx.recv_timeout(Duration::from_secs(2)).expect("the caller was held past the deadline");
-        assert_eq!(answer, None);
+        let verdict = done_rx.recv_timeout(Duration::from_secs(2)).expect("the caller was held past the deadline");
+        assert_eq!(verdict, Liveness::TimedOut);
         drop(never_tx);
     }
 
