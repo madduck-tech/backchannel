@@ -1,6 +1,5 @@
 <div align="center" style="border-bottom: none">
-    <h1>Conversationaly</h1>
-    <a href="https://github.com/bykof/conversationaly/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/bykof/conversationaly?style=flat"></a>
+    <h1>Backchannel</h1>
     <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
     <img src="https://img.shields.io/badge/Supported_OS-macOS,_Windows,_Linux-white" alt="Supported OS">
     <h3>Privacy-First AI Meeting Assistant</h3>
@@ -10,7 +9,7 @@ Records your meetings, transcribes them live, and writes the summary — on your
 
 </p>
 
-<img src="docs/imgs/live-recording.gif" alt="Conversationaly opening, a recording starting, and the first spoken words being transcribed live" width="100%">
+<img src="docs/imgs/live-recording.gif" alt="Backchannel opening, a recording starting, and the first spoken words being transcribed live" width="100%">
 
 </div>
 
@@ -31,7 +30,7 @@ Records your meetings, transcribes them live, and writes the summary — on your
 
 ## Introduction
 
-Conversationaly is a desktop app (macOS, Windows, Linux) that captures your microphone and system audio, transcribes the meeting as it happens, and generates a summary. Transcription models and the summary LLM both run locally by default — nothing is sent anywhere. Cloud providers are available if you want them, but they are opt-in, per-feature.
+Backchannel is a desktop app (macOS, Windows, Linux) that captures your microphone and system audio, transcribes the meeting as it happens, and generates a summary. Transcription models and the summary LLM both run locally by default — nothing is sent anywhere. Cloud providers are available if you want them, but they are opt-in, per-feature.
 
 It is a fork of [Meetily](https://github.com/Zackriya-Solutions/meeting-minutes), rebuilt around [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and a bundled llama.cpp sidecar. It is fully free — there is no paid tier, no license key, no telemetry.
 
@@ -55,18 +54,7 @@ It is a fork of [Meetily](https://github.com/Zackriya-Solutions/meeting-minutes)
 
 ## Installation
 
-Prebuilt installers (macOS `.dmg`, Windows `.exe`, Linux `.deb`/`.rpm`/`.AppImage`) are published on the [Releases page](https://github.com/bykof/conversationaly/releases) when a version is tagged, each alongside a `SHA256SUMS` file to check them against.
-
-```bash
-# macOS
-brew install --cask --no-quarantine bykof/tap/conversationaly
-```
-
-```powershell
-# Windows
-scoop bucket add conversationaly https://github.com/bykof/conversationaly
-scoop install conversationaly
-```
+Prebuilt installers (macOS `.dmg`, Windows `.exe` and `.msi`, Linux `.AppImage` and `.deb`) are published as pre-releases on the [Releases page](https://github.com/madduck-tech/backchannel/releases), each alongside a `SHA256SUMS` file to check them against. Linux is tested end to end; macOS and Windows are built by CI and not yet run by the project.
 
 The builds are not code-signed, so macOS and Windows each block them once on
 first launch. [docs/INSTALL.md](docs/INSTALL.md) has the click-through for every
@@ -78,8 +66,8 @@ microphone permission after an update.
 Requires Rust, Node.js, pnpm, and cmake. See [docs/BUILDING.md](docs/BUILDING.md) for per-platform prerequisites.
 
 ```bash
-git clone https://github.com/bykof/conversationaly
-cd conversationaly/frontend
+git clone https://github.com/madduck-tech/backchannel
+cd backchannel/frontend
 pnpm install
 
 # macOS
@@ -147,7 +135,7 @@ MIT — see [LICENSE.md](LICENSE.md).
 
 ## Acknowledgments
 
-- Conversationaly is a fork of [Meetily](https://github.com/Zackriya-Solutions/meeting-minutes) by Zackriya Solutions, which it builds on under the MIT license.
+- Backchannel is a fork of [Conversationaly](https://github.com/bykof/conversationaly) by Michael Bykovski, itself a fork of [Meetily](https://github.com/Zackriya-Solutions/meeting-minutes) by Zackriya Solutions. It builds on both under the MIT license.
 - Transcription runs on [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), built on [ggml](https://github.com/ggerganov/ggml) / [whisper.cpp](https://github.com/ggerganov/whisper.cpp).
 - Local LLM inference uses [llama.cpp](https://github.com/ggerganov/llama.cpp) via [llama-cpp-2](https://crates.io/crates/llama-cpp-2).
 - We borrowed some code from [Screenpipe](https://github.com/mediar-ai/screenpipe) and [transcribe-rs](https://crates.io/crates/transcribe-rs).

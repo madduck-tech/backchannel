@@ -669,7 +669,9 @@ jobs:
           sudo apt-get install -y fuse libfuse2
 
       - name: Remove libwayland-client.so from AppImage
-        if: contains(inputs.platform, 'ubuntu')
+        # Not on a release leg: tauri-action has already uploaded the AppImage by now, so this
+        # never changes the released file, and a failure here would skip SHA256SUMS (#229).
+        if: contains(inputs.platform, 'ubuntu') && inputs.release-id == ''
         run: |
           # Find the AppImage file
           APPIMAGE_PATH=$(find target/${{ steps.build-profile.outputs.profile }}/bundle/appimage -name "*.AppImage" | head -1)

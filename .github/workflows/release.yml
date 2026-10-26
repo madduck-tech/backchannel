@@ -75,16 +75,21 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Conversationaly v${{ steps.get-version.outputs.version }}`,
+              name: `Backchannel v${{ steps.get-version.outputs.version }}`,
+              // Pinned to the commit this run builds. Without it, publishing cuts the tag from
+              // the default branch's head at that moment, which may be a commit nobody built (#229).
+              target_commitish: context.sha,
               draft: true,
-              prerelease: false,
+              // The first releases go to the product owner's team, not to everyone (#229).
+              prerelease: true,
               generate_release_notes: true
             })
             console.log(`Created draft release with ID: ${data.id}`)
             return data.id
 
   # STEP 2: Build all platforms and upload directly to release
-  # Note: Linux builds are excluded from release (only macOS and Windows)
+  # macOS (Apple Silicon), Windows and Linux. Linux was excluded upstream; it is the one platform
+  # proven end to end (ADR 0005), on the runner stage2-artifact.yml builds the verified AppImage on (#229).
   build-all-platforms:
     needs: create-release
     permissions:
@@ -99,6 +104,9 @@ jobs:
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
+          - platform: "ubuntu-24.04"
+            args: ""
+            target: "x86_64-unknown-linux-gnu"
 
     uses: ./.github/workflows/build.yml
     with:
@@ -128,7 +136,7 @@ jobs:
           # verify a download. The release is still a draft here, so assets are
           # fetched by id: the by-tag endpoint does not return drafts.
           gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
-            --jq '.[] | select(.name | test("\\.(dmg|exe|msi|deb|rpm|AppImage)$")) | "\(.id) \(.name)"' > assets.txt
+            --jq '.[] | select(.name | test("\\.(dmg|exe|msi|deb|rpm|AppImage)$|\\.app\\.tar\\.gz$")) | "\(.id) \(.name)"' > assets.txt
 
           if [ ! -s assets.txt ]; then
             echo "::error::No installer assets found on release ${RELEASE_ID}"
@@ -194,6 +202,7 @@ jobs:
           echo "Uploaded assets (via tauri-action):"
           echo "  - macOS: DMG installer + app bundle (no updater artifact, no .sig - see #4)"
           echo "  - Windows: MSI + NSIS installers (signCommand is a no-op without DIGICERT_KEYPAIR_ALIAS)"
+          echo "  - Linux: AppImage + .deb (x86_64, built on Ubuntu 24.04)"
           echo "  - Updater manifest: none. This fork owns no updater identity yet (#4, #79)."
           echo ""
           echo "Next steps:"
