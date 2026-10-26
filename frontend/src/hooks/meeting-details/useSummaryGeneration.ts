@@ -1,3 +1,4 @@
+import { summaryEngineLabel } from '@/lib/summary-engine';
 import { useState, useCallback } from 'react';
 import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
@@ -126,7 +127,7 @@ export function useSummaryGeneration({
 
       // Show toast notification for generation start
       toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
-        description: `Using ${modelConfig.provider}/${modelConfig.model}`,
+        description: `Using ${summaryEngineLabel(modelConfig.provider, modelConfig.model)}`,
         duration: 3000,
       });
 

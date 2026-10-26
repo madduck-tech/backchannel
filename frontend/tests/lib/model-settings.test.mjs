@@ -291,6 +291,20 @@ const click = async (el) => {
     'the agent is saved as the provider with no key, not with the one the field still held'
   );
 
+  // #226: a model the field still holds (the on-device default ConfigContext used to fill in) is not
+  // saved with an agent CLI either.
+  const stale = await render({
+    agents: [{ id: 'codex', found: '~/.local/bin/codex', loggedIn: true }],
+    config: { provider: 'codex', model: 'gemma4:e2b' },
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  await click(saveButton(stale.container));
+  assert.deepEqual(
+    { provider: stale.seen.saved[0]?.provider, model: stale.seen.saved[0]?.model },
+    { provider: 'codex', model: '' },
+    'an agent CLI is saved with no model, not with the one the field still held'
+  );
+
   const loggedOut = await render({
     agents: [{ id: 'codex', found: '~/.local/bin/codex', loggedIn: false }],
     config: { provider: 'codex', model: '' },
