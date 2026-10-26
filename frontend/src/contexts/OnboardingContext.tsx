@@ -29,7 +29,7 @@ interface OnboardingStatus {
  * `complete_onboarding` as it stands. `a-resumed-first-run-keeps-its-choices.test.mjs` holds this list
  * equal to the screen's.
  */
-export const SUMMARISER_IDS = ['builtin-ai', 'ollama', 'claude', 'openai', 'groq', 'openrouter', 'custom-openai'] as const;
+export const SUMMARISER_IDS = ['builtin-ai', 'ollama', 'claude', 'openai', 'groq', 'openrouter', 'custom-openai', 'claude-code', 'codex'] as const;
 
 interface SummaryModelProgressInfo {
   percent: number;
@@ -578,19 +578,25 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         saveTimeoutRef.current = undefined;
       }
 
-      let modelToSave = selectedSummaryModel;
-      if (!modelToSave) {
-        modelToSave = await invoke<string>('builtin_ai_get_recommended_model');
-        setSelectedSummaryModel(modelToSave);
-      }
+      // An agent CLI (#212) writes with its own default model and needs no weights here, so it is
+      // completed with no model and nothing is fetched. The same for every provider that is not on
+      // this machine is #181.
+      const agentCli = summaryProvider === 'claude-code' || summaryProvider === 'codex';
+      let modelToSave = agentCli ? '' : selectedSummaryModel;
+      if (!agentCli) {
+        if (!modelToSave) {
+          modelToSave = await invoke<string>('builtin_ai_get_recommended_model');
+          setSelectedSummaryModel(modelToSave);
+        }
 
-      const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
-        modelName: modelToSave,
-        refresh: true,
-      });
-      setSummaryModelDownloaded(selectedModelReady);
-      if (!selectedModelReady) {
-        requestSummaryModelDownload(modelToSave);
+        const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
+          modelName: modelToSave,
+          refresh: true,
+        });
+        setSummaryModelDownloaded(selectedModelReady);
+        if (!selectedModelReady) {
+          requestSummaryModelDownload(modelToSave);
+        }
       }
 
       // Onboarding always uses builtin-ai with selected model

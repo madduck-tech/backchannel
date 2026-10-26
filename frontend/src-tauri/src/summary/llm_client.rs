@@ -73,6 +73,10 @@ pub enum LLMProvider {
     OpenRouter,
     BuiltInAI,
     CustomOpenAI,
+    /// Claude Code, run as a local CLI under the person's own login (#212).
+    ClaudeCode,
+    /// Codex, run as a local CLI under the person's own login (#212).
+    Codex,
 }
 
 impl LLMProvider {
@@ -86,7 +90,19 @@ impl LLMProvider {
             "openrouter" => Ok(Self::OpenRouter),
             "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
             "custom-openai" => Ok(Self::CustomOpenAI),
+            "claude-code" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
+        }
+    }
+
+    /// The agent CLI behind this provider, if it is one: no API key, no HTTP call.
+    pub fn agent_cli(&self) -> Option<crate::summary::agent_cli::AgentCli> {
+        use crate::summary::agent_cli::AgentCli;
+        match self {
+            Self::ClaudeCode => Some(AgentCli::ClaudeCode),
+            Self::Codex => Some(AgentCli::Codex),
+            _ => None,
         }
     }
 }
@@ -130,6 +146,13 @@ pub async fn generate_summary(
         if token.is_cancelled() {
             return Err("Summary generation was cancelled".to_string());
         }
+    }
+
+    // An agent CLI on this machine: its own login, its own process, no HTTP call here (#212).
+    if let Some(cli) = provider.agent_cli() {
+        return crate::summary::agent_cli::generate(cli, system_prompt, user_prompt, cancellation_token)
+            .await
+            .map_err(|e| e.to_string());
     }
 
     // Handle BuiltInAI provider separately (uses local sidecar, no HTTP API)
@@ -194,9 +217,9 @@ pub async fn generate_summary(
             );
             ("https://api.anthropic.com/v1/messages".to_string(), header_map)
         }
-        LLMProvider::BuiltInAI => {
-            // This case is handled earlier with early returns
-            unreachable!("BuiltInAI is handled before this match statement")
+        LLMProvider::BuiltInAI | LLMProvider::ClaudeCode | LLMProvider::Codex => {
+            // These are handled earlier with early returns
+            unreachable!("{provider:?} is handled before this match statement")
         }
     };
 
@@ -340,5 +363,7 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
+        LLMProvider::ClaudeCode => "Claude Code",
+        LLMProvider::Codex => "Codex",
     }
 }

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <!-- Implemented by: frontend/src/components/onboarding/steps/SummariserStep.tsx -->
-<title>Backchannel · summariser · inline field, list scrolls and focuses</title>
+<title>Summariser, with an agent on this machine</title>
 <script>if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.classList.remove('dark');</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -211,6 +211,16 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
 .panel .row { display: flex; gap: 8px; }
 .hint { margin-top: 6px; font-size: var(--text-xs); color: var(--meta); }
 
+
+.opt.off { opacity: .55; cursor: default; }
+.opt.off:hover { border-color: var(--border); }
+.opt .path { margin-top: 2px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--meta); }
+.opt .path.miss { color: var(--fg); }
+.agent-choices { grid-column: 2; display: grid; gap: 6px; margin-top: 10px; }
+.agent-choice { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); cursor: pointer; }
+.agent-choice.on { border-color: var(--accent-soft-on); }
+.agent-choice.off { opacity: .55; cursor: default; }
+.agent-choice .dot { margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -218,14 +228,14 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
 <main>
   <div class="head"><div class="col">
     <h1 data-h1>Where should the summary be written?</h1>
-    <p class="sub" data-sub>Seven choices. Each says where your transcripts go. A remote one opens its key field inside the option.</p>
+    <p class="sub" data-sub>Eight choices. Each says where your transcripts go. The agent option opens the CLIs it found inside it.</p>
   </div></div>
   <div class="scroll"><div class="col"><div class="opts" role="radiogroup" aria-label="Summariser" data-list></div></div></div>
 </main>
 <footer><span class="read" data-read></span><span data-keyslot></span><button type="button" class="btn btn-primary" data-next disabled>Continue</button></footer>
 <script>
 (() => {
-  const V = 'C';
+  const V = 'C'; const AV = 'C';
   const P = [
     { id: 'builtin-ai', name: 'Built-in model', where: 'Runs on this machine. Nothing leaves it.', local: true, cost: 'adds a 3651 MiB download' },
     { id: 'ollama', name: 'Ollama', where: 'Uses the Ollama you already run on this machine. Nothing leaves it.', local: true, cost: 'no download' },
@@ -235,14 +245,31 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
     { id: 'openrouter', name: 'OpenRouter', dest: 'OpenRouter, which passes it to the host of the model you pick there' },
     { id: 'custom-openai', name: 'An OpenAI-compatible server', dest: 'the server address you enter', url: true }
   ];
+  const A = [
+    { id: 'claude-code', name: 'Claude Code', cli: 'claude', vendor: 'Anthropic', found: '~/.local/bin/claude' },
+    { id: 'codex', name: 'Codex', cli: 'codex', vendor: 'OpenAI', found: null, isolated: true }
+  ];
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const st = { p: null, key: '', url: '' };
-  const cur = () => P.find(x => x.id === st.p);
-  const needsKey = () => { const p = cur(); return !!p && !p.local; };
-  const ready = () => { const p = cur(); return !!p && (p.local || (st.key.trim() && (!p.url || st.url.trim()))); };
+  const st = { p: null, key: '', url: '', a: null };
+  const cur = () => P.find(x => x.id === st.p) || A.find(x => x.id === st.p) || (st.p === 'agent' ? { id: 'agent', name: 'An agent on this machine', agentGroup: true } : undefined);
+  const curA = () => A.find(x => x.id === (st.p === 'agent' ? st.a : st.p));
+  const needsKey = () => { const p = cur(); return !!p && !p.local && !p.cli && !p.agentGroup; };
+  const ready = () => { const p = cur(); if (!p) return false; if (p.agentGroup) return !!curA(); if (p.cli) return !!p.found; return p.local || (st.key.trim() && (!p.url || st.url.trim())); };
   const optHTML = (p, extra = '') => `<div class="opt${st.p === p.id ? ' on' : ''}" role="radio" aria-checked="${st.p === p.id}" tabindex="0" data-p="${p.id}"><span class="dot" aria-hidden="true"></span><span><span class="name">${p.name}<span class="id">${p.id}</span></span><p class="where${p.local ? ' local' : ''}">${p.local ? p.where : `Sends each transcript to ${p.dest}. Needs an API key.`}</p>${p.local ? `<p class="where">${p.cost}</p>` : ''}</span>${extra}</div>`;
-  const listHTML = () => `<div class="grp">ON THIS MACHINE</div>${P.filter(p => p.local).map(p => optHTML(p)).join('')}<div class="grp">SENT TO A PROVIDER</div>${P.filter(p => !p.local).map(p => optHTML(p, V === 'C' && st.p === p.id ? keyRow(p) : '')).join('')}`;
+  const listHTML = () => `<div class="grp">ON THIS MACHINE</div>${P.filter(p => p.local).map(p => optHTML(p)).join('')}<div class="grp">SENT TO A PROVIDER</div>${P.filter(p => !p.local).map(p => optHTML(p, V === 'C' && st.p === p.id ? keyRow(p) : '')).join('')}${groupOpt()}`;
   const keyRow = p => `<div class="keyrow">${p.url ? `<label for="url">Server address</label><div class="well"><input id="url" type="url" data-url placeholder="https://" value="${esc(st.url)}"></div>` : ''}<label for="key">API key for ${p.name}</label><div class="well"><input id="key" type="password" data-key autocomplete="off" placeholder="Paste the key" value="${esc(st.key)}"></div></div>`;
+
+  const caption = a => a.isolated
+    ? `Uses your ${a.name} login. The transcript is sent to ${a.vendor} with ${a.name}'s default model. It runs with its tools off.`
+    : `Uses your ${a.name} login. The transcript goes to the provider ${a.name} is set up for, ${a.vendor} by default.`;
+  // Three states: found and logged in; found but not logged in; not found. Only the first can be chosen.
+  const usable = a => !!a.found && a.loggedIn !== false;
+  const pathLine = a => !a.found ? `<p class="path miss">Not found in your shell's PATH. Install ${a.cli}, then reopen this step.</p>`
+    : a.loggedIn === false ? `<p class="path miss">Found, but not logged in. Run ${a.cli} once in a terminal to log in, then reopen this step.</p>`
+    : `<p class="path">Found: ${a.found}</p>`;
+  const agentOpt = a => `<div class="opt${st.p === a.id ? ' on' : ''}${a.found ? '' : ' off'}" role="radio" aria-checked="${st.p === a.id}" aria-disabled="${!a.found}" tabindex="${a.found ? 0 : -1}" data-p="${a.found ? a.id : ''}"><span class="dot" aria-hidden="true"></span><span><span class="name">${a.name} <span class="quiet">(local CLI)</span><span class="id">${a.cli}</span></span><p class="where">${caption(a)}</p>${pathLine(a)}</span></div>`;
+  const subOpt = a => `<div class="agent-choice${st.a === a.id ? ' on' : ''}${usable(a) ? '' : ' off'}" role="radio" aria-checked="${st.a === a.id}" aria-disabled="${!usable(a)}" tabindex="${usable(a) ? 0 : -1}" data-a="${usable(a) ? a.id : ''}"><span class="dot" aria-hidden="true"></span><span><span class="name">${a.name}<span class="id">${a.cli}</span></span><p class="where">${caption(a)}</p>${pathLine(a)}</span></div>`;
+  const groupOpt = () => `<div class="opt${st.p === 'agent' ? ' on' : ''}" role="radio" aria-checked="${st.p === 'agent'}" tabindex="0" data-p="agent"><span class="dot" aria-hidden="true"></span><span><span class="name">An agent on this machine<span class="id">claude · codex</span></span><p class="where">Uses an agent CLI you are already logged in to. No API key. The transcript goes to that agent's provider.</p></span>${st.p === 'agent' ? `<div class="agent-choices" role="radiogroup" aria-label="Agent">${A.map(subOpt).join('')}</div>` : ''}</div>`;
   const $ = s => document.querySelector(s);
 
   function render(focusKey) {
@@ -261,13 +288,15 @@ footer .key .well { flex: 1; height: 36px; background: var(--bg); }
       $('[data-keyslot]').innerHTML = `<span class="key">${p.url ? `<span class="well"><input type="url" data-url aria-label="Server address" placeholder="https://" value="${esc(st.url)}"></span>` : ''}<span class="well"><input type="password" data-key aria-label="API key for ${p.name}" autocomplete="off" placeholder="API key" value="${esc(st.key)}"></span></span>`;
     } else {
       $('[data-keyslot]').innerHTML = '';
-      $('[data-read]').innerHTML = !p ? 'Choose where the summary is written.' : p.local ? `<b>${p.name}</b>: nothing leaves this machine.` : ready() ? `<b>${p.name}</b>: transcripts go to ${p.dest}.` : `<b>${p.name}</b> needs an API key${V === 'C' ? '; the field is in the option above' : ''}.`;
+      const ag = curA();
+      $('[data-read]').innerHTML = !p ? 'Choose where the summary is written.' : (p.cli || p.agentGroup) ? (ag ? (ag.isolated ? `<b>${ag.name}</b>: transcripts go to ${ag.vendor}.` : `<b>${ag.name}</b>: transcripts go to the provider ${ag.name} is set up for.`) : 'Choose which agent writes the summary.') : p.local ? `<b>${p.name}</b>: nothing leaves this machine.` : ready() ? `<b>${p.name}</b>: transcripts go to ${p.dest}.` : `<b>${p.name}</b> needs an API key${V === 'C' ? '; the field is in the option above' : ''}.`;
     }
     $('[data-next]').disabled = !ready();
     if (focusKey) { const k = document.querySelector('[data-key]'); if (k) { k.focus({ preventScroll: V !== 'C' }); if (V === 'C') { const sc = $('.scroll'), o = document.querySelector('.opt.on'); if (sc && o) sc.scrollTop = Math.max(0, o.offsetTop - 12); } } }
   }
   document.addEventListener('click', e => {
-    const o = e.target.closest('.opt'); if (o && !e.target.closest('input')) { st.p = o.dataset.p; st.key = ''; st.url = ''; render(needsKey()); return; }
+    const sb = e.target.closest('.agent-choice'); if (sb) { if (sb.dataset.a) { st.a = sb.dataset.a; render(false); } return; }
+    const o = e.target.closest('.opt'); if (o && !o.dataset.p) return; if (o && !e.target.closest('input')) { st.p = o.dataset.p; st.key = ''; st.url = ''; render(needsKey()); return; }
     if (e.target.closest('[data-back]')) { st.p = null; render(false); }
   });
   document.addEventListener('keydown', e => { const o = e.target.closest('.opt'); if (o && !e.target.closest('input') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); st.p = o.dataset.p; render(needsKey()); } });

@@ -142,6 +142,11 @@ tauri-plugin-process = "2.3.0"
 # Windows were zero bytes. See `log_plugin()` in lib.rs.
 tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
 
+# Kills an agent CLI's whole process group on a timeout or a cancel, and the login shell's after the
+# PATH probe (#212). Already in the build graph through tokio; MIT or Apache-2.0.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Desktop-only single instance guard
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.4"
@@ -196,6 +201,9 @@ transcribe-cpp = { git = "https://github.com/handy-computer/transcribe.cpp", rev
 
 [dev-dependencies]
 tempfile = "3.3.0"
+# Parses the `-c developer_instructions=` value the Codex call builds, so its TOML quoting is held to
+# a real TOML reader (#212). Already in the build graph through tauri; MIT or Apache-2.0.
+toml = "0.8"
 
 # NOTE: this file used to carry a [patch.crates-io] for cpal and esaxx-rs.
 # Cargo ignores [patch] outside the workspace root, so it never applied and

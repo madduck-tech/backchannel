@@ -29,6 +29,7 @@ pub struct CustomOpenAIConfig {
     pub top_p: Option<f32>,
 }
 
+pub mod agent_cli;
 pub mod commands;
 pub mod due_slots;
 pub(crate) mod language_detection;

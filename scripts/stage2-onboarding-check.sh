@@ -41,6 +41,11 @@
 #     resumes-gone  a status saved at step 3 naming a model this build no longer has, seeded, so
 #              the onboarding screens before it are not walked; the resume must fall back to the
 #              default and fetch it, not stop on "Unknown model" (#172's gate)
+#     agents   the agent option opened against the CLIs this machine really has, on a profile with
+#              no login in it: each row must say what the CLI itself says under that HOME, and the
+#              log must show the backend was asked (#212)
+#     agents-absent  the same with the application's PATH cut to the system directories, so the
+#              shell finds neither CLI: both rows must say not found, and the log must say why
 #
 # **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
@@ -54,6 +59,9 @@
 #     catalogue the transcription model, chosen window size, permissions
 #               in the catalogue; the
 #               summariser (claude)
+#     agents    the summariser (an agent CLI), transcription model, window size; and the
+#               the PATH (inherited or cut)   login: no profile here is logged in to either CLI,
+#                                              so the logged-in row is not entered (#212)
 #
 # None of the three varies the window, so nothing here would see a control that only fails at
 # `minHeight: 520` -- `storybook-summariser-reveal.test.mjs` is what covers that, in a browser.
@@ -67,7 +75,7 @@
 # is indistinguishable from "nothing ran".
 set -euo pipefail
 
-APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone] [profile-dir]}"
+APP="${1:?usage: stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone|agents|agents-absent] [profile-dir]}"
 MODE="${2:-chooses}"
 PROFILE="${3:-}"
 PORT="${BC_WD_PORT:-14446}"
@@ -91,7 +99,7 @@ fi
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
 
-case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue, resumes or resumes-gone, not '$MODE'" ;; esac
+case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone|agents|agents-absent) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue, resumes, resumes-gone, agents or agents-absent, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
@@ -109,7 +117,7 @@ mkdir -p "$APPDATA/models"
 # is an unambiguous answer. Seeding it made the first version of this oracle report 469 372 646 bytes
 # "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
 # which is the same class of mistake as an empty one that is not a pass.
-if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ "$MODE" != resumes-gone ] && [ -d "$CACHE/models/summary" ]; then
+if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ "$MODE" != resumes-gone ] && [ "$MODE" != agents ] && [ "$MODE" != agents-absent ] && [ -d "$CACHE/models/summary" ]; then
   cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
     || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
   # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
@@ -190,9 +198,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The PATH the application inherits, which is half of what it searches for an agent CLI (#212).
+# `agents-absent` cuts it to the system directories; the driver is then named by its full path.
+APP_PATH="$PATH"
+[ "$MODE" = agents-absent ] && APP_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+TAURI_DRIVER=$(command -v tauri-driver)
 HOME="$PROFILE/home" XDG_CONFIG_HOME="$PROFILE/home/.config" \
-  XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" \
-  setsid tauri-driver --port "$PORT" --native-port "$NATIVE_PORT" > "$DRIVER_LOG" 2>&1 &
+  XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" PATH="$APP_PATH" \
+  setsid "$TAURI_DRIVER" --port "$PORT" --native-port "$NATIVE_PORT" > "$DRIVER_LOG" 2>&1 &
 DRIVER_PID=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$PORT/status" && break; sleep 0.25; done
 
@@ -423,6 +436,82 @@ fi
 # nothing is fetched for it. `remote` picks a cloud provider and types a key, which is the state
 # neither of the others has ever entered.
 await "document.body.innerText.includes('Where should the summary be written')" "the summariser screen" 30
+
+# --- agents: the agent option against what is really on this machine (#212) ----------------------
+#
+# The oracle is the CLIs themselves, asked **after** the screen was read, under the same HOME and the
+# same PATH the application had: the login shell's `command -v`, then the PATH, then where the CLIs
+# install themselves, and each found one's own login check. Asked afterwards so that nothing the oracle
+# writes into the profile can be what the application read.
+if [ "$MODE" = agents ] || [ "$MODE" = agents-absent ]; then
+  AG=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][starts-with(normalize-space(.),'An agent on this machine')]\"}")
+  [ -n "$AG" ] || die "no 'An agent on this machine' option on the summariser screen"
+  click "$AG" "the agent option"
+  # False on arrival: the rows are not in the page until the option is open, and then read "Looking"
+  # until the backend answers.
+  await "(function(){var a=document.querySelector('[data-agent=claude-code]'),b=document.querySelector('[data-agent=codex]');return !!a&&!!b&&a.textContent.indexOf('Looking')<0&&b.textContent.indexOf('Looking')<0;})()" \
+        "both CLI rows to report what was found" 40
+  FAILS=()
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  USABLE=0
+  for pair in claude-code:claude codex:codex; do
+    ID=${pair%%:*}; BIN=${pair##*:}
+    ROW=$(js "\"var r=document.querySelector('[data-agent=$ID]');return JSON.stringify({text:r.textContent,disabled:r.getAttribute('aria-disabled')})\"")
+    say "the $ID row: $ROW"
+    # The product was asked: the line `agent_cli::status` writes for this CLI.
+    LINE=$(grep -m1 "Agent CLI status: $ID " "$LOG" || true)
+    [ -n "$LINE" ] || FAILS+=("the log has no status line for $ID: the screen's state is not the backend's")
+    say "the log: ${LINE##*Agent CLI status: }"
+    # The oracle, the way discovery.rs looks, asked of the shell rather than of the application.
+    FOUND=$(env -i HOME="$PROFILE/home" PATH="$APP_PATH" SHELL="${SHELL:-/bin/bash}" "${SHELL:-/bin/bash}" -ilc "command -v $BIN" </dev/null 2>/dev/null | tail -1 || true)
+    [ -n "$FOUND" ] && [ -x "$FOUND" ] || FOUND=$(PATH="$APP_PATH" command -v "$BIN" || true)
+    if [ -z "$FOUND" ]; then
+      for d in "$PROFILE/home/.local/bin" "$PROFILE/home/.claude/local" "$PROFILE/home/.npm-global/bin" /usr/local/bin /opt/homebrew/bin; do
+        [ -x "$d/$BIN" ] && { FOUND="$d/$BIN"; break; }
+      done
+    fi
+    if [ -z "$FOUND" ]; then EXPECT="not found"
+    else
+      case "$ID" in
+        # Captured first: a logged-out `claude auth status` exits non-zero, and under `pipefail` a
+        # pipeline's `|| echo unknown` then appended a second answer to the first (measured: the
+        # oracle read "out\nunknown" and failed a run in which the application was right).
+        claude-code) OUT=$(HOME="$PROFILE/home" PATH="$APP_PATH" timeout 30 "$FOUND" auth status </dev/null 2>/dev/null || true)
+               IN=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+try: print("in" if json.load(sys.stdin).get("loggedIn") else "out")
+except Exception: print("unknown")') ;;
+        codex) OUT=$(HOME="$PROFILE/home" PATH="$APP_PATH" timeout 30 "$FOUND" login status </dev/null 2>&1 || true)
+               case "$OUT" in *"Not logged in"*) IN=out ;; *"Logged in"*) IN=in ;; *) IN=unknown ;; esac ;;
+      esac
+      EXPECT="found, logged $IN"
+    fi
+    say "the oracle for $ID: $EXPECT${FOUND:+ at $FOUND}"
+    case "$EXPECT" in
+      "not found")
+        printf '%s' "$ROW" | grep -q "Not found in your shell's PATH" || FAILS+=("$ID: the CLI is not found, and the row does not say so")
+        printf '%s' "$ROW" | grep -q '"disabled": *"true"' || FAILS+=("$ID: a CLI that is not found can be chosen")
+        printf '%s' "$LINE" | grep -q "found=none" || FAILS+=("$ID: the log says it was found: $LINE") ;;
+      "found, logged out")
+        printf '%s' "$ROW" | grep -q "Found, but not logged in. Run $BIN once" || FAILS+=("$ID: the CLI is logged out, and the row does not say so")
+        printf '%s' "$ROW" | grep -q '"disabled": *"true"' || FAILS+=("$ID: a logged-out CLI can be chosen")
+        printf '%s' "$LINE" | grep -qF "found=$FOUND " || FAILS+=("$ID: the log names another path than the shell: $LINE") ;;
+      "found, logged in")
+        USABLE=$((USABLE + 1))
+        printf '%s' "$ROW" | grep -q "Found: " || FAILS+=("$ID: the CLI is usable, and the row does not say where it was found")
+        printf '%s' "$ROW" | grep -q '"disabled": *"false"' || FAILS+=("$ID: a usable CLI cannot be chosen") ;;
+      *) FAILS+=("$ID: the oracle could not read the CLI's own login check ($EXPECT)") ;;
+    esac
+  done
+  if [ "$USABLE" -eq 0 ]; then
+    DIS=$(js '"var b=[...document.querySelectorAll(\"footer button\")].find(b=>b.textContent.trim()===\"Continue\");return b?String(b.disabled):\"none\""')
+    [ "$DIS" = "true" ] || FAILS+=("with no usable CLI and the agent option open, Continue reads disabled=$DIS")
+  fi
+  [ ${#FAILS[@]} -eq 0 ] || die "the agent option: $(printf '%s | ' "${FAILS[@]}")"
+  PASSED=1
+  say "PASS ($MODE): each CLI row says what the CLI itself says under this profile, and the backend was asked"
+  exit 0
+fi
 if [ "$MODE" = remote ] || [ "$MODE" = catalogue ] || [ "$MODE" = resumes ]; then
   OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role='radio'][.//text()[contains(.,'claude')]]\"}")
   [ -n "$OPT" ] || die "no Claude option on the summariser screen"
