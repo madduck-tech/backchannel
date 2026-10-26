@@ -578,12 +578,15 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         saveTimeoutRef.current = undefined;
       }
 
-      // An agent CLI (#212) writes with its own default model and needs no weights here, so it is
-      // completed with no model and nothing is fetched. The same for every provider that is not on
-      // this machine is #181.
+      // Only the on-device summariser needs a model fetched here (#181). Every other provider writes
+      // with a model that is not on this machine, and the ids their options leave are ones the
+      // backend refuses as `Unknown model`; with an empty model, or with `gemma4:e2b` from
+      // `initializeSummaryModelSelection` landing after `pick()`, this block fetched 3651 MiB of
+      // Gemma for a person who chose Claude. `startBackgroundDownloads` applies the same rule. An
+      // agent CLI (#212) is completed with no model: it writes with its own default.
       const agentCli = summaryProvider === 'claude-code' || summaryProvider === 'codex';
       let modelToSave = agentCli ? '' : selectedSummaryModel;
-      if (!agentCli) {
+      if (summaryProvider === 'builtin-ai') {
         if (!modelToSave) {
           modelToSave = await invoke<string>('builtin_ai_get_recommended_model');
           setSelectedSummaryModel(modelToSave);
