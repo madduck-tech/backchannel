@@ -43,7 +43,6 @@ const RecordingStatus = { IDLE: 'idle', STARTING: 'starting', RECORDING: 'record
 
 async function drive(condition, path) {
   const calls = [];
-  const toasts = [];
   const modals = [];
   const status = (s) => (typeof s === 'string' ? s : Object.keys(s)[0]);
   const invoke = async (cmd) => {
@@ -64,9 +63,9 @@ async function drive(condition, path) {
         return null;
     }
   };
-  const record = (kind) => (title, opts) => toasts.push({ kind, title: String(title), description: opts?.description });
+  const boundary = boundaryStubs();
   const { useRecordingStart } = loadTsx('src/hooks/useRecordingStart.ts', {
-    ...boundaryStubs().modules,
+    ...boundary.modules,
     '@tauri-apps/api/core': { invoke },
     '@tauri-apps/api/event': { listen: async () => () => {} },
     '@/contexts/TranscriptContext': { useTranscripts: () => ({ clearTranscripts: () => {}, setMeetingTitle: () => {} }) },
@@ -77,7 +76,6 @@ async function drive(condition, path) {
       recordingService: { startRecordingWithDevices: (mic, sys, title) => invoke('start_recording_with_devices_and_meeting', { mic, sys, title }) },
     },
     '@/lib/recordingNotification': { showRecordingNotification: () => {} },
-    sonner: { toast: Object.assign(record('default'), { info: record('info'), error: record('error'), success: record('success'), warning: record('warning') }) },
   });
 
   let api = null;
@@ -102,8 +100,9 @@ async function drive(condition, path) {
 
   const started = calls.includes('start_recording_with_devices_and_meeting');
   const asked = calls.filter((c) => c === 'transcribe_recording_model_state' || c === 'transcribe_has_available_models').length;
-  const downloading = toasts.some((t) => t.title === 'Model download in progress');
-  const notReady = toasts.some((t) => t.title === 'Transcription model not ready') && modals.some((m) => m.name === 'modelSelector');
+  const toasts = boundary.toasts.map((t) => ({ member: t.member, title: String(t.args[0]) }));
+  const downloading = toasts.some((t) => t.member === 'info' && t.title === 'Model download in progress');
+  const notReady = toasts.some((t) => t.member === 'error' && t.title === 'Transcription model not ready') && modals.some((m) => m.name === 'modelSelector');
   const outcome = started ? 'start' : downloading ? 'downloading' : notReady ? 'not-ready' : 'nothing';
   return { outcome, asked, started };
 }
