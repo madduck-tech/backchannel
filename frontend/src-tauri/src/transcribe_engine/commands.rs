@@ -205,6 +205,7 @@ pub async fn transcribe_delete_corrupted_model(model_name: String) -> Result<(),
 }
 
 /// What the pre-flight in [`transcribe_check_model_ready`] found.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ModelReadiness {
     /// Nothing left to load — either the provider is a built-in audio LLM,
     /// which has no transcribe.cpp model at all, or the configured model is
@@ -347,6 +348,16 @@ async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolutio
 
     transcribe_init().await?;
     let engine = engine()?;
+    Ok((provider_name, resolve_with_engine(&engine, provider.as_deref(), configured.as_deref()).await?))
+}
+
+/// The catalogue half of what the resolver reads, gathered from `engine`, and resolved. Split out of
+/// [`resolve_now`] so a test can run it against an engine on a temporary directory.
+pub(crate) async fn resolve_with_engine(
+    engine: &TranscribeEngine,
+    provider: Option<&str>,
+    configured: Option<&str>,
+) -> Result<Resolution, String> {
     let loaded = if engine.is_model_loaded().await { engine.get_current_model().await } else { None };
     let catalogue: Vec<(String, ModelStatus)> = engine
         .discover_models()
@@ -356,14 +367,28 @@ async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolutio
         .map(|m| (m.name, m.status))
         .collect();
     let downloading = engine.downloads_in_flight().await;
-    let inputs = ResolverInputs {
-        provider: provider.as_deref(),
-        configured: configured.as_deref(),
-        loaded: loaded.as_deref(),
-        catalogue: &catalogue,
-        downloading: &downloading,
+    let inputs = ResolverInputs { provider, configured, loaded: loaded.as_deref(), catalogue: &catalogue, downloading: &downloading };
+    // An on-device audio model is resolved before the engine is reached, in `resolve_now`.
+    Ok(resolve_recording_model(&inputs, |model| Err(format!("{} is not a catalogue model", model))))
+}
+
+/// The pre-flight's reading of a resolution: a needed load stays a needed load, because
+/// [`transcribe_validate_model_ready`] loads only on it.
+fn pre_flight(resolution: Resolution) -> Result<ModelReadiness, String> {
+    match resolution {
+        Resolution::Ready(model) => Ok(ModelReadiness::Ready(model)),
+        Resolution::NeedsLoad(model) => Ok(ModelReadiness::NeedsLoad(model)),
+        Resolution::NotReady { message, .. } => Err(message),
+    }
+}
+
+/// The pre-check's reading of a resolution: a model that needs a load is ready to record with.
+fn answer(provider: String, resolution: Resolution) -> RecordingModel {
+    let (model, state) = match resolution {
+        Resolution::Ready(model) | Resolution::NeedsLoad(model) => (model, RecordingModelState::Ready),
+        Resolution::NotReady { model, state, .. } => (model, state),
     };
-    Ok((provider_name, resolve_recording_model(&inputs, |_| Ok(Vec::new()))))
+    RecordingModel { provider, model, state }
 }
 
 /// Resolve the configured transcription model and prove its files are on disk,
@@ -376,11 +401,7 @@ async fn resolve_now<R: Runtime>(app: AppHandle<R>) -> Result<(String, Resolutio
 pub(crate) async fn transcribe_check_model_ready<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<ModelReadiness, String> {
-    match resolve_now(app).await?.1 {
-        Resolution::Ready(model) => Ok(ModelReadiness::Ready(model)),
-        Resolution::NeedsLoad(model) => Ok(ModelReadiness::NeedsLoad(model)),
-        Resolution::NotReady { message, .. } => Err(message),
-    }
+    pre_flight(resolve_now(app).await?.1)
 }
 
 /// The pre-check before a recording: the model the recording would use and its state, from the same
@@ -389,11 +410,7 @@ pub(crate) async fn transcribe_check_model_ready<R: Runtime>(
 #[command]
 pub async fn transcribe_recording_model_state<R: Runtime>(app: AppHandle<R>) -> Result<RecordingModel, String> {
     let (provider, resolution) = resolve_now(app).await?;
-    let (model, state) = match resolution {
-        Resolution::Ready(model) | Resolution::NeedsLoad(model) => (model, RecordingModelState::Ready),
-        Resolution::NotReady { model, state, .. } => (model, state),
-    };
-    Ok(RecordingModel { provider, model, state })
+    Ok(answer(provider, resolution))
 }
 
 /// Ensure a model is loaded and ready before recording starts.
@@ -650,6 +667,70 @@ mod recording_model_tests {
             state: S::Missing,
             message: "Transcription model 'parakeet-tdt-0.6b-v3-int8' is not downloaded yet. Download it in Settings, then start recording.".into(),
         });
+    }
+
+    #[test]
+    fn the_configured_on_device_model_is_the_one_examined() {
+        let inputs = ResolverInputs { provider: Some("builtin-ai"), configured: Some("gemma4:e4b"), loaded: None, catalogue: &[], downloading: &HashSet::new() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let r = resolve_recording_model(&inputs, |m| {
+            asked.borrow_mut().push(m.to_string());
+            Ok(vec![("w.gguf".to_string(), true), ("mmproj.gguf".to_string(), true)])
+        });
+        assert_eq!(r, Resolution::Ready("gemma4:e4b".into()));
+        assert_eq!(asked.into_inner(), vec!["gemma4:e4b".to_string()]);
+        // The weights are checked as well as the projector.
+        let no_weights = builtin(Ok(vec![("w.gguf".to_string(), false), ("mmproj.gguf".to_string(), true)]));
+        assert!(matches!(&no_weights, Resolution::NotReady { state: S::Missing, message, .. } if message.ends_with("w.gguf is missing")), "{no_weights:?}");
+    }
+
+    /// The pre-flight keeps a needed load apart, since validation loads only on it; the pre-check's
+    /// answer folds it into ready. (#182 v4, round 3's first point)
+    #[test]
+    fn the_pre_flight_keeps_a_needed_load_and_the_answer_folds_it() {
+        assert_eq!(pre_flight(Resolution::NeedsLoad(X.into())), Ok(ModelReadiness::NeedsLoad(X.into())));
+        assert_eq!(pre_flight(Resolution::Ready(X.into())), Ok(ModelReadiness::Ready(X.into())));
+        assert_eq!(pre_flight(Resolution::NotReady { model: X.into(), state: S::Missing, message: "m".into() }), Err("m".to_string()));
+        assert_eq!(answer("p".into(), Resolution::NeedsLoad(X.into())).state, S::Ready);
+        assert_eq!(answer("p".into(), Resolution::Ready(X.into())).state, S::Ready);
+        assert_eq!(answer("p".into(), Resolution::NotReady { model: X.into(), state: S::Corrupted, message: "m".into() }), RecordingModel { provider: "p".into(), model: X.into(), state: S::Corrupted });
+    }
+
+    /// The frontend reads these exact keys and strings (`useRecordingStart.ts`'s `RecordingModel`).
+    #[test]
+    fn the_answer_is_written_as_the_frontend_reads_it() {
+        for (state, wire) in [(S::Ready, "ready"), (S::Missing, "missing"), (S::Downloading, "downloading"), (S::Corrupted, "corrupted"), (S::Error, "error")] {
+            let json = serde_json::to_value(RecordingModel { provider: "transcribe-cpp".into(), model: X.into(), state }).unwrap();
+            assert_eq!(json, serde_json::json!({ "provider": "transcribe-cpp", "model": X, "state": wire }));
+        }
+    }
+
+    /// The engine half: the disk and the downloads in flight, read from a real engine on a temporary
+    /// directory, so the headline change -- a file past its floor with a download in flight is refused --
+    /// is held through the code that gathers it, not only through the pure resolver.
+    #[tokio::test]
+    async fn the_engine_half_reads_the_disk_and_the_downloads_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+        let entry = &crate::config::TRANSCRIBE_MODEL_CATALOG[0];
+        let other = &crate::config::TRANSCRIBE_MODEL_CATALOG[1];
+
+        let r = resolve_with_engine(&engine, None, Some(entry.name)).await.unwrap();
+        assert_eq!(state(&r), Some(S::Missing), "nothing on disk: {r:?}");
+
+        // A sparse file at the catalogue size reads `Available` without writing its bytes.
+        let full = entry.size_mb as u64 * 1024 * 1024;
+        std::fs::File::create(dir.path().join(entry.filename)).unwrap().set_len(full).unwrap();
+        assert_eq!(resolve_with_engine(&engine, None, Some(entry.name)).await.unwrap(), Resolution::NeedsLoad(entry.name.into()));
+
+        // Another model's download in flight changes nothing for this one.
+        engine.mark_download_in_flight(other.name).await;
+        assert_eq!(resolve_with_engine(&engine, None, Some(entry.name)).await.unwrap(), Resolution::NeedsLoad(entry.name.into()));
+
+        // Its own download in flight is refused, though the file reads `Available`.
+        engine.mark_download_in_flight(entry.name).await;
+        let r = resolve_with_engine(&engine, None, Some(entry.name)).await.unwrap();
+        assert_eq!(state(&r), Some(S::Downloading), "{r:?}");
     }
 
     /// Recording's pre-flight refuses every state but ready with today's message (#182 v4).

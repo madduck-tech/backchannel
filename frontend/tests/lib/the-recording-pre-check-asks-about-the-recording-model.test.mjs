@@ -7,9 +7,11 @@
 // backend would have taken. It now asks `transcribe_recording_model_state`, which answers from the
 // resolver recording's pre-flight refuses with.
 //
-// The hook runs in a host component, with every command answering from one fixture: the provider,
-// each catalogue model's status, and what the new command would answer. The legacy commands answer
-// from the same fixture, so this file runs red on `main`'s hook too. Three start paths:
+// The hook runs in a host component. Each condition gives the catalogue's statuses, which the legacy
+// commands answer from (so this file runs red on `main`'s hook too), and the new command's answer,
+// written by hand: this file holds how the hook routes on the backend's answer. How that answer is
+// derived from the catalogue, the downloads in flight and Gemma's files is held in Rust, by
+// `recording_model_tests` in `transcribe_engine/commands.rs`. Three start paths:
 //   - the button: `handleRecordingStart`;
 //   - auto-start, the tray's way: `sessionStorage.autoStartRecording` set before mount;
 //   - the sidebar: a `start-recording-from-sidebar` window event after mount.
@@ -35,6 +37,8 @@ const CONDITIONS = [
   { id: '5a', what: 'X corrupted, another available', provider: 'transcribe-cpp', catalogue: { [X]: { Corrupted: { file_size: 10, expected_min_size: 100 } }, [OTHER]: 'Available' }, answer: 'corrupted', expect: 'not-ready' },
   { id: '5b', what: 'the command answering error, another available', provider: 'transcribe-cpp', catalogue: { [X]: { Error: 'bad' }, [OTHER]: 'Available' }, answer: 'error', expect: 'not-ready' },
   { id: 6, what: 'X available', provider: 'transcribe-cpp', catalogue: { [X]: 'Available', [OTHER]: 'Missing' }, answer: 'ready', expect: 'start' },
+  // The backend could not answer: not ready. `main` asks another command, so this one says nothing there.
+  { id: 7, what: 'the command failing', provider: 'transcribe-cpp', catalogue: { [X]: 'Missing', [OTHER]: 'Missing' }, answer: 'throws', expect: 'not-ready' },
 ];
 
 const PATHS = ['button', 'auto-start', 'sidebar'];
@@ -49,6 +53,7 @@ async function drive(condition, path) {
     calls.push(cmd);
     switch (cmd) {
       case 'transcribe_recording_model_state':
+        if (condition.answer === 'throws') throw new Error('the backend could not answer');
         return { provider: condition.provider, model: condition.model ?? X, state: condition.answer };
       // `main`'s pre-check, answering from the same fixture.
       case 'transcribe_init':
@@ -118,4 +123,4 @@ for (const condition of CONDITIONS) {
 }
 
 assert.deepEqual(failures, [], `the recording pre-check answered for the wrong model:\n  ${failures.join('\n  ')}`);
-console.log('ok - on all three start paths, the pre-check routes on the state of the model the recording would use: missing, downloading, corrupted and failed refuse with their own message, builtin-ai with Gemma starts, and a ready model starts');
+console.log('ok - on all three start paths, the pre-check routes on the state of the model the recording would use: missing, downloading, corrupted and failed refuse with their own message, a command that cannot answer refuses, builtin-ai with Gemma starts, and a ready model starts');

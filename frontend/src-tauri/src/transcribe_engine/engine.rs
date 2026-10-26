@@ -278,6 +278,13 @@ impl TranscribeEngine {
         self.active_downloads.read().await.clone()
     }
 
+    /// Puts a model in the set of downloads in flight without downloading it, for tests of what reads
+    /// the set.
+    #[cfg(test)]
+    pub(crate) async fn mark_download_in_flight(&self, model_name: &str) {
+        self.active_downloads.write().await.insert(model_name.to_string());
+    }
+
     pub async fn get_current_model(&self) -> Option<String> {
         self.current_model.read().await.clone()
     }
