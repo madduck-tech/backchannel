@@ -1,6 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Backchannel",
+    "mainBinaryName": "backchannel",
     "version": "1.4.1",
     "identifier": "tech.madduck.backchannel",
     "build": {

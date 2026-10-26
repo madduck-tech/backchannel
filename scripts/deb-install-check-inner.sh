@@ -21,7 +21,7 @@ apt-get install -y ./tmp/app.deb 2>&1 | tail -20 || {
   exit 1
 }
 
-BIN=$(command -v conversationaly || echo /usr/bin/conversationaly)
+BIN=$(command -v backchannel || echo /usr/bin/backchannel)
 [ -x "$BIN" ] || { echo "FAILED: the package installed but $BIN is not executable" >&2; exit 1; }
 
 echo ""

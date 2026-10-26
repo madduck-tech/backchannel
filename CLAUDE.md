@@ -210,8 +210,9 @@ Limits: 4 speakers maximum, with a fifth silently folded into an existing slot; 
 
 **Model Storage Locations**:
 - **Development**: `frontend/models/`
-- **Production (macOS)**: `~/Library/Application Support/Conversationaly/models/`
-- **Production (Windows)**: `%APPDATA%\Conversationaly\models\`
+- **Production (macOS)**: `~/Library/Application Support/tech.madduck.backchannel/models/`
+- **Production (Windows)**: `%APPDATA%\tech.madduck.backchannel\models\`
+- **Production (Linux)**: `~/.local/share/tech.madduck.backchannel/models/` (the app-data directory joins the identifier, ADR 0029)
 
 **Model Loading** (frontend/src-tauri/src/transcribe_engine/engine.rs):
 ```rust

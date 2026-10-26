@@ -53,7 +53,7 @@ case "$MODE" in signal|silence|wrong-sink) ;; *) die "mode must be signal, silen
 for pid in $(ls /proc | grep -E '^[0-9]+$'); do
   [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] && continue
   case "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" in
-    */conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
+    */backchannel|*/conversationaly) die "another copy of the application is running (pid $pid); it is single-instance" ;;
   esac
 done
 

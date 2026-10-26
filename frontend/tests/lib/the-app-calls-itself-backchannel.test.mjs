@@ -5,8 +5,8 @@
 // single-instance lock. ADR 0023: an instruction that removes something ships with a test that fails
 // while it is present, so this census is red while any line names the old app.
 //
-// **No per-line excuses.** A match is allowed only on a comment line, or when the line holds one of
-// the kept tokens below, and only in the file the token belongs to. The set is closed and is the
+// **No per-line excuses.** A match is allowed only on a comment line, or when deleting the kept tokens
+// bound to that file leaves no match on the line: a kept key with the old name appended is still red. The set is closed and is the
 // issue's "Kept, on purpose" table; a token added here without the issue is visible in the diff and
 // in the verdict, which compares the two. A free-text reason beside a line would let the change
 // excuse whatever it had not renamed, which is the shape #228's critic refused.
@@ -21,7 +21,7 @@ const frontend = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '
 // What ships, or is written into what ships: the UI, the Rust core, the bundle configuration, the
 // static assets and the bundled templates.
 const ROOTS = ['src', 'src-tauri/src', 'src-tauri/capabilities', 'src-tauri/templates', 'public'];
-const FILES = ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/build.rs'];
+const FILES = ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/build.rs', 'src-tauri/Info.plist', 'src-tauri/entitlements.plist'];
 const SKIP_DIRS = new Set(['node_modules', 'target', 'binaries', 'out', '.next', 'icons']);
 
 // The kept tokens, each with the one file it may appear in, and why it stays (#228, "Kept, on purpose").
@@ -31,14 +31,15 @@ export const KEPT = [
   { token: 'conversationaly.panes', file: 'src/lib/panes.ts' },
   { token: 'conversationaly.theme', file: 'src/lib/theme.ts' },
   { token: 'ConversationalyRecoveryDB', file: 'src/services/indexedDBService.ts' },
-  // The crate and package names, and so the main binary's name, which is #230.
+  // The crate and package names. The bundled binary is `backchannel` (`mainBinaryName`), so only a
+  // local cargo build carries this one.
   { token: 'name = "conversationaly"', file: 'src-tauri/Cargo.toml' },
   { token: '"name": "conversationaly"', file: 'package.json' },
-  { token: '--process conversationaly', file: 'src-tauri/src/console_utils/console_utils.rs' },
   // A developer override that scripts may set.
   { token: 'CONVERSATIONALY_LLAMA_HELPER', file: 'src-tauri/src/summary/summary_engine/sidecar.rs' },
   // The credit to the fork's direct upstream, which keeps its name (LICENSE.md:4).
-  { token: 'FORKED_FROM', file: 'src/components/About.tsx' },
+  { token: "name: 'Conversationaly', author: 'Michael Bykovski'", file: 'src/components/About.tsx' },
+  { token: 'https://github.com/bykof/conversationaly', file: 'src/components/About.tsx' },
 ];
 
 const COMMENT = /^\s*(\/\/|\/\*|\*|\{\/\*|#|<!--)/;
@@ -66,6 +67,7 @@ export function files(root = frontend) {
 export function offenders(root = frontend) {
   const out = [];
   for (const file of files(root)) {
+    if (!fs.existsSync(file)) continue;
     const bytes = fs.readFileSync(file);
     if (bytes.includes(0)) continue; // a binary asset
     const rel = path.relative(root, file).split(path.sep).join('/');
@@ -74,7 +76,8 @@ export function offenders(root = frontend) {
       .split('\n')
       .forEach((line, i) => {
         if (!/conversationaly/i.test(line) || COMMENT.test(line)) return;
-        if (KEPT.some((k) => k.file === rel && line.includes(k.token))) return;
+        const rest = KEPT.filter((k) => k.file === rel).reduce((l, k) => l.split(k.token).join(''), line);
+        if (!/conversationaly/i.test(rest)) return;
         out.push(`${rel}:${i + 1}: ${line.trim()}`);
       });
   }
@@ -96,6 +99,7 @@ test('the identifier is Backchannel\'s own, not upstream\'s', () => {
   const config = JSON.parse(fs.readFileSync(path.join(frontend, 'src-tauri', 'tauri.conf.json'), 'utf8'));
   assert.equal(config.identifier, 'tech.madduck.backchannel');
   assert.equal(config.productName, 'Backchannel');
+  assert.equal(config.mainBinaryName, 'backchannel', 'the bundled binary is not upstream\'s conversationaly');
   assert.equal(config.bundle?.publisher, 'Backchannel');
   assert.deepEqual(
     config.app.windows.map((w) => w.title),

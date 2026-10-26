@@ -68,11 +68,11 @@ for pid in $(ls /proc | grep -E '^[0-9]+$'); do
   [ "$pid" = "$$" ] && continue
   [ "$pid" = "$PPID" ] && continue
   exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-  # Basename, not the AppImage mount path: `target/release/conversationaly` -- what a local
+  # Basename, not the AppImage mount path: `usr/bin/backchannel` in a bundle, `target/release/conversationaly` -- what a local
   # build and `pnpm tauri:dev` produce, and what a developer is most likely to have open --
   # takes the same single-instance lock and produced the same silent 2m40s hang.
   case "$exe" in
-    */conversationaly) RUNNING="$pid"; break ;;
+    */backchannel|*/conversationaly) RUNNING="$pid"; break ;;
   esac
 done
 [ -z "$RUNNING" ] || die "another copy of the application is already running (pid $RUNNING).

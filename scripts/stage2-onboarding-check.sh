@@ -153,7 +153,7 @@ app_pid() {
   for pid in $(ls /proc | grep -E '^[0-9]+$'); do
     [ "$pid" = "$$" ] && continue
     exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-    case "$exe" in */conversationaly) echo "$pid"; return 0 ;; esac
+    case "$exe" in */backchannel|*/conversationaly) echo "$pid"; return 0 ;; esac
   done
   return 1
 }

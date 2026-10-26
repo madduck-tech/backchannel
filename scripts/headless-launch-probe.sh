@@ -57,7 +57,7 @@ trap 'rm -rf "$WORK"' EXIT
 ABS_APP=$(readlink -f "$APP")
 say "  extracting $ABS_APP …"
 ( cd "$WORK" && "$ABS_APP" --appimage-extract >/dev/null 2>&1 ) || say "  (extract returned non-zero)"
-# `AppRun`, not `usr/bin/conversationaly`. Measured, and this was the fifth obstacle — one nobody
+# `AppRun`, not `usr/bin/backchannel`. Measured, and this was the fifth obstacle — one nobody
 # listed, in this issue or anywhere else. Launching the binary directly gets as far as the D-Bus
 # handshake and then dies:
 #
