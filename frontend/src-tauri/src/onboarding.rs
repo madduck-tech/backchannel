@@ -201,7 +201,7 @@ pub async fn complete_onboarding<R: Runtime>(
     info!("Saved summary model config: provider={provider}, model={model}");
 
     // One local engine, so the transcription provider is always transcribe.cpp -- but *which*
-    // model is the user's, and the catalogue has 86 rows.
+    // model is the user's, and the catalogue has 96 rows.
     if let Err(e) = SettingsRepository::save_transcript_config(
         pool,
         crate::config::LOCAL_TRANSCRIPT_PROVIDER,

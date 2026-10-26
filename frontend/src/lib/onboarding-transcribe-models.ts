@@ -9,7 +9,11 @@
  *
  * Sizes are `size_mb` from `src-tauri/src/config.rs`'s `TRANSCRIBE_MODEL_CATALOG`, which is generated
  * — see `scripts/gen_model_catalog.py`. A model outside these four has its size reported by the
- * download's own progress events; there is no frontend copy of all 85 rows and this file is not one.
+ * download's own progress events; there is no frontend copy of all 96 rows and this file is not one.
+ *
+ * Since #175 those sizes are decimal MB of the file's bytes. These four stated the MiB figures until
+ * the gate's adversary found one file with two sizes on one screen again; `the-first-run-figures-are-
+ * the-catalogues.test.mjs` now holds each entry to its row.
  */
 export type RecommendedTranscribeModel = {
   id: string;
@@ -32,25 +36,25 @@ export const RECOMMENDED_TRANSCRIBE_MODELS: RecommendedTranscribeModel[] = [
   },
   {
     id: 'nemotron-3.5-asr-streaming-0.6b-q8',
-    mb: 716,
+    mb: 751,
     decode: 'streaming',
-    wer: 3.06,
+    wer: 3.05,
     languages: '32 languages, including Chinese, Japanese, Korean, Arabic and Hindi',
   },
   {
     // A streaming family, decoded in segments: its stream is capped at 81.9 s and kept only a
     // meeting's first seconds (#200). The product owner kept it in the four, labelled honestly.
     id: 'moonshine-streaming-small-q8',
-    mb: 189,
+    mb: 199,
     decode: 'batch',
     wer: 2.54,
     languages: 'English only',
   },
-  { id: 'moonshine-tiny-q8', mb: 34, decode: 'batch', wer: 4.6, languages: 'English only' },
+  { id: 'moonshine-tiny-q8', mb: 35, decode: 'batch', wer: 4.6, languages: 'English only' },
 ];
 
 /**
- * How big the chosen model is, or `null` when it is one of the 84 the frontend does not carry.
+ * How big the chosen model is, or `null` when it is one of the 92 the frontend does not carry.
  * `null` is the honest answer: the download's first progress event supplies the real total, and a
  * guess in the meantime is what this module exists to stop.
  */

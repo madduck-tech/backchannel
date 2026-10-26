@@ -9,12 +9,17 @@ fails the run rather than skipping it: a test that returns early on a missing in
 """
 
 import concurrent.futures
+import http.client
 import re
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 import gen_model_catalog as gen
 
@@ -231,6 +236,27 @@ class TheSource(unittest.TestCase):
         self.assertIn(other, str(refused.exception))
         self.assertIn(REVISION, str(refused.exception))
 
+    def test_an_explicit_checkout_at_another_revision_is_refused_before_anything_is_read(self):
+        """The generator run on a path, as `gen_model_catalog.py <checkout>`, with a real git repository at
+        another revision: refused for its revision, by git's own answer, before `catalog/` is read."""
+        with tempfile.TemporaryDirectory() as checkout:
+            git = lambda *a: subprocess.run(["git", "-C", checkout, *a], check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "another revision")
+            head = git("rev-parse", "HEAD")
+            before = gen.CONFIG_RS.read_text(encoding="utf-8")
+            with mock.patch.object(sys, "argv", ["gen_model_catalog.py", checkout]), self.assertRaises(SystemExit) as refused:
+                gen.main()
+            self.assertIn(head, str(refused.exception))
+            self.assertIn("Cargo.lock pins", str(refused.exception))
+            self.assertEqual(gen.CONFIG_RS.read_text(encoding="utf-8"), before)
+
+    def test_two_lock_entries_at_different_revisions_are_refused(self):
+        entry = 'name = "transcribe-cpp"\nversion = "0.4.1"\nsource = "git+https://github.com/handy-computer/transcribe.cpp?rev={0}#{0}"\n'
+        with self.assertRaises(SystemExit):
+            gen.pinned_revision(entry.format("4d7c1cc" + "0" * 33) + entry.format("553f109" + "0" * 33))
+        self.assertEqual(gen.pinned_revision(entry.format("4d7c1cc" + "0" * 33) * 2), "4d7c1cc" + "0" * 33)
+
     def test_the_committed_catalog_is_what_the_records_generate(self):
         """The committed array is the generator's output from the records alone, so no card, header
         or hand edit contributes to it."""
@@ -319,20 +345,56 @@ def diarizer():
 def final_status(url, attempts=3):
     """The status a HEAD ends on after following every redirect.
 
-    A connection reset or refusal is retried, up to `attempts` in all: measured on 2026-10-26, Hugging
-    Face reset one of 97 parallel HEADs in three runs out of ten. One that persists is raised, never
-    turned into a skip. An HTTP status is an answer, and is not retried.
+    A transient failure is retried, up to `attempts` in all, with a pause between: a connection reset or
+    refusal at send or at the response (measured on 2026-10-26: Hugging Face reset one of 97 parallel
+    HEADs in three runs out of ten), and a 429 or 5xx. A failure that persists is raised, or its status
+    returned, never turned into a skip. Any other status is an answer, and is returned at once.
     """
     request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "backchannel-catalog-check"})
     for attempt in range(attempts):
+        last = attempt == attempts - 1
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return response.status
         except urllib.error.HTTPError as e:
-            return e.code
-        except urllib.error.URLError:
-            if attempt == attempts - 1:
+            if last or not (e.code == 429 or e.code >= 500):
+                return e.code
+        except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError):
+            if last:
                 raise
+        time.sleep(2 * (attempt + 1))
+
+
+class TheRetry(unittest.TestCase):
+    def test_a_connection_dropped_at_the_response_is_retried_and_a_persistent_one_raised(self):
+        import http.server
+        import threading
+
+        served = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                served.append(self.path)
+                if len(served) == 1 or self.path == "/always":
+                    self.close_connection = True  # read the request, answer nothing
+                    return
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            with mock.patch("time.sleep"):
+                self.assertEqual(final_status(f"{base}/once"), 200)
+                self.assertEqual(served, ["/once", "/once"])
+                with self.assertRaises((http.client.HTTPException, ConnectionError)):
+                    final_status(f"{base}/always")
+        finally:
+            server.shutdown()
 
 
 class TheDownloads(unittest.TestCase):

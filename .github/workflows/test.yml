@@ -144,11 +144,13 @@ jobs:
       - name: Catalog generator tests (Python)
         run: |
           set -o pipefail
-          out=$(python3 -I -m unittest discover -s frontend/src-tauri/scripts -p 'test_*.py' 2>&1); rc=$?
+          # `rc=0; out=$(…) || rc=$?`, not `out=$(…); rc=$?`: a step runs under `bash -e`, which would
+          # exit at a failing assignment before the suite's output is printed.
+          rc=0; out=$(python3 -I -m unittest discover -s frontend/src-tauri/scripts -p 'test_*.py' 2>&1) || rc=$?
           printf '%s\n' "$out"
           n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
           [ "$rc" -eq 0 ] || exit "$rc"
-          [ "${n:-0}" -ge 10 ] || { echo "ran ${n:-0} Python tests, expected at least 10"; exit 1; }
+          [ "${n:-0}" -ge 13 ] || { echo "ran ${n:-0} Python tests, expected at least 13"; exit 1; }
 
       - name: List what this platform ignores
         run: cargo test --workspace -- --ignored --list

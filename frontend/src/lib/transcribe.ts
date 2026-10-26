@@ -134,8 +134,9 @@ export function getStatusColor(status: ModelStatus): string {
   return 'text-danger-ink';
 }
 
+/** A catalogue size in decimal MB, as Settings prints it: 1669 MB reads "1.7 GB" (#175). */
 export function formatFileSize(sizeMb: number): string {
-  return sizeMb >= 1024 ? `${(sizeMb / 1024).toFixed(1)} GB` : `${sizeMb} MB`;
+  return sizeMb >= 1000 ? `${(sizeMb / 1000).toFixed(1)} GB` : `${sizeMb} MB`;
 }
 
 export function isDownloading(status: ModelStatus): boolean {

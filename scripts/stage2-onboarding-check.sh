@@ -9,7 +9,7 @@
 # **Why a non-default model.** `DEFAULT_TRANSCRIBE_MODEL` is `parakeet-tdt-0.6b-v3-q8`, and the
 # download path used to name that constant directly. A pass that accepts the default asserts the one
 # value for which the broken path was accidentally correct -- it is green on the defect. This picks
-# `moonshine-tiny-q8`, which is not the default and is 34 MB, so the honest assertion is also the
+# `moonshine-tiny-q8`, which is not the default and is 35 MB, so the honest assertion is also the
 # cheap one.
 #
 # **What is seeded and what is not.** The summary model is seeded from the cache, because it is not
@@ -85,16 +85,27 @@ CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
 # Not the default. See the header.
 CHOSEN_ID="moonshine-tiny-q8"
 CHOSEN_FILE="moonshine-tiny-Q8_0.gguf"
-# `size_mb: 34` in src-tauri/src/config.rs. Needed because a file that merely EXISTS is not a file
-# that arrived: the first run of this script reported PASS on a 4.5 MB partial, which is the same
-# "a call that returned success is not evidence" shape this pass was written to catch, one level in.
-CHOSEN_MB=34
+# The chosen row's `size_mb`, read from src-tauri/src/config.rs rather than copied: the copies said 34
+# and 44 after #175 made them 35 and 46, and the card check below would have gone green over a stale
+# first-run figure. Needed because a file that merely EXISTS is not a file that arrived: the first run
+# of this script reported PASS on a 4.5 MB partial, which is the same "a call that returned success is
+# not evidence" shape this pass was written to catch, one level in.
+size_mb_of() {
+  python3 -I - "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/frontend/src-tauri/src/config.rs" "$1" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+block = text.split(f'name: "{sys.argv[2]}"')[1].split("    },")[0]
+print(re.search(r"size_mb: (\d+),", block)[1])
+PY
+}
 PRESENT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 # `catalogue` chooses a model the recommended four cannot offer, so only the catalogue can choose it
-# (#166). `size_mb: 44` in config.rs.
+# (#166).
 if [ "$MODE" = catalogue ]; then
-  CHOSEN_ID="whisper-tiny-q8"; CHOSEN_FILE="whisper-tiny-Q8_0.gguf"; CHOSEN_MB=44
+  CHOSEN_ID="whisper-tiny-q8"; CHOSEN_FILE="whisper-tiny-Q8_0.gguf"
 fi
+CHOSEN_MB=$(size_mb_of "$CHOSEN_ID") || exit 1
+case "$CHOSEN_MB" in ''|*[!0-9]*) printf 'stage2-onboarding-check: no size_mb for %s in config.rs\n' "$CHOSEN_ID" >&2; exit 1;; esac
 
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
@@ -680,11 +691,11 @@ fi
 # **The disk oracle is right and it is also why three defects survived.** "A progress bar is a claim
 # by the same code under test; a file is not" is true, and it is the reason this pass was green while
 # the product owner was looking at `0.0 MB / 705.3 MB` for a file already on disk, at `~716 MB` for a
-# 34 MB model, and at "You can continue" over a disabled button. The file arriving says nothing about
+# 35 MB model, and at "You can continue" over a disabled button. The file arriving says nothing about
 # what a person reads while it does. So the screen is read **as well**, never instead. (#157 measure C)
 #
 # Asserted against the model actually chosen, so the check cannot pass on a constant: `moonshine-tiny`
-# is 34 MB and the default is 740, which is the pair that was wrong.
+# is 35 MB and the default is 740, which is the pair that was wrong.
 CARD=$(js '"return (() => { const h=[...document.querySelectorAll(\"section[aria-label]\")].find(e=>/'"$CHOSEN_ID"'/.test(e.textContent||\"\")); return h ? h.innerText.replace(/\\s+/g,\" \").trim() : \"NO ROW FOR THE CHOSEN MODEL\"; })()"')
 say "the row for the chosen model reads: $CARD"
 printf '%s' "$CARD" | grep -q "$CHOSEN_ID" \

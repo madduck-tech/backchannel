@@ -48,8 +48,8 @@ pub enum ModelStatus {
 pub struct ModelInfo {
     pub name: String,
     /// The catalogue entry's family, such as "GigaAM". First run's search matches on it, and it
-    /// cannot be recovered from `name`: for 13 of the 22 families some id does not contain the
-    /// family's text (#166).
+    /// cannot be recovered from `name`: for 13 of the 22 families of #166's time some id does not
+    /// contain the family's text (#166).
     pub family: String,
     pub path: PathBuf,
     pub size_mb: u32,
@@ -485,7 +485,7 @@ impl TranscribeEngine {
                 // leaves the speed readout stale; the 500 ms floor keeps it live.
                 if progress > last_reported || elapsed.as_millis() >= 500 {
                     let speed_mbps = if elapsed.as_secs_f64() > 0.0 {
-                        (bytes_since_report as f64 / 1048576.0) / elapsed.as_secs_f64()
+                        (bytes_since_report as f64 / 1_000_000.0) / elapsed.as_secs_f64()
                     } else {
                         0.0
                     };
@@ -851,8 +851,8 @@ mod tests {
         let got = scored_confidence(&scored).expect("a scored family still reports a number");
         assert!((got - 0.7).abs() < 1e-6, "expected the mean 0.7, got {got}");
 
-        // No tokens at all is also nothing scored, and this is the larger half: 53 of
-        // `TRANSCRIBE_MODEL_CATALOG`'s 86 rows come from an architecture that constructs no token row,
+        // No tokens at all is also nothing scored, and this is the larger half: 53 of the 86 rows
+        // `TRANSCRIBE_MODEL_CATALOG` had at #162 come from an architecture that constructs no token row,
         // so `Some(1.0)` here painted "Decode confidence 100%" in the tooltip and *High confidence*
         // in the accessibility tree for most of the catalogue.
         //

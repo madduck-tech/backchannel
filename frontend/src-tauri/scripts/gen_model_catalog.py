@@ -222,13 +222,14 @@ def benchmark_wer(record, quant, wanted):
     return found.pop() if found else None
 
 
-def pinned_revision():
-    """`transcribe-cpp`'s revision in Cargo.lock, the one the application builds against."""
-    lock = CARGO_LOCK.read_text(encoding="utf-8")
-    m = re.search(r'name = "transcribe-cpp"\nversion = "[^"]*"\nsource = "git\+[^#]+#([0-9a-f]{40})"', lock)
-    if not m:
-        raise SystemExit(f"no transcribe-cpp git revision in {CARGO_LOCK}")
-    return m[1]
+def pinned_revision(lock=None):
+    """`transcribe-cpp`'s revision in Cargo.lock, the one the application builds against. Two entries
+    at different revisions are refused rather than resolved by taking the first."""
+    lock = CARGO_LOCK.read_text(encoding="utf-8") if lock is None else lock
+    found = set(re.findall(r'name = "transcribe-cpp"\nversion = "[^"]*"\nsource = "git\+[^#]+#([0-9a-f]{40})"', lock))
+    if len(found) != 1:
+        raise SystemExit(f"Cargo.lock pins transcribe-cpp at {sorted(found) or 'no git revision'}, not exactly one")
+    return found.pop()
 
 
 def checkout_revision(path):

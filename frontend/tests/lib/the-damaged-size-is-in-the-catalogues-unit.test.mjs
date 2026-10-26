@@ -9,7 +9,7 @@ import { setupDom } from './dom-harness.mjs';
 
 await setupDom();
 const { loadTsx } = await import('./render-tsx.mjs');
-const { corruptedSizeMb } = loadTsx('src/lib/transcribe.ts', {
+const { corruptedSizeMb, formatFileSize } = loadTsx('src/lib/transcribe.ts', {
   '@tauri-apps/api/core': { invoke: async () => null },
   '@tauri-apps/api/event': { listen: async () => () => {} },
 });
@@ -22,4 +22,8 @@ assert.equal(corruptedSizeMb(corrupted(52_000_000)), 52, 'a truncated canary-180
 assert.equal(corruptedSizeMb('Available'), null);
 assert.equal(corruptedSizeMb({ Downloading: { progress: 50 } }), null);
 
-console.log('ok - the damaged-download figure is decimal MB, the unit size_mb and the floor read');
+// Settings' size readout: decimal GB of decimal MB, so breeze-asr-25-q8's 1668 MB is 1.7 GB, not 1.6.
+assert.equal(formatFileSize(1668), '1.7 GB');
+assert.equal(formatFileSize(999), '999 MB');
+
+console.log('ok - the damaged-download figure and the size readout are decimal, the unit size_mb and the floor read');
