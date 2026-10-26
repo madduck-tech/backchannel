@@ -663,7 +663,8 @@ jobs:
           retention-days: 30
 
       - name: Install FUSE for AppImage processing
-        if: contains(inputs.platform, 'ubuntu')
+        # Only the repack below needs it, and that is skipped on a release leg (#229).
+        if: contains(inputs.platform, 'ubuntu') && inputs.release-id == ''
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse libfuse2

@@ -113,6 +113,9 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
+      # The commit the tag is pinned to. Without it actions/checkout follows the branch tip, so a
+      # leg re-run after the branch moved would build a later commit than the tag names (#229).
+      ref: ${{ github.sha }}
       sign-binaries: false
       asset-prefix: "conversationaly"
       upload-artifacts: false  # tauri-action uploads directly to release
@@ -224,6 +227,7 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| **macOS** | DMG installer, app bundle |" >> $GITHUB_STEP_SUMMARY
           echo "| **Windows** | MSI installer, NSIS installer |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | AppImage, .deb |" >> $GITHUB_STEP_SUMMARY
           echo "| **Updater** | none - no updater identity yet (#4, #79) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY

@@ -34,6 +34,11 @@ test('it is a draft pre-release named Backchannel, tagged at the commit it built
   assert.match(createRelease, /^\s*name:\s*`Backchannel v/m);
 });
 
+test('every leg builds the commit the tag is pinned to', () => {
+  const call = /uses:\s*\.\/\.github\/workflows\/build\.yml\s*\n\s*with:\s*\n([\s\S]*?)\n\s*secrets:/.exec(release)?.[1] ?? '';
+  assert.match(call, /^\s*ref:\s*\$\{\{\s*github\.sha\s*\}\}\s*$/m, 'without it a re-run checks out the branch tip, not the tagged commit');
+});
+
 test('every file tauri-action uploads is checksummed', () => {
   const filter = /select\(\.name \| test\("(.+?)"\)\)/.exec(release)?.[1];
   assert.ok(filter, 'no checksum filter found in release.yml');
@@ -51,7 +56,11 @@ test('every file tauri-action uploads is checksummed', () => {
   assert.ok(!re.test('SHA256SUMS'), 'the checksum file must not checksum itself');
 });
 
-test('a release leg does not repack the AppImage after uploading it', () => {
-  const step = /- name: Remove libwayland-client\.so from AppImage[\s\S]*?\n\s*if:\s*(.+)/.exec(build)?.[1] ?? '';
-  assert.match(step, /inputs\.release-id == ''/, 'a failed repack after the upload would skip SHA256SUMS');
+test('a release leg runs nothing after its upload that could fail it', () => {
+  // Both run after tauri-action has uploaded; a failure would skip release-summary and SHA256SUMS.
+  for (const name of ['Install FUSE for AppImage processing', 'Remove libwayland-client.so from AppImage']) {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const cond = new RegExp(`- name: ${esc}[\\s\\S]*?\\n\\s*if:\\s*(.+)`).exec(build)?.[1] ?? '';
+    assert.match(cond, /inputs\.release-id == ''/, `${name} runs on a release leg`);
+  }
 });
