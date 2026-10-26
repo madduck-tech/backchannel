@@ -541,6 +541,7 @@ pub(crate) mod tests {
             shared.get(|| false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(true), 0));
         }
         assert_eq!(c.retries.load(Ordering::SeqCst), 3);
+        assert!(shared.warned_at_cap(), "the cap reached by timed-out retries was not warned");
 
         let shared = Shared::new(HOUR, Duration::ZERO);
         let c = counters();
@@ -549,6 +550,7 @@ pub(crate) mod tests {
             shared.get(|| false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
         }
         assert_eq!(c.retries.load(Ordering::SeqCst), 100);
+        assert!(!shared.warned_at_cap(), "fast failures reached a cap they do not count toward");
     }
 
     /// A check past its deadline counts toward the cap; at the cap, a dead host is rebuilt on the
