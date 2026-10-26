@@ -187,9 +187,34 @@ test('the identifier is Backchannel\'s own, not upstream\'s', () => {
   assert.equal(config.productName, 'Backchannel');
   assert.equal(config.mainBinaryName, 'backchannel', 'the bundled binary is not upstream\'s conversationaly');
   assert.equal(config.bundle?.publisher, 'Backchannel');
+  // What the installers and packages show, which no string scan reaches (#228 gate): the `.desktop`
+  // Comment= and the `.deb` synopsis read shortDescription, the `.deb` Maintainer: reads Cargo's
+  // authors, and a pinned upgradeCode keeps a later rename from installing beside this one.
+  assert.match(config.bundle?.shortDescription ?? '', /^Backchannel\b/);
+  assert.match(config.bundle?.longDescription ?? '', /^Backchannel\b/);
+  assert.equal(config.bundle?.windows?.wix?.upgradeCode, '754F497D-5DE8-4E51-A036-CD0DBA94C65D');
+  const cargo = fs.readFileSync(path.join(frontend, 'src-tauri', 'Cargo.toml'), 'utf8');
+  assert.match(cargo, /^authors = \["Backchannel"\]$/m, 'the .deb Maintainer: is upstream\'s');
   assert.deepEqual(
     config.app.windows.map((w) => w.title),
     ['Backchannel'],
     'the main window is titled Backchannel'
   );
+});
+
+test('nothing moves another product\'s data in at start', () => {
+  // migrate.rs renamed Meetily's directories into this app's at every start; with an identifier of its
+  // own that would take another product's library (#228). Its removal is held here: no Rust code names
+  // Meetily, and the module is gone. The import a person starts (`DatabaseImport/`) is TypeScript and
+  // copies a database it is pointed at, which is not this.
+  assert.ok(!fs.existsSync(path.join(frontend, 'src-tauri', 'src', 'migrate.rs')), 'migrate.rs is back');
+  const named = [];
+  for (const file of files()) {
+    if (!file.endsWith('.rs')) continue;
+    const rel = path.relative(frontend, file).split(path.sep).join('/');
+    codeLines(fs.readFileSync(file, 'utf8'), '.rs').forEach((code, i) => {
+      if (/meetily|migrate_legacy_data_dirs/i.test(code)) named.push(`${rel}:${i + 1}: ${code.trim()}`);
+    });
+  }
+  assert.deepEqual(named, [], `Rust code naming Meetily's data:\n  ${named.join('\n  ')}`);
 });
