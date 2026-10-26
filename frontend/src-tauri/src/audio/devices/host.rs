@@ -80,6 +80,8 @@ pub(crate) enum Liveness {
 
 /// What a retry of the preferred value gave.
 pub(crate) enum Retry<T> {
+    /// Only Linux has a preferred host to get back.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Got(T),
     Failed { timed_out: bool },
 }
@@ -126,7 +128,8 @@ impl<T> Shared<T> {
         retry: impl Fn() -> Retry<T>,
     ) -> Arc<T> {
         let mut slot = self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Read under the lock: a hold set by a start that holds the lock is seen by every later caller.
+        // Read under the lock. A start stores its hold before it takes the lock for its own check
+        // (`prepare_on`), so every caller that takes the lock after that check sees the hold.
         let hold = hold();
         let now = Instant::now();
         match slot.as_mut() {
@@ -222,6 +225,10 @@ impl<T> Shared<T> {
     fn warned_at_cap(&self) -> bool {
         self.slot.lock().unwrap().as_ref().is_some_and(|s| s.warned_at_cap)
     }
+
+    fn intervals(&self) -> (Duration, Duration) {
+        (self.check_every, self.retry_every)
+    }
 }
 
 /// `f`'s answer if it comes within `deadline`; `None` if not, leaving it to finish on its thread.
@@ -246,10 +253,19 @@ pub(crate) fn check_within<T: Send + Sync + 'static>(
 /// cpal's `INIT_TIMEOUT` (`host/pulseaudio/mod.rs:26`), used as the deadline for a liveness check.
 const CHECK_DEADLINE: Duration = Duration::from_secs(2);
 
+/// `f`'s result and how long it took.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn timed<R>(f: impl FnOnce() -> R) -> (R, Duration) {
+    let started = Instant::now();
+    let result = f();
+    (result, started.elapsed())
+}
+
 /// Whether a failed construction timed out. A real timeout cannot return before cpal's 2 s, so
 /// none is missed; a slow refusal is over-counted, which only stops attempts early. cpal reports
 /// `HostUnavailable` for a timeout and for a missing socket alike, so the kind cannot tell them.
 /// The 1.5 s rests on a private cpal constant: a cpal update re-checks it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn construction_timed_out(elapsed: Duration) -> bool {
     elapsed >= Duration::from_millis(1500)
 }
@@ -272,12 +288,26 @@ fn held() -> bool {
     held_at(crate::audio::recording_commands::is_recording_now(), now_ms(), HELD_UNTIL_MS.load(Ordering::SeqCst))
 }
 
-/// Called by a recording start before it asks for any device. The host is checked, and rebuilt if
-/// dead, or on ALSA PulseAudio is retried, now; then it is held for the start, so one start never
-/// mixes hosts (#223, the 11:01 recording).
+/// Called by a recording start before it asks for any device. The host is held for the start, so one
+/// start never mixes hosts (#223, the 11:01 recording); then it is checked, and rebuilt if dead, or
+/// on ALSA PulseAudio is retried, now.
 pub fn prepare_for_recording() {
-    HOST.refresh_now(build_host, check_host, retry_preferred);
-    HELD_UNTIL_MS.store(now_ms() + START_HOLD.as_millis() as u64, Ordering::SeqCst);
+    prepare_on(&HOST, &HELD_UNTIL_MS, now_ms(), build_host, check_host, retry_preferred);
+}
+
+/// A start, over any shared value. The hold first: a caller that arrives while the start's check runs
+/// waits on the lock, and finds the hold when it gets it. Then the start's own check, which ignores
+/// the hold, so a dead host is not held for the start.
+fn prepare_on<T>(
+    shared: &Shared<T>,
+    held_until_ms: &AtomicU64,
+    now_ms: u64,
+    build: impl Fn(bool) -> Built<T>,
+    check: impl Fn(&Arc<T>) -> Liveness,
+    retry: impl Fn() -> Retry<T>,
+) {
+    held_until_ms.store(now_ms + START_HOLD.as_millis() as u64, Ordering::SeqCst);
+    shared.refresh_now(build, check, retry);
 }
 
 static HOST: Shared<cpal::Host> = Shared::new(Duration::from_secs(1), Duration::from_secs(10));
@@ -305,22 +335,13 @@ fn build_host(preferred_allowed: bool) -> Built<cpal::Host> {
     #[cfg(test)]
     tests::refuse_unless_opted_in();
     #[cfg(target_os = "linux")]
-    let built = {
-        let started = Instant::now();
-        let attempt = if preferred_allowed { Some(cpal::host_from_id(cpal::HostId::PulseAudio)) } else { None };
-        match attempt {
-            Some(Ok(host)) => Built { value: host, kind: Kind::Preferred, timed_out: false },
-            attempt => {
-                let timed_out = matches!(attempt, Some(Err(_))) && construction_timed_out(started.elapsed());
-                match attempt {
-                    Some(Err(e)) => log::warn!("PulseAudio is unavailable ({e}); using ALSA"),
-                    _ => log::warn!("PulseAudio is not tried again (the timeout cap); using ALSA"),
-                }
-                let host = cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host());
-                Built { value: host, kind: Kind::Fallback, timed_out }
-            }
-        }
-    };
+    let built = build_with(
+        preferred_allowed,
+        || timed(|| cpal::host_from_id(cpal::HostId::PulseAudio)),
+        // The last resort, `default_host()`, probes PulseAudio once more (`platform/mod.rs:841-845`),
+        // so it may return a PulseAudio client labelled as the fallback. Named in #223, not tested.
+        || cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host()),
+    );
     #[cfg(not(target_os = "linux"))]
     let built = {
         let _ = preferred_allowed;
@@ -328,6 +349,37 @@ fn build_host(preferred_allowed: bool) -> Built<cpal::Host> {
     };
     log::info!("Audio host selected for this process: {:?}", built.value.id());
     built
+}
+
+/// `build_host`'s rule over any construction: the preferred one while it may still be tried, and the
+/// fallback otherwise or when it fails. A failure that took most of cpal's `INIT_TIMEOUT` timed out.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn build_with<T>(
+    preferred_allowed: bool,
+    preferred: impl FnOnce() -> (Result<T, cpal::Error>, Duration),
+    fallback: impl FnOnce() -> T,
+) -> Built<T> {
+    let attempt = preferred_allowed.then(preferred);
+    match attempt {
+        Some((Ok(value), _)) => Built { value, kind: Kind::Preferred, timed_out: false },
+        Some((Err(e), elapsed)) => {
+            log::warn!("PulseAudio is unavailable ({e}); using ALSA");
+            Built { value: fallback(), kind: Kind::Fallback, timed_out: construction_timed_out(elapsed) }
+        }
+        None => {
+            log::warn!("PulseAudio is not tried again (the timeout cap); using ALSA");
+            Built { value: fallback(), kind: Kind::Fallback, timed_out: false }
+        }
+    }
+}
+
+/// `retry_preferred`'s rule over any construction.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn retry_with<T>(preferred: impl FnOnce() -> (Result<T, cpal::Error>, Duration)) -> Retry<T> {
+    match preferred() {
+        (Ok(value), _) => Retry::Got(value),
+        (Err(_), elapsed) => Retry::Failed { timed_out: construction_timed_out(elapsed) },
+    }
 }
 
 /// One attempt at the preferred host. A construction that took most of cpal's 2 s `INIT_TIMEOUT`
@@ -338,11 +390,7 @@ fn retry_preferred() -> Retry<cpal::Host> {
     {
         #[cfg(test)]
         tests::refuse_unless_opted_in();
-        let started = Instant::now();
-        match cpal::host_from_id(cpal::HostId::PulseAudio) {
-            Ok(host) => Retry::Got(host),
-            Err(_) => Retry::Failed { timed_out: construction_timed_out(started.elapsed()) },
-        }
+        retry_with(|| timed(|| cpal::host_from_id(cpal::HostId::PulseAudio)))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -387,7 +435,7 @@ pub fn is_monitor(device: &cpal::Device) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     /// Set by a test that means to reach the real sound server; every such test is `#[ignore]`d.
     static REAL_SOUND_SERVER: AtomicBool = AtomicBool::new(false);
@@ -765,6 +813,174 @@ pub(crate) mod tests {
         assert_eq!(liveness(Err(cpal::Error::new(cpal::ErrorKind::HostUnavailable))), Liveness::Alive);
     }
 
+    /// The production check maps the request's answer to liveness: only a lost connection is death,
+    /// and a live connection answering with any other error is alive (the gate's adversary, A and B).
+    #[test]
+    fn a_check_maps_every_answer_to_liveness() {
+        use cpal::ErrorKind as K;
+        let deadline = Duration::from_secs(5);
+        assert_eq!(check_within(&Arc::new(()), deadline, |_| Ok(())), Liveness::Alive);
+        for kind in ALL_KINDS {
+            let expected = if kind == K::StreamInvalidated { Liveness::Dead } else { Liveness::Alive };
+            assert_eq!(check_within(&Arc::new(kind), deadline, |k| Err(cpal::Error::new(*k))), expected, "{kind:?}");
+        }
+    }
+
+    /// Every kind cpal 0.18.1 has (`error.rs`), so a kind newly taken as death is seen (Q).
+    const ALL_KINDS: [cpal::ErrorKind; 14] = [
+        cpal::ErrorKind::DeviceBusy,
+        cpal::ErrorKind::DeviceChanged,
+        cpal::ErrorKind::DeviceNotAvailable,
+        cpal::ErrorKind::HostUnavailable,
+        cpal::ErrorKind::InvalidInput,
+        cpal::ErrorKind::PermissionDenied,
+        cpal::ErrorKind::RealtimeDenied,
+        cpal::ErrorKind::ResourceExhausted,
+        cpal::ErrorKind::StreamInvalidated,
+        cpal::ErrorKind::UnsupportedConfig,
+        cpal::ErrorKind::UnsupportedOperation,
+        cpal::ErrorKind::Xrun,
+        cpal::ErrorKind::BackendError,
+        cpal::ErrorKind::Other,
+    ];
+
+    /// `build_host`'s rule: a construction that failed after most of cpal's 2 s counts as timed out,
+    /// a fast refusal does not, and past the cap PulseAudio is not tried at all (C and E).
+    #[test]
+    fn a_construction_is_classified_and_the_cap_skips_it() {
+        let refused = |elapsed| move || (Err::<usize, _>(cpal::Error::new(cpal::ErrorKind::HostUnavailable)), elapsed);
+        let slow = build_with(true, refused(Duration::from_millis(2000)), || 0);
+        assert!(matches!(slow, Built { value: 0, kind: Kind::Fallback, timed_out: true }));
+        let fast = build_with(true, refused(Duration::from_millis(1)), || 0);
+        assert!(matches!(fast, Built { value: 0, kind: Kind::Fallback, timed_out: false }));
+        let got = build_with(true, || (Ok(7), Duration::from_millis(2000)), || 0);
+        assert!(matches!(got, Built { value: 7, kind: Kind::Preferred, timed_out: false }));
+        let tried = AtomicUsize::new(0);
+        let capped = build_with(
+            false,
+            || {
+                tried.fetch_add(1, Ordering::SeqCst);
+                (Ok(7), Duration::ZERO)
+            },
+            || 0,
+        );
+        assert!(matches!(capped, Built { value: 0, kind: Kind::Fallback, timed_out: false }));
+        assert_eq!(tried.load(Ordering::SeqCst), 0, "PulseAudio was tried past the cap");
+    }
+
+    /// `retry_preferred`'s rule, the same classification (D).
+    #[test]
+    fn a_retry_is_classified() {
+        let refused = |elapsed| move || (Err::<usize, _>(cpal::Error::new(cpal::ErrorKind::HostUnavailable)), elapsed);
+        assert!(matches!(retry_with(refused(Duration::from_millis(2000))), Retry::Failed { timed_out: true }));
+        assert!(matches!(retry_with(refused(Duration::from_millis(1))), Retry::Failed { timed_out: false }));
+        assert!(matches!(retry_with(|| (Ok(7), Duration::ZERO)), Retry::Got(7)));
+    }
+
+    /// What production constructs is timed by the clock, not assumed fast.
+    #[test]
+    fn a_construction_is_timed() {
+        let ((), elapsed) = timed(|| std::thread::sleep(Duration::from_millis(30)));
+        assert!(elapsed >= Duration::from_millis(30), "{elapsed:?}");
+    }
+
+    /// The production constants the issue states: the check gives up at cpal's 2 s, the shared host
+    /// is checked at most once a second and retried at most every 10 s (G and F).
+    #[test]
+    fn the_production_deadline_and_intervals_are_the_issues() {
+        assert_eq!(CHECK_DEADLINE, Duration::from_secs(2));
+        assert_eq!(HOST.intervals(), (Duration::from_secs(1), Duration::from_secs(10)));
+    }
+
+    /// A start holds for 30 s, holds before its own check runs, and that check still rebuilds a dead
+    /// host (K, M and the race's ordering).
+    #[test]
+    fn a_start_holds_first_then_rebuilds_a_dead_host() {
+        let shared = Shared::new(HOUR, HOUR);
+        let c = counters();
+        shared.get(|| false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        let until = AtomicU64::new(0);
+        let held_during_check = AtomicBool::new(false);
+        let check = |v: &Arc<usize>| {
+            held_during_check.store(until.load(Ordering::SeqCst) == 1_000 + 30_000, Ordering::SeqCst);
+            if **v == 1 { Liveness::Dead } else { Liveness::Alive }
+        };
+        prepare_on(&shared, &until, 1_000, factory(&c.builds, usize::MAX, &c.preferred), check, retry(&c.retries, Some(false), 0));
+        assert_eq!(until.load(Ordering::SeqCst), 31_000, "a start holds for 30 s from its own time");
+        assert!(held_during_check.load(Ordering::SeqCst), "the hold was not set before the start's check");
+        assert_eq!(c.builds.load(Ordering::SeqCst), 2, "the start's check did not rebuild the dead host");
+    }
+
+    /// The clock the hold is read against advances (W2: a clock stuck at 0 would hold for ever).
+    #[test]
+    fn the_hold_clock_advances() {
+        let before = now_ms();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(now_ms() >= before + 20);
+    }
+
+    /// A retry that brings the preferred host back starts its check interval (N).
+    #[test]
+    fn a_retry_back_to_the_preferred_host_restarts_the_check_interval() {
+        let shared = Shared::new(SHORT, Duration::ZERO);
+        let c = counters();
+        let checks = AtomicUsize::new(0);
+        let check = |_: &Arc<usize>| {
+            checks.fetch_add(1, Ordering::SeqCst);
+            Liveness::Alive
+        };
+        shared.get(|| false, factory(&c.builds, 1, &c.preferred), check, retry(&c.retries, None, 99));
+        std::thread::sleep(PAST_SHORT);
+        assert_eq!(*shared.get(|| false, factory(&c.builds, 1, &c.preferred), check, retry(&c.retries, None, 99)), 99);
+        for _ in 0..10 {
+            shared.get(|| false, factory(&c.builds, 1, &c.preferred), check, retry(&c.retries, None, 99));
+        }
+        assert_eq!(checks.load(Ordering::SeqCst), 0, "a check inside the interval the retry started");
+    }
+
+    /// A caller that waited out a start's slow check does not check again: `checked` is stamped when
+    /// the check returns (the gate's adversary on `798c06d`, X2). No hold is set here, so the stamp
+    /// is the only thing between that caller and a second build.
+    #[test]
+    fn a_caller_waiting_out_a_starts_check_does_not_check_again() {
+        let shared = Shared::new(Duration::from_millis(100), HOUR);
+        let c = counters();
+        shared.get(|| false, factory(&c.builds, usize::MAX, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        std::thread::sleep(Duration::from_millis(150));
+        let in_check = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let slow = |_: &Arc<usize>| {
+                    in_check.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(200));
+                    Liveness::Alive
+                };
+                shared.refresh_now(factory(&c.builds, usize::MAX, &c.preferred), slow, retry(&c.retries, Some(false), 0));
+            });
+            scope.spawn(|| {
+                while !in_check.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                shared.get(|| false, factory(&c.builds, usize::MAX, &c.preferred), DEAD, retry(&c.retries, Some(false), 0));
+            });
+        });
+        assert_eq!(c.builds.load(Ordering::SeqCst), 1, "the waiting caller checked again and rebuilt");
+    }
+
+    /// The tripwire itself: building or retrying the real host without the opt-in panics (W3).
+    #[test]
+    #[should_panic(expected = "a test reached the real sound server")]
+    fn building_the_real_host_without_the_opt_in_panics() {
+        let _ = build_host(true);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[should_panic(expected = "a test reached the real sound server")]
+    fn retrying_the_real_host_without_the_opt_in_panics() {
+        let _ = retry_preferred();
+    }
+
     /// A line's code: what comes before a `//` that is not inside a string literal, so a URL on the
     /// line does not hide what follows it (the gate's adversary on `186ba62`).
     fn code_of(line: &str) -> &str {
@@ -793,8 +1009,10 @@ pub(crate) mod tests {
         })
     }
 
-    /// No Linux code but this module picks a cpal host, so the one shared host cannot be bypassed:
-    /// the three functions are matched as identifiers, whatever path, import or macro reaches them.
+    /// No Linux code but this module picks a cpal host: the three functions are matched as
+    /// identifiers, whatever path, import or macro reaches them, and so is `cpal::Host`'s `Default`,
+    /// which calls `default_host()` inside cpal (`platform/mod.rs:792-796`), on a line that names
+    /// `Host`. A `Default::default()` whose type is inferred from another line is not seen.
     /// The three WASAPI sites compile on Windows only and are excused by name.
     #[test]
     fn no_other_module_picks_a_cpal_host() {
@@ -814,7 +1032,8 @@ pub(crate) mod tests {
                 let rel = path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
                 for (i, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
                     let code = code_of(line);
-                    let hit = ["default_host", "host_from_id", "available_hosts"].iter().any(|f| names(code, f));
+                    let by_default = names(code, "Host") && (code.contains("::default()") || names(code, "Default"));
+                    let hit = by_default || ["default_host", "host_from_id", "available_hosts"].iter().any(|f| names(code, f));
                     let windows_only = rel == "audio/devices/platform/windows.rs" || (rel == "audio/devices/speakers.rs" && code.contains("HostId::Wasapi"));
                     if hit && !windows_only {
                         found.push(format!("{rel}:{}: {}", i + 1, line.trim()));
