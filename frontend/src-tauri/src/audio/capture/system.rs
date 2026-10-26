@@ -40,7 +40,7 @@ where
 
 /// System audio capture using Core Audio tap (macOS) or CPAL (other platforms)
 pub struct SystemAudioCapture {
-    _host: cpal::Host,
+    _host: std::sync::Arc<cpal::Host>,
 }
 
 impl SystemAudioCapture {
@@ -198,9 +198,12 @@ mod tests {
     }
 
     /// Also moved. A smoke test over the live `check_system_audio_permissions`, which
-    /// `audio/capture/mod.rs:15` re-exports and `system.rs:158` calls.
+    /// `audio/capture/mod.rs:15` re-exports and `system.rs:158` calls. It reaches the real sound
+    /// server, so it is ignored and run by name (#223).
     #[test]
+    #[ignore = "reaches the real sound server; selected by name in gopnik.json stage 1"]
     fn checking_permissions_does_not_panic() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
         let has_permission = super::check_system_audio_permissions();
         println!("Has system audio permissions: {has_permission}");
     }

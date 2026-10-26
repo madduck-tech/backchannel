@@ -17,6 +17,8 @@
       "cargo test -p conversationaly --lib test_checkpoint_creation -- --ignored --nocapture",
       "cargo test -p conversationaly --lib the_real_cpal_path_holds_the_contract -- --ignored --nocapture",
       "cargo test -p conversationaly --lib the_active_output_device_reports_usable_fields -- --ignored --nocapture",
+      "cargo test -p conversationaly --lib the_process_holds_one_sound_server_connection -- --ignored --nocapture",
+      "cargo test -p conversationaly --lib checking_permissions_does_not_panic -- --ignored --nocapture",
       "cargo test -p conversationaly --lib the_diarizer_agrees_with_what_it_said_before_the_engine_moved -- --ignored --nocapture"
     ],
     "stage2": [
