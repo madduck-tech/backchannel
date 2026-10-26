@@ -1,50 +1,68 @@
 #!/usr/bin/env python3
-"""Regenerate TRANSCRIBE_MODEL_CATALOG in src/config.rs from transcribe.cpp model cards.
+"""Regenerate TRANSCRIBE_MODEL_CATALOG in src/config.rs from transcribe.cpp's catalogue.
 
-The cards under transcribe.cpp's docs/models/ carry a Download table with the
-exact HF filename, byte size, and (usually) a measured WER per quantization.
-That is every column the catalog needs, so the catalog is generated rather than
-hand-typed for ~50 variants.
+transcribe.cpp ships a machine-readable catalogue, `catalog/*.json` (schema
+`transcribe-catalog-v1`): per variant, every published GGUF with its exact
+`size_bytes`, the languages the port advertises, its licence, and accuracy
+benchmarks by dataset, split, language and quantisation. That is every column
+the catalog needs, so the catalog is generated rather than hand-typed. (#175)
 
 Usage:
-    python3 scripts/gen_model_catalog.py [path/to/transcribe.cpp/docs/models]
+    python3 scripts/gen_model_catalog.py [path/to/transcribe.cpp checkout]
 
-With no argument it resolves the cargo git checkout of the pinned rev. Rewrites
-only the region between the GENERATED markers in src/config.rs.
+With no argument it finds cargo's checkout of the revision Cargo.lock pins. A
+checkout at any other revision, found or given, is refused: regenerating from
+the wrong one reproduces a stale catalogue and every "rows that changed" check
+then passes vacuously. Rewrites only the region between the GENERATED markers
+in src/config.rs.
 """
 
-import glob
 import json
+import os
 import re
-import struct
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_RS = REPO_ROOT / "src" / "config.rs"
+CARGO_LOCK = REPO_ROOT.parent.parent / "Cargo.lock"
 BEGIN = "    // BEGIN GENERATED — see scripts/gen_model_catalog.py\n"
 END = "    // END GENERATED\n"
 
-# Variants deliberately kept out of the catalog.
+# Every row downloads from this owner (`config::TRANSCRIBE_MODEL_BASE_URL`).
+OWNER = "handy-computer"
+
+# Only records published for transcription yield rows. The speaker diarizer
+# (`role: diarize`) emits speaker turns, never text, so it must never reach the
+# picker: it lives as config.rs::SPEAKER_DIARIZER instead, downloaded on demand
+# by the post-hoc labelling pass in audio/diarization.rs. The language
+# identifier and the VAD are not transcription models either.
+ROLE = "asr"
+
+# ASR variants deliberately kept out of the catalog, each with its reason.
 EXCLUDED = {
-    # Speaker diarizer: emits speaker turns, never text. Cannot be a
-    # transcription model, so it must never reach the picker — it lives as
-    # config.rs::SPEAKER_DIARIZER instead, downloaded on demand by the
-    # post-hoc labelling pass in audio/diarization.rs.
-    "diar_streaming_sortformer_4spk-v2.1",
     # Upstream google/medasr is gated behind the Health AI Developer
     # Foundations terms, so the download 401s for most users.
-    "medasr",
+    "medasr": "gated upstream",
     # 24B. Even Q4_K_M is far past what a meeting app should pull down.
-    "voxtral-small-24b-2507",
+    "voxtral-small-24b-2507": "too large",
+    # Its repository answers 401 on `resolve` and on the API (#175), so a
+    # listed `published_repo` does not prove the files can be downloaded.
+    "phonon-2": "repository answers 401",
+    # Licences not yet decided (#197): non-commercial, share-alike, "other".
+    "granite-speech-5.0-470m-turboctc-nc": "licence cc-by-nc-sa-4.0, #197",
+    "orukeet": "licence cc-by-sa-4.0, #197",
+    **{
+        f"moonshine-{size}-{lang}": "licence other, #197"
+        for size in ("base", "tiny")
+        for lang in ("ar", "ja", "ko", "uk", "vi", "zh")
+    },
 }
 
 # Streaming-capable variants, for the pre-download "live-capable" label only.
 #
-# ponytail: hand-maintained because the cards do not mark this reliably —
-# nemotron-3.5 and voxtral-realtime have no "## Streaming" section, and
+# ponytail: hand-maintained because no source marks this reliably —
 # parakeet-unified-en-0.6b is a unified streaming/offline model whose name says
 # nothing. These are the models that stream natively. Runtime dispatch reads
 # the GGUF's capabilities instead (`audio::transcription::live_path`), so a
@@ -75,58 +93,77 @@ CAPPED_STREAMS = {
     "moonshine-streaming-medium",
 }
 
-# (variant prefix, display family, languages, accuracy when the card's Download
-# table has no WER column). Longest prefix wins, so order matters.
+# (variant prefix, display family, accuracy when no WER is published).
+# Longest prefix wins, so order matters.
 FAMILIES = [
-    ("moonshine-streaming-", "Moonshine Streaming", "English only", "Good"),
-    ("moonshine-", "Moonshine", "English only", "Good"),
-    ("nemotron-3.5-asr-streaming-", "Nemotron 3.5", "Multilingual — 39 locales", "High"),
-    ("nemotron-speech-streaming-", "Nemotron Speech", "English only", "High"),
-    ("multitalker-parakeet-streaming-", "Multitalker Parakeet", "English only", "Good"),
-    ("parakeet-tdt-0.6b-v3", "Parakeet TDT v3", "Multilingual — 25 European languages", "High"),
-    ("parakeet-unified-en-", "Parakeet Unified", "English only", "High"),
-    ("parakeet-", "Parakeet", "English only", "High"),
-    ("canary-1b-v2", "Canary v2", "Multilingual — 25 European languages", "High"),
-    ("canary-qwen-", "Canary-Qwen", "English only", "High"),
-    ("canary-", "Canary", "Multilingual — 4 languages", "High"),
-    ("whisper-", "Whisper", "Multilingual — 99 languages", "Good"),
-    ("gigaam-", "GigaAM", "Russian", "Good"),
-    ("qwen3-asr-", "Qwen3-ASR", "Multilingual — 30 languages", "High"),
-    ("cohere-transcribe-", "Cohere Transcribe", "Multilingual — 14 languages", "High"),
-    ("sensevoice-", "SenseVoice", "Multilingual — 5 languages", "Good"),
-    ("fun-asr-mlt-nano-", "FunASR Nano MLT", "Multilingual — 31 languages", "Good"),
-    ("fun-asr-nano-", "FunASR Nano", "Chinese and English", "Good"),
-    ("granite-", "Granite Speech", "Multilingual", "Good"),
-    ("voxtral-mini-4b-realtime-", "Voxtral Realtime", "Multilingual", "Good"),
-    ("voxtral-", "Voxtral", "Multilingual — 8 languages", "Good"),
-    ("moss-transcribe-diarize", "MOSS Transcribe-Diarize", "English and Chinese", "Good"),
-    ("sensevoicesmall", "SenseVoice", "Multilingual — 5 languages", "Good"),
+    ("moonshine-streaming-", "Moonshine Streaming", "Good"),
+    ("moonshine-", "Moonshine", "Good"),
+    ("nemotron-3.5-asr-streaming-", "Nemotron 3.5", "High"),
+    ("nemotron-speech-streaming-", "Nemotron Speech", "High"),
+    ("multitalker-parakeet-streaming-", "Multitalker Parakeet", "Good"),
+    ("parakeet-tdt-0.6b-v3", "Parakeet TDT v3", "High"),
+    ("parakeet-unified-en-", "Parakeet Unified", "High"),
+    ("parakeet-", "Parakeet", "High"),
+    ("canary-1b-v2", "Canary v2", "High"),
+    ("canary-qwen-", "Canary-Qwen", "High"),
+    ("canary-", "Canary", "High"),
+    ("breeze-asr-", "Breeze ASR", "Good"),
+    ("whisper-", "Whisper", "Good"),
+    ("gigaam-", "GigaAM", "Good"),
+    ("qwen3-asr-", "Qwen3-ASR", "High"),
+    ("cohere-transcribe-", "Cohere Transcribe", "High"),
+    ("sensevoice-", "SenseVoice", "Good"),
+    ("fun-asr-mlt-nano-", "FunASR Nano MLT", "Good"),
+    ("fun-asr-nano-", "FunASR Nano", "Good"),
+    ("granite-", "Granite Speech", "Good"),
+    ("voxtral-mini-4b-realtime-", "Voxtral Realtime", "Good"),
+    ("voxtral-", "Voxtral", "Good"),
+    ("moss-transcribe-diarize", "MOSS Transcribe-Diarize", "Good"),
+    ("sensevoicesmall", "SenseVoice", "Good"),
 ]
+
+# The benchmark a row's WER is read from: LibriSpeech test-clean, English, at
+# the row's own quantisation, except where a family names its own set.
+# GigaAM's four are Russian models scored on FLEURS ru.
+DEFAULT_SET = ("librispeech", "test-clean", "en")
+FAMILY_SETS = {"GigaAM": ("fleurs", "test", "ru")}
+SET_LABELS = {
+    ("librispeech", "test-clean", "en"): "LibriSpeech test-clean",
+    ("fleurs", "test", "ru"): "FLEURS ru (Russian)",
+}
 
 # Quantization suffix -> catalog name suffix. Q8_0 is the default download;
 # Q4_K_M is offered as well once Q8_0 grows past this many MB.
 Q8, Q4 = "Q8_0", "Q4_K_M"
 Q4_THRESHOLD_MB = 500
 
-# The filename comes from the URL, not the link text: most cards use the
-# filename as link text but voxtral-realtime.md just says "GGUF".
-ROW = re.compile(
-    r"^\|\s*(?P<quant>[A-Za-z0-9_]+)\s*\|\s*\[[^\]]+\]"
-    r"\(https://huggingface\.co/[^/]+/(?P<repo>[^/]+)/resolve/[^)]*?/"
-    r"(?P<file>[^/)]+\.gguf)\)\s*\|"
-    r"\s*(?P<size>[\d.]+)\s*(?P<unit>MB|GB)\s*\|"
-    r"(?:\s*(?P<wer>[\d.]+)%\s*\|)?"
-)
+# Rows whose `size_mb` stays at a value other than `round(size_bytes / 10⁶)`,
+# each keyed by the `size_bytes` it was written against. The generator refuses
+# an entry whose row is gone or whose bytes changed, so a hold cannot outlive
+# the file it was written for. #193 deletes these.
+#
+# name -> (size_bytes written against, size_mb held, reason)
+HOLD = {
+    # The August export, the only root file that ever existed before the
+    # repository's 2026-09-12 removal: 734 123 712 and 477 812 416 bytes, sha256
+    # 4748deea…15c7 and d9f05f95…bb4f. Both load and decode jfk.wav to its words
+    # on transcribe.cpp 0.4.1 (#175 condition 3a), so a profile holding one is
+    # not damaged and must not read so. At the decimal floor of the new size it
+    # would.
+    "multitalker-parakeet-streaming-0.6b-v1-q8": (873_443_456, 734, "the August export, held until #193"),
+    "multitalker-parakeet-streaming-0.6b-v1-q4": (617_132_160, 478, "the August export, held until #193"),
+}
+
+
+def size_mb_of(size_bytes):
+    """The catalog's unit: decimal MB of the file's bytes, as the floor reads it."""
+    return round(size_bytes / 1_000_000)
 
 
 def family_of(variant):
-    for prefix, name, languages, fallback in FAMILIES:
+    for prefix, name, fallback in FAMILIES:
         if variant.startswith(prefix):
-            # Whisper's .en siblings are English-only regardless of the family
-            # default; every other family is uniform across its variants.
-            if variant.endswith(".en"):
-                languages = "English only"
-            return name, languages, fallback
+            return name, fallback
     raise SystemExit(f"no family mapping for variant {variant!r} — add one to FAMILIES")
 
 
@@ -139,9 +176,8 @@ def accuracy_of(wer, fallback):
     icon meaningless.
 
     ponytail: WER is not comparable across families — GigaAM's number is on a
-    Russian set, FunASR's on Chinese, Whisper's on LibriSpeech test-clean. Good
-    enough to sort a model into three buckets, not to rank two models against
-    each other.
+    Russian set, Whisper's on LibriSpeech test-clean. Good enough to sort a
+    model into three buckets, not to rank two models against each other.
     """
     if wer is None:
         return fallback
@@ -155,8 +191,8 @@ def accuracy_of(wer, fallback):
 def speed_of(size_mb, streaming):
     """ponytail: size stands in for parameter count, which stands in for speed.
 
-    The cards publish per-backend latency tables but no single comparable RTF,
-    and this only feeds a three-word label.
+    The catalogue publishes per-backend speed benchmarks but no single
+    comparable RTF, and this only feeds a three-word label.
     """
     # Streaming models are real-time native by construction — but only the small
     # ones. voxtral-mini-4b-realtime is streaming and 4.8 GB at Q8; calling that
@@ -172,170 +208,104 @@ def speed_of(size_mb, streaming):
     return "Slow"
 
 
-def wer_set_of(text):
-    """The eval set the card's WER column is measured on.
+def benchmark_wer(record, quant, wanted):
+    """The WER `record` publishes for `quant` on the set `wanted`, or None."""
+    dataset, split, language = wanted
+    found = {
+        b["err_pct"]
+        for b in record["accuracy_benchmarks"]
+        if (b["dataset"], b["split"], b["language"], b["quant"], b["metric"])
+        == (dataset, split, language, quant, "wer")
+    }
+    if len(found) > 1:
+        raise SystemExit(f"{record['variant']} publishes {sorted(found)} for {quant} on {wanted}")
+    return found.pop() if found else None
 
-    Every card measures LibriSpeech test-clean except GigaAM's four, which are
-    Russian models scored on FLEURS ru. One keyword rather than a hand-kept list
-    so it cannot drift from the card.
+
+def pinned_revision():
+    """`transcribe-cpp`'s revision in Cargo.lock, the one the application builds against."""
+    lock = CARGO_LOCK.read_text(encoding="utf-8")
+    m = re.search(r'name = "transcribe-cpp"\nversion = "[^"]*"\nsource = "git\+[^#]+#([0-9a-f]{40})"', lock)
+    if not m:
+        raise SystemExit(f"no transcribe-cpp git revision in {CARGO_LOCK}")
+    return m[1]
+
+
+def checkout_revision(path):
+    got = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True)
+    if got.returncode != 0:
+        raise SystemExit(f"{path} is not a git checkout: {got.stderr.strip()}")
+    return got.stdout.strip()
+
+
+def find_checkout(revision, cargo_home=None):
+    """Cargo's checkout of `revision`, found by its short-revision directory name.
+
+    Never by sort order: cargo names a checkout by its short revision, and once
+    two exist, `"553f109" > "4d7c1cc"` picked the old one.
     """
-    if "FLEURS ru test split" in text:
-        return "FLEURS ru (Russian)"
-    return "LibriSpeech test-clean"
+    home = Path(cargo_home or os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+    hits = sorted(
+        d for d in (home / "git" / "checkouts").glob("transcribe.cpp-*/*")
+        if d.is_dir() and revision.startswith(d.name)
+    )
+    if not hits:
+        raise SystemExit(f"no transcribe.cpp checkout at {revision[:7]} under {home} — run `cargo fetch` first")
+    return hits[0]
 
 
-def wer_from_preset_table(text, quants):
-    """{quant: wer} from a `| Preset | … | LibriSpeech test-clean … |` table.
-
-    Some cards (nemotron-3.5, the default model) keep WER in a per-preset
-    accuracy table instead of the Download table. Without this the default row
-    would be the only blank one in the picker. Rows are accepted only for quants
-    the Download table already listed, so an unrelated table cannot leak in.
-    """
-    column = None
-    out = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if column is None:
-            for i, cell in enumerate(cells):
-                if "LibriSpeech test-clean" in cell:
-                    column = i
-            continue
-        if cells[0] in quants and len(cells) > column:
-            try:
-                out[cells[0]] = float(cells[column])
-            except ValueError:
-                continue
-    return out
-
-
-def parse_card(path):
-    """Return {quant: (slug, repo, filename, size_mb, wer, wer_set)} for one card.
-
-    `slug` is the lowercased variant name and is what the catalog stores;
-    `filename` keeps the repo's real casing (Fun-ASR-Nano-2512, SenseVoiceSmall)
-    because it has to match the URL byte for byte.
-    """
-    text = path.read_text(encoding="utf-8")
-    quants = {}
-    for line in text.splitlines():
-        m = ROW.match(line.strip())
-        if not m:
-            continue
-        size = float(m["size"])
-        size_mb = round(size * 1024) if m["unit"] == "GB" else round(size)
-        slug = m["file"][: -len(f"-{m['quant']}.gguf")].lower()
-        quants[m["quant"]] = (
-            slug,
-            m["repo"],
-            m["file"],
-            size_mb,
-            float(m["wer"]) if m["wer"] else None,
-            wer_set_of(text),
+def verified(path, revision, revision_of=checkout_revision):
+    """`path`, if it is checked out at `revision`; otherwise refuse, naming both."""
+    got = revision_of(path)
+    if got != revision:
+        raise SystemExit(
+            f"{path} is at {got}, but Cargo.lock pins transcribe-cpp at {revision}; "
+            "refusing to generate the catalog from another revision"
         )
-
-    if quants and all(q[4] is None for q in quants.values()):
-        fallback = wer_from_preset_table(text, quants)
-        for quant, wer in fallback.items():
-            *head, _, _ = quants[quant]
-            # The fallback reads the LibriSpeech column by name, so the set is
-            # that column regardless of what else the card benchmarks.
-            quants[quant] = (*head, wer, "LibriSpeech test-clean")
-    return quants
+    return path
 
 
-GGUF_KV_TYPE_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
-
-# Enough of every GGUF seen so far to cover the whole KV header. The language
-# list sits in it, long before any tensor data.
-GGUF_HEADER_BYTES = 400_000
-
-LANG_CACHE = Path(tempfile.gettempdir()) / "transcribe-catalog-languages.json"
-
-
-def gguf_languages(repo, filename):
-    """`general.languages` straight out of the model's GGUF header.
-
-    The model's own answer, not a blurb someone typed: the hand-kept table this
-    replaced claimed 39 locales for nemotron-3.5 (its GGUF says 32) and a bare
-    "Multilingual" for Granite. Only the header is fetched — a few hundred KB by
-    HTTP range, not the multi-gigabyte weights.
-    """
-    cache = json.loads(LANG_CACHE.read_text()) if LANG_CACHE.exists() else {}
-    if filename in cache:
-        return cache[filename]
-
-    url = f"https://huggingface.co/handy-computer/{repo}/resolve/main/{filename}"
-    with tempfile.NamedTemporaryFile() as tmp:
-        got = subprocess.run(
-            ["curl", "-sL", "--max-time", "120", "-r", f"0-{GGUF_HEADER_BYTES}",
-             "-o", tmp.name, url]
-        )
-        if got.returncode != 0:
-            raise SystemExit(f"could not fetch GGUF header for {filename}")
-        langs = _parse_gguf_languages(Path(tmp.name))
-
-    if langs is None:
-        raise SystemExit(f"{filename} has no general.languages — cannot label it honestly")
-
-    cache[filename] = langs
-    LANG_CACHE.write_text(json.dumps(cache))
-    return langs
+def load_records(checkout):
+    """Every catalogue record, by variant. `_schema.json` and the like are not records."""
+    records = {}
+    for path in sorted((Path(checkout) / "catalog").glob("*.json")):
+        if path.name.startswith("_"):
+            continue
+        record = json.loads(path.read_text(encoding="utf-8"))
+        records[record["variant"]] = record
+    if not records:
+        raise SystemExit(f"no catalogue records under {checkout}/catalog")
+    return records
 
 
-def _parse_gguf_languages(path):
-    with path.open("rb") as f:
-        if f.read(4) != b"GGUF":
-            raise SystemExit(f"{path} is not a GGUF file")
-        f.read(4)   # version
-        f.read(8)   # tensor count
-        n_kv = struct.unpack("<Q", f.read(8))[0]
-
-        def read_str():
-            n = struct.unpack("<Q", f.read(8))[0]
-            return f.read(n).decode("utf-8", "replace")
-
-        for _ in range(n_kv):
-            key = read_str()
-            kind = struct.unpack("<I", f.read(4))[0]
-            if kind == 8:
-                value = read_str()
-            elif kind == 9:
-                elem = struct.unpack("<I", f.read(4))[0]
-                count = struct.unpack("<Q", f.read(8))[0]
-                if elem == 8:
-                    value = [read_str() for _ in range(count)]
-                else:
-                    f.read(GGUF_KV_TYPE_SIZES.get(elem, 4) * count)
-                    value = None
-            else:
-                f.read(GGUF_KV_TYPE_SIZES.get(kind, 4))
-                value = None
-            if key == "general.languages":
-                return value
-    return None
-
-
-def entries_for(quants):
+def entries_for(record):
     """Pick the quantizations to ship for one variant."""
-    if Q8 not in quants:
+    if record.get("role", ROLE) != ROLE or record["variant"] in EXCLUDED:
         return []
-    slug, _, _, size_mb, _, _ = quants[Q8]
-    if slug in EXCLUDED:
+    downloads = {d["quant"]: d for d in record["downloads"]}
+    if Q8 not in downloads:
         return []
+    owner, repo = record["published_repo"].split("/")
+    if owner != OWNER:
+        raise SystemExit(f"{record['variant']} is published by {owner}, not {OWNER}")
 
-    family, _, fallback = family_of(slug)
+    # The name comes from the filename, never from `variant`: `sensevoice-small`'s
+    # file is SenseVoiceSmall, and its row has always been `sensevoicesmall-q8`.
+    # Renaming a row renames a storage key.
+    slug = downloads[Q8]["filename"][: -len(f"-{Q8}.gguf")].lower()
+    family, fallback = family_of(slug)
+    wanted = FAMILY_SETS.get(family, DEFAULT_SET)
     native = slug in STREAMING
     streaming = native and slug not in CAPPED_STREAMS
-    picked = [("q8", quants[Q8])]
-    if size_mb > Q4_THRESHOLD_MB and Q4 in quants:
-        picked.append(("q4", quants[Q4]))
+    picked = [("q8", downloads[Q8])]
+    if size_mb_of(downloads[Q8]["size_bytes"]) > Q4_THRESHOLD_MB and Q4 in downloads:
+        picked.append(("q4", downloads[Q4]))
 
     out = []
-    for suffix, (_, repo, filename, size_mb, wer, wer_set) in picked:
+    for suffix, download in picked:
+        quant = Q8 if suffix == "q8" else Q4
+        wer = benchmark_wer(record, quant, wanted)
+        size_mb = size_mb_of(download["size_bytes"])
         # No languages here — that has its own field, and repeating it produced
         # "Nemotron 3.5 — Multilingual — 39 locales".
         note = " — smaller download, lower memory use" if suffix == "q4" else ""
@@ -344,19 +314,46 @@ def entries_for(quants):
                 "name": f"{slug}-{suffix}",
                 "family": family,
                 "hf_repo": repo,
-                "filename": filename,
+                "filename": download["filename"],
+                "size_bytes": download["size_bytes"],
                 "size_mb": size_mb,
                 "accuracy": accuracy_of(wer, fallback),
                 "wer": wer,
-                "wer_set": wer_set if wer is not None else "",
+                "wer_set": SET_LABELS[wanted] if wer is not None else "",
                 "speed": speed_of(size_mb, native),
                 "streaming": streaming,
                 "native": native,
-                "languages": gguf_languages(repo, filename),
+                "languages": record["languages"],
+                "license": record["license"]["spdx"],
                 "description": f"{family}{note}",
             }
         )
     return out
+
+
+def apply_holds(entries, hold=None):
+    """Hold each listed row's `size_mb`, refusing an entry that is stale."""
+    hold = HOLD if hold is None else hold
+    by_name = {e["name"]: e for e in entries}
+    for name, (size_bytes, size_mb, reason) in hold.items():
+        if name not in by_name:
+            raise SystemExit(f"HOLD names {name}, which is no longer a row — delete the entry")
+        if by_name[name]["size_bytes"] != size_bytes:
+            raise SystemExit(
+                f"HOLD for {name} was written against {size_bytes} bytes, but the catalogue "
+                f"now says {by_name[name]['size_bytes']} — the file changed, so the hold is stale ({reason})"
+            )
+        by_name[name]["size_mb"] = size_mb
+    return entries
+
+
+def generate(records, hold=None):
+    entries = []
+    for record in records.values():
+        entries.extend(entries_for(record))
+    # Recommended-first ordering is a UI concern; keep the file deterministic.
+    entries.sort(key=lambda e: (not e["native"], e["name"]))
+    return apply_holds(entries, hold)
 
 
 def render(entries):
@@ -376,35 +373,18 @@ def render(entries):
         lines.append(f'        streaming: {"true" if e["streaming"] else "false"},\n')
         codes = ", ".join(f'"{c}"' for c in e["languages"])
         lines.append(f"        languages: &[{codes}],\n")
+        lines.append(f'        license: "{e["license"]}",\n')
         lines.append(f'        description: "{e["description"]}",\n')
         lines.append("    },\n")
     lines.append(END)
     return "".join(lines)
 
 
-def default_docs_dir():
-    hits = glob.glob(
-        str(Path.home() / ".cargo/git/checkouts/transcribe.cpp-*/*/docs/models")
-    )
-    if not hits:
-        raise SystemExit(
-            "no transcribe.cpp checkout found — pass docs/models explicitly "
-            "(run `cargo fetch` first)"
-        )
-    return Path(sorted(hits)[-1])
-
-
 def main():
-    docs = Path(sys.argv[1]) if len(sys.argv) > 1 else default_docs_dir()
-    cards = sorted(docs.glob("*.md"))
-    if not cards:
-        raise SystemExit(f"no model cards under {docs}")
-
-    entries = []
-    for card in cards:
-        entries.extend(entries_for(parse_card(card)))
-    # Recommended-first ordering is a UI concern; keep the file deterministic.
-    entries.sort(key=lambda e: (not e["native"], e["name"]))
+    revision = pinned_revision()
+    checkout = verified(Path(sys.argv[1]) if len(sys.argv) > 1 else find_checkout(revision), revision)
+    print(f"reading {checkout}/catalog at {revision}")
+    entries = generate(load_records(checkout))
 
     source = CONFIG_RS.read_text(encoding="utf-8")
     start, end = source.index(BEGIN), source.index(END) + len(END)

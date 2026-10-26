@@ -187,8 +187,10 @@ const truncated = rowFor('canary-180m-flash-q8')?.textContent ?? '';
 check('6 a truncated row says what choosing it does', /Incomplete download/.test(truncated) && /the whole file is fetched again/.test(truncated),
   `the truncated row reads "${truncated}"`);
 check('6 and names no control it lacks', !/download again|delete|repair|remove/i.test(truncated), `the truncated row reads "${truncated}"`);
-// 52 000 000 bytes is 49.6 MiB, the catalogue's unit: `size_mb` counts MiB (`engine.rs:169`).
-check('6 in the catalogue\'s unit', /50 MB of 190 MB/.test(truncated), `the truncated row reads "${truncated}"`);
+// 52 000 000 bytes is 52 MB, the catalogue's unit: since #175 `size_mb` is decimal MB of the file's
+// bytes, and the floor reads it so (`TranscribeEngine::available_floor_bytes`). Before #175 both read
+// MiB, and this check required 50 (49.6 MiB).
+check('6 in the catalogue\'s unit', /52 MB of 190 MB/.test(truncated), `the truncated row reads "${truncated}"`);
 
 // 1e-1f. The search, typed into the field.
 const field = container.querySelector('input[type="search"]');
