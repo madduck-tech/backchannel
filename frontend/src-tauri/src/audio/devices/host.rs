@@ -39,9 +39,10 @@
 //! `client/reactor.rs:72-91`), so a server that stays connected but stops answering would hold
 //! every caller for ever. And the host never changes inside a recording: not while one runs, and
 //! not in the 30 s after a start begins, because a start asks for the host several times and a
-//! switch between two of those asks is the mixed start the 11:01 recording showed (#223). Before
-//! that hold a start checks the host, rebuilding a dead one, or on ALSA retries PulseAudio, whatever
-//! the intervals: so it neither keeps a dead host nor begins on ALSA while PulseAudio is back.
+//! switch between two of those asks is the mixed start the 11:01 recording showed (#223). A start
+//! sets that hold, then checks the host, rebuilding a dead one, or on ALSA retries PulseAudio,
+//! whatever the intervals and the hold: so it neither keeps a dead host nor begins on ALSA while
+//! PulseAudio is back.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -156,8 +157,8 @@ impl<T> Shared<T> {
         slot.as_ref().map(|s| s.value.clone()).expect("the slot was filled above")
     }
 
-    /// What a recording start does before the host is held for it, whatever the intervals: on the
-    /// preferred value, the liveness check and a rebuild if it is dead; on the fallback, a retry,
+    /// What a recording start does once it has set its hold, whatever the intervals and the hold: on
+    /// the preferred value, the liveness check and a rebuild if it is dead; on the fallback, a retry,
     /// unless the timeout cap is reached. Without the check, a start after a sound-server restart
     /// would find the dead host held, fail, and hold it again at every press. (#223)
     pub(crate) fn refresh_now(&self, build: impl Fn(bool) -> Built<T>, check: impl Fn(&Arc<T>) -> Liveness, retry: impl Fn() -> Retry<T>) {
@@ -742,8 +743,8 @@ pub(crate) mod tests {
         assert_eq!(*shared.get(|| false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, None, 99)), 99);
     }
 
-    /// A start, before its hold, checks a preferred host and rebuilds it if dead, inside the check
-    /// interval; on the fallback it retries inside the retry interval, but not past the cap.
+    /// A start's own check, whatever the hold, checks a preferred host and rebuilds it if dead, inside
+    /// the check interval; on the fallback it retries inside the retry interval, but not past the cap.
     #[test]
     fn a_start_refreshes_the_host_whatever_the_intervals() {
         let shared = Shared::new(HOUR, HOUR);
@@ -1011,8 +1012,10 @@ pub(crate) mod tests {
 
     /// No Linux code but this module picks a cpal host: the three functions are matched as
     /// identifiers, whatever path, import or macro reaches them, and so is `cpal::Host`'s `Default`,
-    /// which calls `default_host()` inside cpal (`platform/mod.rs:792-796`), on a line that names
-    /// `Host`. A `Default::default()` whose type is inferred from another line is not seen.
+    /// which calls `default_host()` inside cpal (`platform/mod.rs:792-796`), named as `default` or
+    /// `Default` on a line that names `Host`. Not seen: a `Default` whose type is inferred from
+    /// another line, `unwrap_or_default()`, `std::mem::take`, and a derived `Default` on a struct
+    /// that holds a host.
     /// The three WASAPI sites compile on Windows only and are excused by name.
     #[test]
     fn no_other_module_picks_a_cpal_host() {
@@ -1032,7 +1035,7 @@ pub(crate) mod tests {
                 let rel = path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
                 for (i, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
                     let code = code_of(line);
-                    let by_default = names(code, "Host") && (code.contains("::default()") || names(code, "Default"));
+                    let by_default = names(code, "Host") && (names(code, "default") || names(code, "Default"));
                     let hit = by_default || ["default_host", "host_from_id", "available_hosts"].iter().any(|f| names(code, f));
                     let windows_only = rel == "audio/devices/platform/windows.rs" || (rel == "audio/devices/speakers.rs" && code.contains("HostId::Wasapi"));
                     if hit && !windows_only {
