@@ -243,13 +243,24 @@ mod tests {
     }
 
     #[test]
-    fn absent_everywhere_and_not_executable_are_not_found() {
+    fn absent_everywhere_or_a_directory_is_not_found() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("d");
+        std::fs::create_dir_all(d.join(file_name("claude"))).unwrap();
+        assert_eq!(find("claude", &world(t.path(), Some(&d), Some(&d))), None, "a directory by that name was taken for the CLI");
+        assert_eq!(find("codex", &world(t.path(), Some(&d), Some(&d))), None);
+    }
+
+    /// Unix only: Windows has no executable bit, so any file by the name is one (CI, measured: this
+    /// passed on Windows only for as long as it created `claude` where `find` looks for `claude.exe`).
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_not_executable_is_not_found() {
         let t = tempfile::tempdir().unwrap();
         let d = t.path().join("d");
         std::fs::create_dir_all(&d).unwrap();
         exe(&d, "claude", false);
         assert_eq!(find("claude", &world(t.path(), Some(&d), Some(&d))), None);
-        assert_eq!(find("codex", &world(t.path(), Some(&d), Some(&d))), None);
     }
 
     #[test]
