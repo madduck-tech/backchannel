@@ -55,6 +55,24 @@ pub fn live_path(capabilities: Option<&transcribe_cpp::Capabilities>) -> LivePat
     }
 }
 
+/// Wait at Stop for the task [`start_transcription_task`] returned. Extracted from `stop_recording`
+/// so a test can drive it (#210); behaviour unchanged.
+pub async fn await_transcription_task(handle: tokio::task::JoinHandle<()>, limit: std::time::Duration) {
+    match tokio::time::timeout(limit, handle).await {
+        Ok(Ok(())) => {
+            log::info!("✅ ALL transcription chunks processed successfully - no data lost");
+        }
+        Ok(Err(e)) => {
+            log::warn!("⚠️ Transcription task completed with error: {:?}", e);
+            // Continue anyway - the worker may have processed most chunks
+        }
+        Err(_) => {
+            log::warn!("⏱️ Transcription timeout (10 minutes) reached, continuing shutdown to prevent indefinite hang");
+            // Continue shutdown even on timeout - better to lose some chunks than hang forever
+        }
+    }
+}
+
 /// Start live transcription for a recording.
 ///
 /// Picking a backend goes provider first, then model capability:
