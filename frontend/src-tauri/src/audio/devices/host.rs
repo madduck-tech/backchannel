@@ -594,6 +594,69 @@ pub(crate) mod tests {
         assert!(shared.warned_at_cap(), "three timed-out rebuilds reached the cap without its warning");
     }
 
+    /// A first construction that timed out counts toward the cap, so a server hung at start-up
+    /// costs at most 3 connections, like any other (the gate's adversary on `186ba62`, M1).
+    #[test]
+    fn a_first_construction_that_timed_out_counts_toward_the_cap() {
+        let shared = Shared::new(HOUR, Duration::ZERO);
+        let retries = AtomicUsize::new(0);
+        let hung = |_: bool| Built { value: 1, kind: Kind::Fallback, timed_out: true };
+        for _ in 0..100 {
+            shared.get(|| false, hung, ALIVE, retry(&retries, Some(true), 0));
+        }
+        assert_eq!(retries.load(Ordering::SeqCst), 2, "the first construction's timeout was not counted");
+        assert!(shared.warned_at_cap());
+    }
+
+    /// The intervals restart when a check, a retry or a rebuild happens, not only at construction
+    /// (the gate's adversary on `186ba62`, M2-M4). These three wait out a real 300 ms interval: with
+    /// the intervals at zero or an hour, a stamp that is never written cannot be seen.
+    const SHORT: Duration = Duration::from_millis(300);
+    const PAST_SHORT: Duration = Duration::from_millis(400);
+
+    #[test]
+    fn the_check_interval_restarts_at_each_check() {
+        let shared = Shared::new(SHORT, HOUR);
+        let c = counters();
+        let checks = AtomicUsize::new(0);
+        let check = |_: &Arc<usize>| {
+            checks.fetch_add(1, Ordering::SeqCst);
+            Liveness::Alive
+        };
+        shared.get(|| false, factory(&c.builds, usize::MAX, &c.preferred), check, retry(&c.retries, Some(false), 0));
+        std::thread::sleep(PAST_SHORT);
+        for _ in 0..10 {
+            shared.get(|| false, factory(&c.builds, usize::MAX, &c.preferred), check, retry(&c.retries, Some(false), 0));
+        }
+        assert_eq!(checks.load(Ordering::SeqCst), 1, "a check did not restart the check interval");
+    }
+
+    #[test]
+    fn the_retry_interval_restarts_at_each_retry() {
+        let shared = Shared::new(HOUR, SHORT);
+        let c = counters();
+        shared.get(|| false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        std::thread::sleep(PAST_SHORT);
+        for _ in 0..10 {
+            shared.get(|| false, factory(&c.builds, 1, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        }
+        assert_eq!(c.retries.load(Ordering::SeqCst), 1, "a retry did not restart the retry interval");
+    }
+
+    #[test]
+    fn a_rebuild_onto_the_fallback_restarts_the_retry_interval() {
+        let shared = Shared::new(Duration::ZERO, SHORT);
+        let c = counters();
+        shared.get(|| false, factory(&c.builds, 2, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        std::thread::sleep(PAST_SHORT);
+        let rebuilt = shared.get(|| false, factory(&c.builds, 2, &c.preferred), DEAD_FIRST, retry(&c.retries, Some(false), 0));
+        assert_eq!(*rebuilt, 2, "precondition: the dead host was rebuilt on the fallback");
+        for _ in 0..10 {
+            shared.get(|| false, factory(&c.builds, 2, &c.preferred), ALIVE, retry(&c.retries, Some(false), 0));
+        }
+        assert_eq!(c.retries.load(Ordering::SeqCst), 0, "a retry inside the interval that the rebuild started");
+    }
+
     /// The check runs at most once per interval: a dead answer inside it changes nothing.
     #[test]
     fn the_liveness_check_runs_at_most_once_per_interval() {
@@ -702,7 +765,36 @@ pub(crate) mod tests {
         assert_eq!(liveness(Err(cpal::Error::new(cpal::ErrorKind::HostUnavailable))), Liveness::Alive);
     }
 
-    /// No Linux code but this module picks a cpal host, so the one shared host cannot be bypassed.
+    /// A line's code: what comes before a `//` that is not inside a string literal, so a URL on the
+    /// line does not hide what follows it (the gate's adversary on `186ba62`).
+    fn code_of(line: &str) -> &str {
+        let bytes = line.as_bytes();
+        let mut in_string = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' if in_string => i += 1,
+                b'\'' if !in_string && bytes.get(i + 1) == Some(&b'"') && bytes.get(i + 2) == Some(&b'\'') => i += 2,
+                b'"' => in_string = !in_string,
+                b'/' if !in_string && bytes.get(i + 1) == Some(&b'/') => return &line[..i],
+                _ => {}
+            }
+            i += 1;
+        }
+        line
+    }
+
+    /// Whether `code` names `ident` as a whole identifier: called by any path, imported by `use`, or
+    /// passed to a macro.
+    fn names(code: &str, ident: &str) -> bool {
+        let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        code.match_indices(ident).any(|(at, _)| {
+            !code[..at].chars().next_back().is_some_and(is_ident) && !code[at + ident.len()..].chars().next().is_some_and(is_ident)
+        })
+    }
+
+    /// No Linux code but this module picks a cpal host, so the one shared host cannot be bypassed:
+    /// the three functions are matched as identifiers, whatever path, import or macro reaches them.
     /// The three WASAPI sites compile on Windows only and are excused by name.
     #[test]
     fn no_other_module_picks_a_cpal_host() {
@@ -721,8 +813,8 @@ pub(crate) mod tests {
                 }
                 let rel = path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
                 for (i, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
-                    let code = line.split("//").next().unwrap_or("");
-                    let hit = ["cpal::default_host", "cpal::host_from_id", "cpal::available_hosts"].iter().any(|f| code.contains(f));
+                    let code = code_of(line);
+                    let hit = ["default_host", "host_from_id", "available_hosts"].iter().any(|f| names(code, f));
                     let windows_only = rel == "audio/devices/platform/windows.rs" || (rel == "audio/devices/speakers.rs" && code.contains("HostId::Wasapi"));
                     if hit && !windows_only {
                         found.push(format!("{rel}:{}: {}", i + 1, line.trim()));
