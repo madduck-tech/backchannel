@@ -9,15 +9,17 @@
 #   disk-sweep.sh [--dry-run] [--profiles]
 #
 # 1. A registered worktree of this repository is removed when it is done: not the main worktree, not
-#    locked, not holding $CLAUDE_PROJECT_DIR, its HEAD reachable from the local origin/main, nothing
-#    untracked or ignored outside what a build regenerates, nothing written for 24 hours, and no
-#    process working inside it. Anything else keeps it, and the reason is printed.
+#    locked, not holding $CLAUDE_PROJECT_DIR, its HEAD a commit reachable from the local origin/main,
+#    no commit that only its HEAD's reflog holds, nothing untracked, nothing ignored outside what a
+#    build regenerates, nothing written for 24 hours, and no process working inside it. Anything else
+#    keeps it, and the reason is printed. A check that cannot be made keeps it too.
 # 2. Each distinct target/ that carries Cargo's CACHEDIR.TAG is held under BC_TARGET_CAP_GB. Over it,
 #    a target loses every */incremental/, then every AppImage but the newest, then -- only with
 #    --profiles, which only Stage 1 entry 2 passes, before any build -- whole profiles, least
 #    recently written first. Only whole directories go: a build script's out/ file deleted alone can
 #    leave Cargo trusting an output that is gone. A profile whose Cargo lock is held is not touched,
-#    and the sweep holds the locks while it deletes there.
+#    and the sweep holds the locks while it deletes there. Nor is one a process runs a file from,
+#    works in or holds open: a test binary `cargo test` runs, or a bundler, holds no Cargo lock.
 #
 # Every removal is printed with its size. --dry-run prints and removes nothing.
 set -uo pipefail
@@ -34,7 +36,10 @@ say() { printf 'disk-sweep: %s\n' "$*" >&2; }
 here=$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 . "$here/lib/target-cap-default.sh"
 CAP=${BC_TARGET_CAP_BYTES:-$(( ${BC_TARGET_CAP_GB:-$TARGET_CAP_DEFAULT_GB} * 1000000000 ))}
+# The signature is the generic cache-directory one: pipx, uv and fontconfig write it too. Cargo's own
+# second line is what makes a target/ a target.
 CACHEDIR_SIGNATURE='Signature: 8a477f597d28d172789f06886806bc55'
+CACHEDIR_CARGO='# This file is a cache directory tag created by cargo.'
 LOCKS=(.cargo-lock .cargo-build-lock .cargo-artifact-lock)
 verb=$([ -n "$DRY" ] && echo "would remove" || echo "removed")
 size_of() { du -sxh -- "$1" 2>/dev/null | cut -f1; }
@@ -48,12 +53,14 @@ g rev-parse --git-dir >/dev/null 2>&1 || { say "not inside a checkout of this re
 # ---- 1. worktrees that are done --------------------------------------------------------------------
 
 # What a build or the gate regenerates, by path prefix. On 2026-10-27, Stage 1 and Stage 2's builds
-# left exactly these in a fresh worktree (#257). Anything else, untracked or ignored, is somebody's.
+# left exactly these in a fresh worktree (#257), and every one is ignored. So this list is read for
+# ignored paths only: an untracked path is somebody's work even where a build writes, such as the
+# gen/android a `tauri android init` creates beside gen/schemas.
 regenerated() {
   case "$1" in
     target|target/*|node_modules|node_modules/*|frontend/node_modules|frontend/node_modules/*) return 0 ;;
     frontend/.next/*|frontend/out/*|frontend/storybook-static/*|frontend/src-tauri/binaries/*) return 0 ;;
-    frontend/src-tauri/gen/*|frontend/tsconfig.tsbuildinfo|frontend/next-env.d.ts) return 0 ;;
+    frontend/src-tauri/gen/schemas/*|frontend/tsconfig.tsbuildinfo|frontend/next-env.d.ts) return 0 ;;
     __pycache__/*|*/__pycache__/*) return 0 ;;
   esac
   return 1
@@ -61,23 +68,32 @@ regenerated() {
 
 # The first reason a worktree is not done, or nothing.
 why_kept() {
-  local w=$1 line path pid cwd
+  local w=$1 line path pid cwd head lost st
   if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     case "$(readlink -f -- "$CLAUDE_PROJECT_DIR")/" in "$w"/*) echo "it holds \$CLAUDE_PROJECT_DIR"; return ;; esac
   fi
   g rev-parse -q --verify refs/remotes/origin/main >/dev/null || { echo "there is no local origin/main to judge it by"; return; }
-  g merge-base --is-ancestor "$(git -C "$w" rev-parse HEAD)" refs/remotes/origin/main 2>/dev/null \
-    || { echo "its HEAD is not in origin/main"; return; }
+  head=$(git -C "$w" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || { echo "its HEAD is no commit"; return; }
+  g merge-base --is-ancestor "$head" refs/remotes/origin/main 2>/dev/null || { echo "its HEAD is not in origin/main"; return; }
+  # A commit its HEAD once held and no branch, tag or remote holds lives only in this worktree's reflog,
+  # and goes with it. The second --not makes the reflog's commits the positive side.
+  lost=$(git -C "$w" log -g --format=%H HEAD 2>/dev/null | sort -u \
+    | xargs -r git -C "$w" rev-list -n 1 --not --branches --tags --remotes --not 2>/dev/null) \
+    || { echo "its HEAD's reflog could not be read"; return; }
+  [ -n "$lost" ] && { echo "its HEAD's reflog holds ${lost:0:12}, which no branch, tag or remote holds"; return; }
+  st=$(git -C "$w" status --porcelain=v1 --untracked-files=all --ignored 2>/dev/null) || { echo "git status failed in it"; return; }
   while IFS= read -r line; do
+    [ -n "$line" ] || continue
     path=${line:3}; path=${path%/}
     case "${line:0:2}" in
-      '??'|'!!') regenerated "$path" || regenerated "$path/" || { echo "it holds ${line:0:2} $path, which no build regenerates"; return; } ;;
+      '!!') regenerated "$path" || regenerated "$path/" || { echo "it holds !! $path, which no build regenerates"; return; } ;;
+      '??') echo "it holds ?? $path, which nobody has added"; return ;;
       *) echo "a tracked file changed: $path"; return ;;
     esac
-  done < <(git -C "$w" status --porcelain=v1 --untracked-files=all --ignored 2>/dev/null)
+  done <<< "$st"
   path=$(find "$w" -mindepth 1 \( -name .git -o -name target -o -name node_modules -o -name __pycache__ \
            -o -path "$w/frontend/.next" -o -path "$w/frontend/out" -o -path "$w/frontend/storybook-static" \
-           -o -path "$w/frontend/src-tauri/binaries" -o -path "$w/frontend/src-tauri/gen" \
+           -o -path "$w/frontend/src-tauri/binaries" -o -path "$w/frontend/src-tauri/gen/schemas" \
            -o -path "$w/frontend/tsconfig.tsbuildinfo" -o -path "$w/frontend/next-env.d.ts" \) -prune \
            -o -newermt '24 hours ago' -print -quit 2>/dev/null)
   [ -n "$path" ] && { echo "${path#"$w"/} was written in the last 24 hours"; return; }
@@ -105,7 +121,8 @@ while IFS= read -r line; do
       reason=$(why_kept "$w")
       if [ -n "$reason" ]; then say "kept $w: $reason"; continue; fi
       say "$verb $w ($(size_of "$w"))"
-      [ -z "$DRY" ] && { g worktree remove --force "$w" 2>/dev/null || say "could not remove $w"; }
+      # Without --force, so git refuses on its own a worktree that gained untracked work since the check.
+      [ -z "$DRY" ] && { err=$(g worktree remove "$w" 2>&1) || say "could not remove $w: $err"; }
       ;;
   esac
 done < <(g worktree list --porcelain; echo)
@@ -125,7 +142,7 @@ while IFS= read -r line; do
 done < <(g worktree list --porcelain)
 
 for t in "${targets[@]+"${targets[@]}"}"; do
-  if ! grep -qxF "$CACHEDIR_SIGNATURE" "$t/CACHEDIR.TAG" 2>/dev/null; then
+  if ! grep -qxF "$CACHEDIR_SIGNATURE" "$t/CACHEDIR.TAG" 2>/dev/null || ! grep -qxF "$CACHEDIR_CARGO" "$t/CACHEDIR.TAG"; then
     say "left $t alone: it has no Cargo CACHEDIR.TAG"; continue
   fi
   [ "$(bytes_of "$t")" -le "$CAP" ] && continue
@@ -153,18 +170,32 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     done
   }
   close_locks() { local fd; for fd in "${held[@]+"${held[@]}"}"; do exec {fd}<&-; done; held=(); }
-  # What is left, counted down as things go, so a dry run stops where a real one would.
+  # What is left. A real run measures it again after every removal: a hard-linked file frees nothing
+  # until its last path goes, and a removal can fail. A dry run removes nothing, so it counts down,
+  # never counting a path twice, a path under one it counted, or what it counted under a path again.
+  # Its one blind spot is the hard link, which it counts at each path: it can stop an entry before
+  # the real run. On 2026-10-27 the shared target held 82-85 MB of hard links (#257).
   remaining=$(bytes_of "$t")
   over() { [ "$remaining" -gt "$CAP" ]; }
-  # A dry run removes nothing, so it remembers what it would have removed, and never counts a path
-  # twice, or a path under one it already counted.
-  planned=()
+  planned=(); declare -A counted=()
   remove() {
     local n q
     for q in "${planned[@]+"${planned[@]}"}"; do case "$1" in "$q"|"$q"/*) return 0 ;; esac; done
-    planned+=("$1")
-    n=$(bytes_of "$1"); remaining=$(( remaining - ${n:-0} ))
-    say "$verb $1 ($(size_of "$1"))"; [ -n "$DRY" ] || rm -rf -- "$1"
+    n=$(bytes_of "$1"); n=${n:-0}
+    for q in "${planned[@]+"${planned[@]}"}"; do case "$q" in "$1"/*) n=$(( n - ${counted[$q]:-0} )) ;; esac; done
+    planned+=("$1"); counted[$1]=$n
+    say "$verb $1 ($(size_of "$1"))"
+    if [ -n "$DRY" ]; then remaining=$(( remaining - n )); return 0; fi
+    rm -rf -- "$1" || say "could not remove all of $1"
+    remaining=$(bytes_of "$t"); remaining=${remaining:-0}
+  }
+  # A process whose executable, working directory or an open file is at or under a path.
+  in_use() {
+    local pat hit
+    pat=$(printf '%s' "$1" | sed 's/[][*?\\]/\\&/g')
+    hit=$(find /proc/[0-9]*/exe /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 \( -lname "$pat" -o -lname "$pat/*" \) -print -quit 2>/dev/null)
+    [ -n "$hit" ] || return 1
+    hit=${hit#/proc/}; echo "${hit%%/*}"
   }
   profile_of() { local p; for p in "${profiles[@]+"${profiles[@]}"}"; do case "$1" in "$p"/*) echo "$p"; return ;; esac; done; }
   # Empty a directory of everything but the lock files at a profile's top and the kept AppImage with
@@ -192,6 +223,7 @@ for t in "${targets[@]+"${targets[@]}"}"; do
   while IFS= read -r a; do
     over || break
     [ -n "$a" ] && [ "$a" != "$keep_app" ] || continue
+    if pid=$(in_use "$a"); then say "left $a alone: process $pid uses it"; continue; fi
     p=$(profile_of "$a")
     if [ -n "$p" ] && ! take_locks "$p"; then say "left $a alone: Cargo holds $p's lock"; continue; fi
     remove "$a"; [ -e "$a.built-from" ] && remove "$a.built-from"
@@ -199,13 +231,15 @@ for t in "${targets[@]+"${targets[@]}"}"; do
   done < <(find "$t" -path '*/release/bundle/*' -name '*.AppImage' -type f 2>/dev/null | sort)
   # Step 3, only under --profiles: whole profiles, least recently written first.
   if [ -n "$PROFILES" ]; then
-    for top in $(for q in "${profiles[@]+"${profiles[@]}"}"; do printf '%s %s\n' "${newest[$q]:-0}" "$q"; done | sort -n | cut -d' ' -f2-); do
+    # Read line by line: a path may hold a space.
+    while IFS= read -r top; do
       over || break
+      if pid=$(in_use "$top"); then say "left $top alone: process $pid uses it"; continue; fi
       if ! take_locks "$top"; then say "left $top alone: Cargo holds its lock"; continue; fi
       empty_except "$top"
       close_locks
-    done
+    done < <(for q in "${profiles[@]+"${profiles[@]}"}"; do printf '%s %s\n' "${newest[$q]:-0}" "$q"; done | sort -n | cut -d' ' -f2-)
   fi
-  unset newest
+  unset newest counted
 done
 exit 0

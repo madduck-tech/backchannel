@@ -185,7 +185,7 @@ test('the full floor sweeps first; --brief never does; without --profiles no pro
   age(wt);
   // A Cargo target over a 1-byte cap, with incremental/ and a profile's artifacts.
   const t = path.join(fx.work, 'target');
-  fs.writeFileSync(path.join(t, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n');
+  fs.writeFileSync(path.join(t, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n');
   fs.writeFileSync(path.join(t, 'debug', '.cargo-lock'), '');
   fs.mkdirSync(path.join(t, 'debug', 'deps'), { recursive: true }); fs.writeFileSync(path.join(t, 'debug', 'deps', 'liba.rlib'), 'x');
   const brief = floor(fx, { BC_TARGET_CAP_BYTES: '1' }, ['--brief']);
