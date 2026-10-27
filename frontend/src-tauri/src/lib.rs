@@ -543,6 +543,7 @@ pub fn run() {
             transcribe_engine::commands::transcribe_is_model_loaded,
             transcribe_engine::commands::transcribe_has_available_models,
             transcribe_engine::commands::transcribe_validate_model_ready,
+            transcribe_engine::commands::transcribe_recording_model_state,
             transcribe_engine::commands::transcribe_transcribe_audio,
             transcribe_engine::commands::transcribe_builtin_models,
             transcribe_engine::commands::transcribe_model_languages,
