@@ -56,6 +56,23 @@ test('every file tauri-action uploads is checksummed', () => {
   assert.ok(!re.test('SHA256SUMS'), 'the checksum file must not checksum itself');
 });
 
+test('the app version is one number wherever it is carried, and INSTALL.md names its files (#254)', () => {
+  // No test held this before 0.1.1: a bump that missed one file would ship a build whose sidebar,
+  // installer and crate disagree. `llama-helper`'s own `0.1.0` is the sidecar's version, not the app's.
+  const read = (p) => fs.readFileSync(path.join(repo, p), 'utf8');
+  const app = JSON.parse(read('frontend/src-tauri/tauri.conf.json')).version;
+  const carried = {
+    'frontend/package.json': JSON.parse(read('frontend/package.json')).version,
+    'frontend/src-tauri/Cargo.toml': /^\[package\][\s\S]*?^version = "([^"]+)"/m.exec(read('frontend/src-tauri/Cargo.toml'))?.[1],
+    "Cargo.lock's conversationaly": /\nname = "conversationaly"\nversion = "([^"]+)"/.exec(read('Cargo.lock'))?.[1],
+  };
+  assert.match(app, /^\d+\.\d+\.\d+$/, `tauri.conf.json's version is ${app}`);
+  assert.deepEqual(carried, Object.fromEntries(Object.keys(carried).map((k) => [k, app])), `the version is not ${app} everywhere`);
+  const named = [...read('docs/INSTALL.md').matchAll(/Backchannel_(\d+\.\d+\.\d+)_/g)].map((m) => m[1]);
+  assert.ok(named.length >= 5, `INSTALL.md names ${named.length} versioned files; it named 5 at 0.1.0`);
+  assert.deepEqual([...new Set(named)], [app], `INSTALL.md names files of another version than ${app}`);
+});
+
 test('a release leg runs nothing after its upload that could fail it', () => {
   // Both run after tauri-action has uploaded; a failure would skip release-summary and SHA256SUMS.
   for (const name of ['Install FUSE for AppImage processing', 'Remove libwayland-client.so from AppImage']) {

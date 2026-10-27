@@ -1,6 +1,6 @@
 [package]
 name = "conversationaly"
-version = "0.1.0"
+version = "0.1.1"
 description = "Backchannel, a local meeting copilot"
 authors = ["Backchannel"]
 license = "MIT"
