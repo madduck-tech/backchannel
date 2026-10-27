@@ -108,8 +108,9 @@ const BACKLOG = new Set([
  * non-empty reason -- an entry cannot be added by pasting a path.
  */
 /**
- * The six providers `src/contexts/` brought into the denominator in #130, minus the one that gained a
- * test in the same change. **Entries only ever leave**, exactly like `BACKLOG`.
+ * The providers `src/contexts/` brought into the denominator in #130, minus the one that gained a
+ * test in the same change: six then, five since #226 rendered `ConfigContext.tsx`. **Entries only ever
+ * leave**, exactly like `BACKLOG`.
  *
  * A separate list rather than sixty-six lines in `BACKLOG`, for the reason this file already gives
  * about `NEVER_INVOKED`: a short list is conspicuous by arithmetic, and a seventh entry pasted into
@@ -125,6 +126,23 @@ const CONTEXTS_ADMITTED = new Set([
   'src/contexts/RecordingPostProcessingProvider.tsx',
   'src/contexts/RecordingStateContext.tsx',
   'src/contexts/TranscriptContext.tsx',
+]);
+
+/**
+ * The pages `src/app/` brought into the denominator in #226, which every page but the one it renders
+ * joins. **Entries only ever leave.** #226's defect lived in `src/app/meeting-details/page.tsx`,
+ * outside every coverage rule, and ADR 0022 decision 1 makes extending the rule part of the fix. A
+ * separate list for the reason `CONTEXTS_ADMITTED` gives: an eighth entry pasted here is a visible
+ * diff, and the lists above are closed.
+ */
+const PAGES_ADMITTED = new Set([
+  'src/app/layout.tsx',
+  'src/app/meeting-details/page-content.tsx',
+  'src/app/metadata.tsx',
+  'src/app/notes/[id]/page.tsx',
+  'src/app/nudge/page.tsx',
+  'src/app/page.tsx',
+  'src/app/settings/page.tsx',
 ]);
 
 const EXCEPTIONS = {};
@@ -147,7 +165,7 @@ for (const file of fs.readdirSync(here).filter((f) => f.endsWith('.test.mjs'))) 
 }
 
 const unrendered = new Set(components.filter((c) => !rendered.has(c)));
-const allowed = new Set([...BACKLOG, ...CONTEXTS_ADMITTED, ...Object.keys(EXCEPTIONS)]);
+const allowed = new Set([...BACKLOG, ...CONTEXTS_ADMITTED, ...PAGES_ADMITTED, ...Object.keys(EXCEPTIONS)]);
 
 // --- every exception carries a reason -------------------------------------------------------------
 {
@@ -179,8 +197,8 @@ assertSetEquals(
 // providers and the numerator gained `OnboardingContext.tsx`. The floor stood at 11 against an actual
 // of 19, which is eight components of slack it could lose in silence. Raised to the measured number,
 // which is what the instruction below has always asked for. It had slipped again: 23 against 20 when
-// #226 rendered `ConfigContext.tsx`, making 24.
-const FLOOR = 24;
+// #226 rendered `ConfigContext.tsx` and `src/app/meeting-details/page.tsx`, making 25.
+const FLOOR = 25;
 assert.ok(
   rendered.size >= FLOOR,
   `${rendered.size} components are rendered by a test; the floor is ${FLOOR}. Something that had a ` +
@@ -191,5 +209,6 @@ const pct = ((rendered.size / components.length) * 100).toFixed(1);
 console.log(
   `ok - ${rendered.size} of ${components.length} components (${pct}%) are rendered by a test; ` +
     `${BACKLOG.size} in the backlog, ${CONTEXTS_ADMITTED.size} providers admitted by #130, ` +
+    `${PAGES_ADMITTED.size} pages admitted by #226, ` +
     `${Object.keys(EXCEPTIONS).length} deliberate exceptions`
 );

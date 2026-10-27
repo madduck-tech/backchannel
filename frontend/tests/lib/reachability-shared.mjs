@@ -217,7 +217,7 @@ export const VENDORED_COMPONENTS = /^src\/components\/ui\//;
  * renders *it*, and turn `no-invisible-component.test.mjs` red for doing exactly what #124 asks for.
  */
 export const STORY_FILES = /\.stories\.tsx$/;
-export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/', 'src/contexts/'];
+export const COMPONENT_ROOTS = ['src/components/', 'src/app/', 'src/contexts/'];
 export const isComponentFile = (f) =>
   COMPONENT_ROOTS.some((r) => f.startsWith(r)) &&
   f.endsWith('.tsx') &&

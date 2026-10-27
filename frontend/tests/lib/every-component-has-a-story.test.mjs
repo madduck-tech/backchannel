@@ -98,6 +98,23 @@ const WITHOUT_STORY = new Set([
   'src/contexts/TranscriptContext.tsx',
 ]);
 
+/**
+ * The pages `src/app/` brought into the denominator in #226, with no story beside any of them. **Entries only ever leave.** #226's defect lived in `src/app/meeting-details/page.tsx`,
+ * outside every coverage rule, and ADR 0022 decision 1 makes extending the rule part of the fix. A
+ * separate list for the reason `CONTEXTS_ADMITTED` gives: an eighth entry pasted here is a visible
+ * diff, and the lists above are closed.
+ */
+const PAGES_WITHOUT_STORY = new Set([
+  'src/app/layout.tsx',
+  'src/app/meeting-details/page-content.tsx',
+  'src/app/meeting-details/page.tsx',
+  'src/app/metadata.tsx',
+  'src/app/notes/[id]/page.tsx',
+  'src/app/nudge/page.tsx',
+  'src/app/page.tsx',
+  'src/app/settings/page.tsx',
+]);
+
 const components = componentFiles();
 
 /** A story sits beside its component: `Foo.stories.tsx` next to `Foo.tsx`. */
@@ -114,10 +131,10 @@ const withoutStory = new Set(components.filter((c) => !storied.has(c)));
 // --- the set with no story is exactly what is written down ----------------------------------------
 assertSetEquals(
   withoutStory,
-  WITHOUT_STORY,
+  new Set([...WITHOUT_STORY, ...PAGES_WITHOUT_STORY]),
   'components with no story',
   'A component arrived with no story, or one gained a story and the list was not trimmed.\n' +
-    '  Write `<Name>.stories.tsx` beside it, then delete its line from WITHOUT_STORY.'
+    '  Write `<Name>.stories.tsx` beside it, then delete its line from WITHOUT_STORY or PAGES_WITHOUT_STORY.'
 );
 
 // --- and the number that has one never falls ------------------------------------------------------
@@ -133,5 +150,5 @@ assert.ok(
 const pct = ((withStory.size / components.length) * 100).toFixed(1);
 console.log(
   `ok - ${withStory.size} of ${components.length} components (${pct}%) have a story; ` +
-    `${WITHOUT_STORY.size} written down as not`
+    `${WITHOUT_STORY.size + PAGES_WITHOUT_STORY.size} written down as not, ${PAGES_WITHOUT_STORY.size} of them pages admitted by #226`
 );
