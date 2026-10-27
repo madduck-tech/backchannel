@@ -49,6 +49,7 @@ CACHE="${BC_MODELS_CACHE:-$HOME/.cache/backchannel-gate-models}"
 
 say() { printf 'stage2-ui-check: %s\n' "$*"; }
 die() { printf 'stage2-ui-check: %s\n' "$*" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
 
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
@@ -81,7 +82,11 @@ done
     to that one and exits, and the WebDriver handshake then times out with 'IncompleteMessage'.
     Stop it and re-run."
 
-if [ -z "$PROFILE" ]; then PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1; fi
+if [ -z "$PROFILE" ]; then
+  kept_profile_prune /tmp ui-check "$(kept_profile_keep_count stage2-ui-check.sh)"
+  PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1
+  kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
+fi
 APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA"
 # The onboarding marker alone -- no models. This pass never records, so it does not need them,
@@ -108,6 +113,7 @@ cleanup() {
   if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
     rm -rf "$PROFILE"
   elif [ -n "${OWN_PROFILE:-}" ]; then
+    kept_profile_strip "$PROFILE"
     printf 'stage2-ui-check: profile kept for inspection: %s\n' "$PROFILE" >&2
   fi
 }

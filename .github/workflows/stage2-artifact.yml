@@ -7,7 +7,8 @@ name: Stage 2 artifact
 # PipeWire session, so those stay on a real machine. Entries 1-4 need neither, and entry 3 --
 # the AppImage build -- is 8.7 min of the ~9-13 min an observation costs (49 s Next.js,
 # 471 s `tauri build`, measured on 4daa4af with warm caches). Moving it here means a person's
-# Stage 2 starts at entry 5 with a downloaded artifact.
+# Stage 2 starts at entry 4, the disk floor, with a downloaded artifact (#248 put the floor there;
+# it was entry 5 before).
 #
 # What this is NOT: a Stage 2 pass. Nothing here drives the application, records audio or
 # reads a transcript. `scripts/stage2-ui-check.sh` cannot run on a stock runner -- it asserts

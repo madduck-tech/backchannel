@@ -92,14 +92,17 @@ cleanup() {
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
   if [ -n "$PROFILE" ] && [ "$PASSED" = "1" ]; then rm -rf "$PROFILE"
-  elif [ -n "$PROFILE" ]; then printf 'stage2-ui-record-check: profile kept: %s\n' "$PROFILE" >&2; fi
+  elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-ui-record-check: profile kept: %s\n' "$PROFILE" >&2; fi
 }
 trap cleanup EXIT
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
+kept_profile_prune /tmp ui-record "$(kept_profile_keep_count stage2-ui-record-check.sh)"
 PROFILE=$(mktemp -d /tmp/backchannel-ui-record.XXXXXX)
+kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
 APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
-cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
+seed_copy "$CACHE/models" "$APPDATA/" || die "could not seed $APPDATA from $CACHE/models"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true
 # A writable save_folder, so this exercises the configured path rather than the platform
 # default. Without it the run tests only what happens when nobody has chosen a folder --

@@ -3,7 +3,7 @@
 // #43. Every Stage 2 observation in this repository's history was made on one laptop by
 // hand, and the largest single cost of one is the 8.7-minute build. Moving that build into
 // CI only helps if what comes out is what `gopnik.json` stage 2 says to build: a person who
-// downloads the artifact and starts at entry 5 is trusting that entries 1-4 already happened
+// downloads the artifact and starts at entry 4 (5 before #248's disk floor) is trusting that entries 1-4 already happened
 // *as written*. If the workflow drifts to different flags -- a different bundle, updater
 // artifacts back on, a debug profile -- the pass runs against something the gate never
 // described, and nothing would say so, because both sides would be green.
@@ -108,7 +108,7 @@ for (const [needle, what] of [
     gate,
     `stage2-artifact.yml and gopnik.json stage 2 disagree about how to build ${what}.\n` +
       `  gate:     ${gate.join(' && ')}\n  workflow: ${step.join(' && ')}\n\n` +
-      '  A person who downloads this artifact and starts Stage 2 at entry 5 is trusting that ' +
+      '  A person who downloads this artifact and starts Stage 2 at entry 4 is trusting that ' +
       'entries 1-4 happened as the gate describes them. When these two drift, both sides stay ' +
       'green and the pass runs against something nothing described.'
   );
