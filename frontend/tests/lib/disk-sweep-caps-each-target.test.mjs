@@ -143,6 +143,7 @@ test('one target shared by two worktrees is measured once, and a target outside 
   const t = path.join(fx.root, 'outside-target');
   const dry = sweep(fx, 0, ['--dry-run']);
   const lines = dry.out.split('\n').filter((l) => l.includes(`would remove ${t}/debug/incremental `));
+  assert.ok(lines.length >= 1, `a target outside every worktree was not planned at all:\n${dry.out}`);
   assert.equal(lines.length, 1, `one target linked from two worktrees was planned twice:\n${dry.out}`);
   const r = sweep(fx, bytes(t) - bytes(path.join(t, 'debug/incremental')) + 4096);
   assert.ok(!has(t, 'debug/incremental'), `a target outside every worktree was not capped:\n${r.out}`);
