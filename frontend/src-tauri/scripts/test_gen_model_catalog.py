@@ -186,6 +186,16 @@ REPOSITORIES_ADDED_BY_175 = [
 ]
 
 
+def mark_of(rust):
+    """A rendered `LicenceMark` as the generator's (mark, revenue) pair."""
+    if rust == "LicenceMark::None":
+        return ("none", None)
+    if rust == "LicenceMark::NonCommercial":
+        return ("non_commercial", None)
+    m = re.fullmatch(r"LicenceMark::RevenueLimit \{ usd: ([0-9_]+) \}", rust)
+    return ("revenue_limit", int(m[1].replace("_", ""))) if m else None
+
+
 def committed_rows():
     """The committed catalog's rows, field by field, as the generator wrote them."""
     region = CONFIG[CONFIG.index(gen.BEGIN) : CONFIG.index(gen.END)]
@@ -201,6 +211,8 @@ def committed_rows():
                 "size_mb": int(fields["size_mb"]),
                 "wer": None if wer == "None" else float(wer[len("Some(") : -1]),
                 "wer_set": fields["wer_set"].strip('"'),
+                "upstream_repo": fields["upstream_repo"].strip('"'),
+                "licence": (fields["license_name"].strip('"'), fields["license_url"].strip('"'), mark_of(fields["license_mark"])),
             }
         )
     return rows
@@ -326,16 +338,6 @@ class TheWordErrorRate(unittest.TestCase):
         self.assertGreater(covered, 0)
 
 
-def mark_of(rust):
-    """A rendered `LicenceMark` as the generator's (mark, revenue) pair."""
-    if rust == "LicenceMark::None":
-        return ("none", None)
-    if rust == "LicenceMark::NonCommercial":
-        return ("non_commercial", None)
-    m = re.fullmatch(r"LicenceMark::RevenueLimit \{ usd: ([0-9_]+) \}", rust)
-    return ("revenue_limit", int(m[1].replace("_", ""))) if m else None
-
-
 def diarizer_licence():
     block = CONFIG[CONFIG.index("pub const SPEAKER_DIARIZER: DiarizerModel") :]
     block = block[: block.index("};")]
@@ -359,6 +361,28 @@ class TheLicences(unittest.TestCase):
         self.assertEqual(gen.licence_key({"spdx": "other", "name": "openmdw-1.1"}), "openmdw-1.1")
         self.assertEqual(gen.licence_key({"spdx": "other", "display": "NVIDIA Open Model License"}), "nvidia-open-model-license")
         self.assertIsNone(gen.licence_key({"spdx": "other", "display": "Something else"}))
+
+    def test_every_row_carries_its_records_licence_and_repository(self):
+        # Presence alone let a row credit the wrong repository, or another licence's text, with every
+        # test green (#197's gate: `published_repo` written as `upstream_repo`; NVIDIA's URL swapped).
+        wrong = []
+        for row in ROWS:
+            record, _ = record_of(row)
+            name, url, mark = gen.LICENCES[gen.licence_key(record["license"])]
+            if row["upstream_repo"] != record["upstream_repo"]:
+                wrong.append(f"{row['name']}: upstream_repo {row['upstream_repo']}, record {record['upstream_repo']}")
+            if row["licence"] != (name, url, mark):
+                wrong.append(f"{row['name']}: licence {row['licence']}, map {(name, url, mark)}")
+        self.assertGreater(len(ROWS), 0)
+        self.assertEqual(wrong, [])
+
+    def test_a_known_key_linking_another_text_stops_the_generator(self):
+        record = json.loads(json.dumps(RECORDS["canary-1b"]))
+        record["license"]["link"] = "https://example.org/another-licence"
+        with self.assertRaises(SystemExit) as raised:
+            gen.generate({"canary-1b": record}, hold={})
+        self.assertIn("canary-1b", str(raised.exception))
+        self.assertIn("https://example.org/another-licence", str(raised.exception))
 
     def test_the_diarizer_carries_its_records_licence(self):
         record = RECORDS["diar_streaming_sortformer_4spk-v2.1"]

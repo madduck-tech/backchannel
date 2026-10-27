@@ -55,10 +55,12 @@ EXCLUDED = {
     "granite-speech-5.0-470m-turboctc-nc": "waits on its licence being shown, #227",
     "orukeet": "waits on its licence being shown, #227",
     # The product owner's decision of 2026-10-26 (ADR 0030): the Moonshine AI
-    # Community License asks for registration and ends above US$1M in annual
-    # revenue. The English moonshine rows are MIT and stay.
+    # Community License binds the app, not only the person. It asks the product
+    # for "Powered by Moonshine AI", requires registration for commercial use,
+    # and its use policy forbids recording people without their knowledge. The
+    # English moonshine rows are MIT and stay.
     **{
-        f"moonshine-{size}-{lang}": "Moonshine AI Community License, excluded by decision, ADR 0030"
+        f"moonshine-{size}-{lang}": "Moonshine AI Community License binds the app: excluded by decision, ADR 0030"
         for size in ("base", "tiny")
         for lang in ("ar", "ja", "ko", "uk", "vi", "zh")
     },
@@ -117,13 +119,24 @@ def licence_key(licence):
 
 def licence_of(record):
     """The read licence for a record, or the generator stops naming the record and the key."""
-    key = licence_key(record.get("license"))
+    licence = record.get("license") or {}
+    key = licence_key(licence)
     if key not in LICENCES:
+        named = key or licence.get("display")
         raise SystemExit(
-            f"{record.get('variant')}: its licence {key!r} has not been read. Read it, add it to "
+            f"{record.get('variant')}: its licence {named!r} has not been read. Read it, add it to "
             f"LICENCES with its mark, and record the reading (ADR 0030)."
         )
-    return LICENCES[key]
+    entry = LICENCES[key]
+    # A known key is not proof of a known text: upstream can reuse a generic name such as
+    # "model-license" for another licence. Where the record links its text, it must be the one read.
+    link = licence.get("link")
+    if link and link != entry[1]:
+        raise SystemExit(
+            f"{record.get('variant')}: its licence {key!r} links {link}, but LICENCES read {entry[1]} "
+            f"under that key. Read the linked text before it ships (ADR 0030)."
+        )
+    return entry
 
 # Streaming-capable variants, for the pre-download "live-capable" label only.
 #

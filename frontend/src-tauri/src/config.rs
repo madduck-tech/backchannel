@@ -2020,7 +2020,8 @@ pub fn model_diarizes(name: &str) -> bool {
 /// model, and `gen_model_catalog.py`'s exclusion comment would stop being true.
 ///
 /// `TranscribeEngine::download_file` takes repo and filename as plain
-/// arguments, so these four fields are the whole integration.
+/// arguments, so its first four fields are the whole download integration. The
+/// other four carry its licence and upstream repository (ADR 0030).
 pub struct DiarizerModel {
     pub hf_repo: &'static str,
     /// Held equal to the generator's map entry for its record by
