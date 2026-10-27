@@ -143,6 +143,21 @@ pub async fn transcribe_get_current_model() -> Result<Option<String>, String> {
     Ok(engine()?.get_current_model().await)
 }
 
+/// What `model-download-progress` carries for a catalogue download. The MB figures are decimal, the
+/// unit `size_mb` is generated in (#175): the shared `DownloadProgress` reports MiB, and the summary
+/// models' copy says MiB, but a catalogue row printed "46 MB" before the download and "44 MB" from its
+/// first progress event.
+fn progress_payload(model_name: &str, p: &crate::transcribe_engine::engine::DownloadProgress) -> serde_json::Value {
+    serde_json::json!({
+        "modelName": model_name,
+        "progress": p.percent,
+        "downloaded_mb": p.downloaded_bytes as f64 / 1_000_000.0,
+        "total_mb": p.total_bytes as f64 / 1_000_000.0,
+        "speed_mbps": p.speed_mbps,
+        "status": if p.percent >= 100 { "completed" } else { "downloading" },
+    })
+}
+
 #[command]
 pub async fn transcribe_download_model<R: Runtime>(
     app_handle: AppHandle<R>,
@@ -154,17 +169,7 @@ pub async fn transcribe_download_model<R: Runtime>(
     let app_for_progress = app_handle.clone();
     let name_for_progress = model_name.clone();
     let progress_callback = Box::new(move |p: crate::transcribe_engine::engine::DownloadProgress| {
-        let _ = app_for_progress.emit(
-            "model-download-progress",
-            serde_json::json!({
-                "modelName": name_for_progress,
-                "progress": p.percent,
-                "downloaded_mb": p.downloaded_mb,
-                "total_mb": p.total_mb,
-                "speed_mbps": p.speed_mbps,
-                "status": if p.percent >= 100 { "completed" } else { "downloading" },
-            }),
-        );
+        let _ = app_for_progress.emit("model-download-progress", progress_payload(&name_for_progress, &p));
     });
 
     match engine.download_model(&model_name, Some(progress_callback)).await {
@@ -804,3 +809,18 @@ mod recording_model_tests {
     }
 }
 
+#[cfg(test)]
+mod progress_payload_tests {
+    use super::*;
+
+    /// The figures a catalogue download reports are decimal MB, the unit of `size_mb` and the floor.
+    #[test]
+    fn a_catalogue_download_reports_decimal_mb() {
+        let p = crate::transcribe_engine::engine::DownloadProgress::new(46_000_000, 589_560_480, 3.0);
+        let v = progress_payload("qwen3-asr-0.6b-q4", &p);
+        assert_eq!(v["total_mb"], serde_json::json!(589.56048));
+        assert_eq!(v["downloaded_mb"], serde_json::json!(46.0));
+        assert_eq!(v["modelName"], "qwen3-asr-0.6b-q4");
+        assert_eq!(v["status"], "downloading");
+    }
+}

@@ -20,8 +20,8 @@ export type ModelStatus =
 
 export interface ModelInfo {
   name: string;
-  /** The catalogue's family, such as "GigaAM". Not recoverable from `name`: for 13 of 22 families
-   *  some id does not contain the family's text, case-insensitively. First run's search matches on it
+  /** The catalogue's family, such as "GigaAM". Not recoverable from `name`: for 13 of the 22
+   *  families of #166's time some id does not contain the family's text, case-insensitively. First run's search matches on it
    *  (#166). */
   family: string;
   path: string;
@@ -52,7 +52,7 @@ export interface ModelDownloadProgress {
  * Human-readable name for a catalog entry.
  *
  * Derived rather than looked up: the catalog is generated from transcribe.cpp's
- * model cards and holds ~86 entries, so a hand-maintained label map here would
+ * catalogue and holds ~96 entries, so a hand-maintained label map here would
  * be one more thing to forget when the pinned rev moves. Entry names are
  * `<variant>-<quant>` by construction.
  */
@@ -134,8 +134,9 @@ export function getStatusColor(status: ModelStatus): string {
   return 'text-danger-ink';
 }
 
+/** A catalogue size in decimal MB, as Settings prints it: 1669 MB reads "1.7 GB" (#175). */
 export function formatFileSize(sizeMb: number): string {
-  return sizeMb >= 1024 ? `${(sizeMb / 1024).toFixed(1)} GB` : `${sizeMb} MB`;
+  return sizeMb >= 1000 ? `${(sizeMb / 1000).toFixed(1)} GB` : `${sizeMb} MB`;
 }
 
 export function isDownloading(status: ModelStatus): boolean {
@@ -148,14 +149,13 @@ export function isDownloading(status: ModelStatus): boolean {
  * neither usable nor missing, so it needs its own actions rather than falling
  * through to "not downloaded".
  *
- * In MiB, the unit the engine's 90% floor reads `size_mb` in (`engine.rs:169`). `size_mb` itself
- * is not one unit: it comes from model cards that mix decimal and binary figures
- * (`gen_model_catalog.py:215`), so whisper-tiny-q8's 44 is MiB and parakeet-tdt-0.6b-v3-q8's 740
- * is decimal. Fixing that is #175's and #190's; this follows the floor.
+ * In decimal MB, the unit `size_mb` is generated in and the engine's floor reads
+ * (`TranscribeEngine::available_floor_bytes`, #175), so "700 MB on disk of 873 MB"
+ * compares one unit with itself.
  */
 export function corruptedSizeMb(status: ModelStatus): number | null {
   return typeof status === 'object' && 'Corrupted' in status
-    ? Math.round(status.Corrupted.file_size / (1024 * 1024))
+    ? Math.round(status.Corrupted.file_size / 1_000_000)
     : null;
 }
 

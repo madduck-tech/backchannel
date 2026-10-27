@@ -135,6 +135,23 @@ jobs:
       - name: Rust workspace tests
         run: cargo test --workspace
 
+      # The catalog generator's tests (#175). They read the transcribe.cpp checkout cargo made for
+      # Cargo.lock's revision, which the build above has fetched, and they need the network for
+      # the download URLs. unittest's exit status and the count of tests it ran are checked
+      # separately: a bare `discover` that finds nothing exits 0 on Python before 3.12, and a
+      # failing suite whose count still matches must not pass either. Raise the floor with the
+      # suite. Same line as `gopnik.json` stage 1.
+      - name: Catalog generator tests (Python)
+        run: |
+          set -o pipefail
+          # `rc=0; out=$(…) || rc=$?`, not `out=$(…); rc=$?`: a step runs under `bash -e`, which would
+          # exit at a failing assignment before the suite's output is printed.
+          rc=0; out=$(python3 -I -m unittest discover -s frontend/src-tauri/scripts -p 'test_*.py' 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
+          [ "$rc" -eq 0 ] || exit "$rc"
+          [ "${n:-0}" -ge 13 ] || { echo "ran ${n:-0} Python tests, expected at least 13"; exit 1; }
+
       - name: List what this platform ignores
         run: cargo test --workspace -- --ignored --list
 

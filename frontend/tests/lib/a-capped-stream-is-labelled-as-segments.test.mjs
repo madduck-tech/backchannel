@@ -37,7 +37,8 @@ assert.equal(ROWS.length, 3, `precondition: the catalogue lists ${ROWS.length} m
 // change nobody decided (#200's gate). They keep their place among the natively streaming rows, ahead
 // of every batch row; `canary-180m-flash-q8` is the first batch row by name.
 const ORDER = [...catalogue.matchAll(/TranscribeModel \{([\s\S]*?)\n    \}/g)].map((m) => m[1].match(/name: "([^"]+)"/)[1]);
-assert.equal(ORDER.length, 86, `precondition: the catalogue has ${ORDER.length} rows, expected 86`);
+// 96 since #175 regenerated the catalogue from upstream's records (86 before).
+assert.equal(ORDER.length, 96, `precondition: the catalogue has ${ORDER.length} rows, expected 96`);
 const firstBatch = ORDER.indexOf('canary-180m-flash-q8');
 assert.ok(firstBatch > 0, 'precondition: canary-180m-flash-q8 is in the catalogue');
 for (const row of ROWS) {

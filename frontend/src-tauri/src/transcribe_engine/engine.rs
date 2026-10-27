@@ -48,8 +48,8 @@ pub enum ModelStatus {
 pub struct ModelInfo {
     pub name: String,
     /// The catalogue entry's family, such as "GigaAM". First run's search matches on it, and it
-    /// cannot be recovered from `name`: for 13 of the 22 families some id does not contain the
-    /// family's text (#166).
+    /// cannot be recovered from `name`: for 13 of the 22 families of #166's time some id does not
+    /// contain the family's text (#166).
     pub family: String,
     pub path: PathBuf,
     pub size_mb: u32,
@@ -156,6 +156,16 @@ impl TranscribeEngine {
         self.models_dir.clone()
     }
 
+    /// The fewest bytes a catalogue file may have and still read Available: 90% of its size, in
+    /// decimal MB, the unit `size_mb` is generated in (#175). It catches a truncated download without
+    /// tripping on `size_mb`'s rounding.
+    ///
+    /// It used to read `size_mb` as MiB, so the effective floor was about 94% of a decimal size, and
+    /// `qwen3-asr-0.6b-q4`'s complete file sat under it (#190).
+    pub fn available_floor_bytes(size_mb: u32) -> u64 {
+        size_mb as u64 * 1_000_000 * 9 / 10
+    }
+
     pub async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
         let mut models = Vec::new();
 
@@ -164,10 +174,7 @@ impl TranscribeEngine {
             let path = self.models_dir.join(filename);
             let status = if path.exists() {
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                // 90% of the catalog size, same tolerance the whisper path used:
-                // catches truncated downloads without tripping on quantization
-                // rounding.
-                let expected_min = (size_mb as u64 * 1024 * 1024 * 9) / 10;
+                let expected_min = Self::available_floor_bytes(size_mb);
                 if file_size >= expected_min {
                     ModelStatus::Available
                 } else if let ModelStatus::Downloading { progress } = self
@@ -478,7 +485,7 @@ impl TranscribeEngine {
                 // leaves the speed readout stale; the 500 ms floor keeps it live.
                 if progress > last_reported || elapsed.as_millis() >= 500 {
                     let speed_mbps = if elapsed.as_secs_f64() > 0.0 {
-                        (bytes_since_report as f64 / 1048576.0) / elapsed.as_secs_f64()
+                        (bytes_since_report as f64 / 1_000_000.0) / elapsed.as_secs_f64()
                     } else {
                         0.0
                     };
@@ -844,8 +851,8 @@ mod tests {
         let got = scored_confidence(&scored).expect("a scored family still reports a number");
         assert!((got - 0.7).abs() < 1e-6, "expected the mean 0.7, got {got}");
 
-        // No tokens at all is also nothing scored, and this is the larger half: 53 of
-        // `TRANSCRIBE_MODEL_CATALOG`'s 86 rows come from an architecture that constructs no token row,
+        // No tokens at all is also nothing scored, and this is the larger half: 53 of the 86 rows
+        // `TRANSCRIBE_MODEL_CATALOG` had at #162 come from an architecture that constructs no token row,
         // so `Some(1.0)` here painted "Decode confidence 100%" in the tooltip and *High confidence*
         // in the accessibility tree for most of the catalogue.
         //
@@ -981,6 +988,32 @@ mod tests {
         let models = engine.discover_models().await.unwrap();
         let m = models.iter().find(|m| m.name == name).unwrap();
         assert!(matches!(m.status, ModelStatus::Available), "got {:?}", m.status);
+    }
+
+    /// The floor is 90% of the decimal size, read through `discover_models` (#175). Under the MiB
+    /// floor this replaced, a file at 92% of `size_mb × 10⁶` read Corrupted: that floor was about 94%.
+    #[tokio::test]
+    async fn the_available_floor_is_ninety_percent_of_the_decimal_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+        let entry = &TRANSCRIBE_MODEL_CATALOG[0];
+        let decimal = entry.size_mb as u64 * 1_000_000;
+
+        let status_at = |len: u64| {
+            // Sparse: the length is what the floor reads, so no bytes need writing.
+            std::fs::File::create(dir.path().join(entry.filename)).unwrap().set_len(len).unwrap();
+            let engine = &engine;
+            async move {
+                engine.discover_models().await.unwrap().into_iter().find(|m| m.name == entry.name).unwrap().status
+            }
+        };
+        let at_92 = status_at(decimal * 92 / 100).await;
+        assert!(matches!(at_92, ModelStatus::Available), "92% of the decimal size: {at_92:?}");
+        let at_floor = status_at(decimal * 9 / 10).await;
+        assert!(matches!(at_floor, ModelStatus::Available), "exactly the floor: {at_floor:?}");
+        let under = status_at(decimal * 9 / 10 - 1).await;
+        assert!(matches!(under, ModelStatus::Corrupted { .. }), "one byte under the floor: {under:?}");
+        assert_eq!(TranscribeEngine::available_floor_bytes(entry.size_mb), decimal * 9 / 10);
     }
 
     /// First run's search matches a model's family, and the family reaches the frontend only through

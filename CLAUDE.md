@@ -383,11 +383,20 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 - Streaming models are real-time-native; measured RTF ~0.06 on M1 Max (Metal)
 
 ### Transcription
-- **Model Selection**: the catalog covers every family transcribe.cpp supports — 85 rows across 16 families (see `TRANSCRIBE_MODEL_CATALOG` in config.rs). It is **generated**: edit `frontend/src-tauri/scripts/gen_model_catalog.py` and re-run it, never the array.
-  - Default: `parakeet-tdt-0.6b-v3-q8` — lowest WER (1.94%) that still keeps up live; batch-only, so live text arrives in ~8s segments with no partials, across 25 European locales
-  - `nemotron-3.5-asr-streaming-0.6b-q8` is the streaming-native alternative: word-by-word live text and 32 locales incl. CJK/Arabic/Hindi, at 3.06% WER
+- **Model Selection**: `TRANSCRIBE_MODEL_CATALOG` in config.rs is **generated** from transcribe.cpp's own machine-readable catalogue, `catalog/*.json` at the revision `Cargo.lock` pins (#175). Edit `frontend/src-tauri/scripts/gen_model_catalog.py` and re-run it, never the array.
+  - **Size:** 96 rows (`grep -c '^    TranscribeModel {' frontend/src-tauri/src/config.rs`), from 17 upstream loader families, shown as 23 display families. Loader families are each record's `family`, counting the records that yield a row.
+  - **Guards:** the generator refuses a checkout at any other revision. `scripts/test_gen_model_catalog.py` runs in Stage 1 and CI, and fails when the committed array differs from what the records generate.
+  - **Units:** `size_mb` is decimal MB of the file's bytes, the unit the availability floor (`TranscribeEngine::available_floor_bytes`) reads. The multitalker rows are held at their August size until #193.
+  - **WER:** each row's WER is upstream's benchmark at the row's own quantisation, on LibriSpeech test-clean, or on FLEURS ru for GigaAM.
+  - Default: `parakeet-tdt-0.6b-v3-q8`, 1.94% WER on LibriSpeech test-clean. It is batch-only, so live text arrives in ~8 s segments with no partials, across 25 European locales. It was chosen as the lowest WER among models measured to keep up live. Of the 96 rows, 51 publish a lower LibriSpeech WER (counted over the generated rows), and most of them were never measured live. Among them is `parakeet-ultra-q8`, at 1.80% across the same 25 locales. Whether the default changes is #178.
+  - `nemotron-3.5-asr-streaming-0.6b-q8` is the streaming-native alternative: word-by-word live text and 32 locales incl. CJK/Arabic/Hindi, at 3.05% WER
   - Batch-only families are selectable for live recording too, via the VAD + batch path above
-  - Excluded on purpose: `diar_streaming_sortformer_4spk-v2.1` (no text output), `medasr` (gated upstream), `voxtral-small-24b-2507` (too large)
+  - Not ASR records, so never rows: the speaker diarizer, the language identifier and the VAD (`role` other than `asr`).
+  - **Excluded by name** (`EXCLUDED` in the generator, each with its reason):
+    - `medasr`: gated upstream;
+    - `voxtral-small-24b-2507`: too large;
+    - `phonon-2`: its repository answers 401;
+    - licences awaiting #197: `granite-speech-5.0-470m-turboctc-nc`, `orukeet`, and the twelve moonshine language variants.
   - Low-end machines: `moonshine-streaming-{small,tiny}` (English only), decoded in VAD segments since #200. Measured 2026-10-25 on `dots-full.wav` (305 s), four CPU cores: tiny, small and medium keep 0.946, 0.950 and 0.950 of a per-30-s reference, transcribe its last 20 s, and feed at 0.04, 0.09 and 0.13–0.14 × real time on one channel (`a_capped_stream_keeps_the_whole_meeting`); each channel is decoded on its own, so both sides speaking costs up to twice that. Their live text arrives per segment, with no partials
 - **GPU Acceleration**: Metal on macOS by default; CUDA/Vulkan/ROCm via Cargo features
 
