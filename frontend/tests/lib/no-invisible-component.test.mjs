@@ -120,7 +120,6 @@ const BACKLOG = new Set([
  * reach them, so no one declined to test them -- they were never counted. That is the whole finding.
  */
 const CONTEXTS_ADMITTED = new Set([
-  'src/contexts/ConfigContext.tsx',
   'src/contexts/ImportDialogContext.tsx',
   'src/contexts/OllamaDownloadContext.tsx',
   'src/contexts/RecordingPostProcessingProvider.tsx',
@@ -179,8 +178,9 @@ assertSetEquals(
 // Measured, not guessed: 19 of 79 before #130, 20 of 86 after -- the denominator gained the seven
 // providers and the numerator gained `OnboardingContext.tsx`. The floor stood at 11 against an actual
 // of 19, which is eight components of slack it could lose in silence. Raised to the measured number,
-// which is what the instruction below has always asked for.
-const FLOOR = 20;
+// which is what the instruction below has always asked for. It had slipped again: 23 against 20 when
+// #226 rendered `ConfigContext.tsx`, making 24.
+const FLOOR = 24;
 assert.ok(
   rendered.size >= FLOOR,
   `${rendered.size} components are rendered by a test; the floor is ${FLOOR}. Something that had a ` +

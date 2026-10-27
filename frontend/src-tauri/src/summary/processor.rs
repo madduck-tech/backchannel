@@ -312,6 +312,15 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
         .map(|line| line.trim_start_matches("# ").trim().to_string())
 }
 
+/// What a summary runs on, as the log names it: an agent CLI alone, since it runs its own default
+/// model and the app passes it none (ADR 0028 decision 7), or the provider and its model (#226).
+fn engine_label(provider: &LLMProvider, model_name: &str) -> String {
+    match provider.agent_cli() {
+        Some(cli) => cli.display_name().to_string(),
+        None => format!("provider: {provider:?}, model: {model_name}"),
+    }
+}
+
 /// Generates a complete meeting summary with conditional chunking strategy
 ///
 /// # Arguments
@@ -338,15 +347,6 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
 /// Tuple of (final_summary_markdown, english_summary_markdown, number_of_chunks_processed)
 /// where english_summary_markdown is the canonical AI-generated English summary
 /// (equals final_summary_markdown when target language is English)
-/// What a summary runs on, as the log names it: an agent CLI alone, since it runs its own default
-/// model and the app passes it none (ADR 0028 decision 7), or the provider and its model (#226).
-fn engine_label(provider: &LLMProvider, model_name: &str) -> String {
-    match provider.agent_cli() {
-        Some(cli) => cli.display_name().to_string(),
-        None => format!("provider: {provider:?}, model: {model_name}"),
-    }
-}
-
 pub async fn generate_meeting_summary(
     client: &Client,
     provider: &LLMProvider,

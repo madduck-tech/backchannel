@@ -19,6 +19,14 @@ export function loadedSummaryModel(provider: string, stored: string, previous: s
   return isAgentCliProvider(provider) ? '' : stored || previous;
 }
 
+/**
+ * Whether a stored summary config names something a summary can run on. An agent CLI needs no model;
+ * any other provider does. Reading the model alone made an agent CLI look unconfigured (#226).
+ */
+export function summaryEngineChosen(provider: string | null | undefined, model: string | null | undefined): boolean {
+  return (!!provider && isAgentCliProvider(provider)) || !!model;
+}
+
 /** What a summary runs on, as the toast names it: the CLI alone, or `provider/model`. */
 export function summaryEngineLabel(provider: string, model: string): string {
   return isAgentCliProvider(provider) ? AGENT_CLI_NAMES[provider] : `${provider}/${model}`;
