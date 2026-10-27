@@ -383,7 +383,7 @@ error: the package 'conversationaly' does not contain this feature: openblas
 
 ## Related Documentation
 
-- [CLAUDE.md](../../CLAUDE.md) - Project overview with build commands
+- [docs/codebase-guide.md](../../docs/codebase-guide.md) - Project overview with build commands
 - [WORKFLOWS_OVERVIEW.md](WORKFLOWS_OVERVIEW.md) - All workflows comparison
 - [README_DEVTEST.md](README_DEVTEST.md) - DevTest workflow guide
 - [Whisper.cpp GitHub](https://github.com/ggerganov/whisper.cpp) - Upstream project

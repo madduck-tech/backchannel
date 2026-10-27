@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const GEN = path.join(repo, 'scripts', 'gen-agent-files.mjs');
-const { drift, plan, LIST } = await import(GEN);
+const { drift, plan, LIST, AGENTS_SOURCES, AGENTS_END } = await import(GEN);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-files-'));
 process.on('exit', () => fs.rmSync(base, { recursive: true, force: true }));
 
@@ -33,6 +33,23 @@ test('the list names the three gopnik skills in .agents/skills/, each from .clau
   assert.equal(Object.keys(files).length, plan(repo).size);
 });
 
+test('the root AGENTS.md is CLAUDE.md\'s section and the two unscoped rules, and ends with its sentinel', () => {
+  const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
+  assert.deepEqual(files['AGENTS.md'], AGENTS_SOURCES);
+  const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+  for (const rule of ['.claude/rules/workflow.md', '.claude/rules/testing.md']) {
+    const last = fs.readFileSync(path.join(repo, rule), 'utf8').trimEnd().split('\n').at(-1);
+    assert.ok(agents.includes(last), `AGENTS.md does not carry the last line of ${rule}`);
+  }
+  assert.ok(agents.trimEnd().endsWith(AGENTS_END), 'AGENTS.md does not end with its sentinel');
+  assert.ok(!agents.includes('## Inherited codebase guide'), 'the inherited guide is back in the always-loaded instructions');
+  // Backchannel's own hard rule, which sat in the guide's constraints only because CLAUDE.md was always
+  // loaded; moving the guide out must not take it with it (#250's adversary).
+  assert.ok(agents.includes('**No text injection into other applications without a verified caret anchor.**'), 'the text-injection rule no longer reaches every harness');
+  assert.ok(agents.includes('Do not add `enigo`, `rdev`, or a CGEventTap.'), 'the text-injection rule lost its prohibition');
+  assert.ok(!/Co-Authored-By: Claude [A-Z]\w+ \d/.test(agents), 'AGENTS.md tells every harness to sign as one Claude model');
+});
+
 test('nothing is generated under frontend/, whose agent files belong to Next.js', () => {
   const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
   assert.deepEqual(Object.keys(files).filter((f) => f.startsWith('frontend/')), []);
@@ -41,7 +58,7 @@ test('nothing is generated under frontend/, whose agent files belong to Next.js'
 // A repository of its own: the generator, the list, both skill trees and .gitattributes, committed.
 function fixture(name) {
   const r = path.join(base, name);
-  for (const p of ['scripts/gen-agent-files.mjs', LIST, '.claude/skills', '.agents', '.gitattributes']) {
+  for (const p of ['scripts/gen-agent-files.mjs', LIST, '.claude/skills', '.claude/rules', 'CLAUDE.md', 'AGENTS.md', '.agents', '.gitattributes']) {
     fs.cpSync(path.join(repo, p), path.join(r, p), { recursive: true });
   }
   const git = (...a) => spawnSync('git', ['-C', r, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
