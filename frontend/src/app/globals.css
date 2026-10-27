@@ -4,6 +4,8 @@
  */
 
 @import "tailwindcss";
+/* The typefaces, from files in the repository rather than from Google (#264). */
+@import "./fonts.css";
 
 /* The token layer below and the whole theme live in tailwind.config.js, which
    DESIGN.md owns. Tailwind 4 reads that JS config through @config, so the

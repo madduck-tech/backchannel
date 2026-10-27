@@ -5,7 +5,7 @@
     "packageManager": "pnpm@11.25.0",
     "_comment_typescript": "typescript is held at 6.x deliberately. TypeScript 7 is the native Go port: its npm package ships only a shim (getExePath.js, tsc.js) with no lib.*.d.ts and no tsserver.js, so `tsc` and `next build` both pass while the editor language service loses every global (Promise, Date, window, react). 6.x is a normal JS TypeScript with all 107 lib files plus tsserver. Do not bump to 7 until editors support it.",
     "scripts": {
-        "_comment_webpack": "--webpack opts out of the Next 16 Turbopack default: Turbopack's next/font/google resolves dead IBM Plex woff2 URLs (404) and fails the build. Webpack fetches the same fonts fine. Drop the flag once that is fixed upstream.",
+        "_comment_webpack": "--webpack opts out of the Next 16 Turbopack default. It was added because Turbopack's Google font loader resolved dead IBM Plex woff2 URLs (404); since #264 the fonts ship in the repository and no build fetches them, so that reason is gone. Whether to drop the flag is its own issue.",
         "dev": "next dev -p 3118 --webpack",
         "build": "next build --webpack",
         "start": "next start -p 3118",
@@ -13,7 +13,7 @@
         "test": "node --max-old-space-size=1024 --test --test-concurrency=4 'tests/**/*.test.mjs'",
         "lint": "eslint src --max-warnings=0",
         "typecheck": "tsc --noEmit",
-        "_comment_storybook": "The catalogue (#124). --webpack is implicit here: @storybook/nextjs is the webpack framework, which is what this project needs for the same reason the dev/build scripts pass --webpack -- Turbopack's next/font/google resolves dead IBM Plex woff2 URLs.",
+        "_comment_storybook": "The catalogue (#124). --webpack is implicit here: @storybook/nextjs is the webpack framework, which the dev/build scripts also pass --webpack for (see _comment_webpack).",
         "storybook": "storybook dev -p 6006 --no-open",
         "_comment_build_storybook_memory": "Webpack is the one uncapped thing this suite runs. gallery.mjs caps its children at 640 MB of heap under a kernel MemoryMax after two OOM kills of a developer machine; this build had no bound at all and runs concurrently with them.",
         "build-storybook": "NODE_OPTIONS=--max-old-space-size=3072 storybook build -o storybook-static",
