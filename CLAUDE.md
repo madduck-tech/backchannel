@@ -396,7 +396,8 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
     - `medasr`: gated upstream;
     - `voxtral-small-24b-2507`: too large;
     - `phonon-2`: its repository answers 401;
-    - licences awaiting #197: `granite-speech-5.0-470m-turboctc-nc`, `orukeet`, and the twelve moonshine language variants.
+    - `granite-speech-5.0-470m-turboctc-nc` and `orukeet`: offered once their licence is shown where a model is chosen (#227);
+    - the twelve moonshine language variants: their licence binds the app, excluded by decision (ADR 0030).
   - Low-end machines: `moonshine-streaming-{small,tiny}` (English only), decoded in VAD segments since #200. Measured 2026-10-25 on `dots-full.wav` (305 s), four CPU cores: tiny, small and medium keep 0.946, 0.950 and 0.950 of a per-30-s reference, transcribe its last 20 s, and feed at 0.04, 0.09 and 0.13–0.14 × real time on one channel (`a_capped_stream_keeps_the_whole_meeting`); each channel is decoded on its own, so both sides speaking costs up to twice that. Their live text arrives per segment, with no partials
 - **GPU Acceleration**: Metal on macOS by default; CUDA/Vulkan/ROCm via Cargo features
 

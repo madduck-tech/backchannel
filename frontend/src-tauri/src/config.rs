@@ -130,9 +130,30 @@ pub struct TranscribeModel {
     /// for nemotron-3.5, whose GGUF says 32.
     pub languages: &'static [&'static str],
     /// The licence's SPDX id from upstream's catalogue ("other" when it has
-    /// none). Carried, not yet acted on: which licences may be offered is #197.
+    /// none).
     pub license: &'static str,
+    /// The licence as a person reads it, its text's URL, and what it asks of them
+    /// (ADR 0030): from the generator's `LICENCES` map, never written here by hand.
+    pub license_name: &'static str,
+    pub license_url: &'static str,
+    pub license_mark: LicenceMark,
+    /// The repository the weights derive from, whose owner the licence's credit names.
+    pub upstream_repo: &'static str,
     pub description: &'static str,
+}
+
+/// What a model's licence asks of the person choosing it, shown where it is chosen
+/// (ADR 0030, #197). Every model is offered; this is what tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum LicenceMark {
+    /// Commercial use is allowed.
+    None,
+    /// "Non-commercial use only": the CC BY-NC licences.
+    NonCommercial,
+    /// Commercial use is unlicensed at or above this annual revenue, in US dollars:
+    /// LFM2.5's LFM Open License v1.0, §5.
+    RevenueLimit { usd: u64 },
 }
 
 /// transcribe.cpp model catalog — every family transcribe.cpp supports.
@@ -157,6 +178,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "UsefulSensors/moonshine-streaming-medium",
         description: "Moonshine Streaming",
     },
     TranscribeModel {
@@ -172,6 +197,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "UsefulSensors/moonshine-streaming-small",
         description: "Moonshine Streaming",
     },
     TranscribeModel {
@@ -187,6 +216,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "UsefulSensors/moonshine-streaming-tiny",
         description: "Moonshine Streaming",
     },
     TranscribeModel {
@@ -202,6 +235,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/multitalker-parakeet-streaming-0.6b-v1",
         description: "Multitalker Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -217,6 +254,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/multitalker-parakeet-streaming-0.6b-v1",
         description: "Multitalker Parakeet",
     },
     TranscribeModel {
@@ -232,6 +273,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT", "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR", "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA", "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI", "hr-HR", "sk-SK", "zh-CN", "hu-HU", "ro-RO", "et-EE"],
         license: "other",
+        license_name: "OpenMDW 1.1",
+        license_url: "https://openmdw.ai/license/1-1/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/nemotron-3.5-asr-streaming-0.6b",
         description: "Nemotron 3.5 — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -247,6 +292,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT", "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR", "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA", "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI", "hr-HR", "sk-SK", "zh-CN", "hu-HU", "ro-RO", "et-EE"],
         license: "other",
+        license_name: "OpenMDW 1.1",
+        license_url: "https://openmdw.ai/license/1-1/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/nemotron-3.5-asr-streaming-0.6b",
         description: "Nemotron 3.5",
     },
     TranscribeModel {
@@ -262,6 +311,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/nemotron-speech-streaming-en-0.6b",
         description: "Nemotron Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -277,6 +330,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/nemotron-speech-streaming-en-0.6b",
         description: "Nemotron Speech",
     },
     TranscribeModel {
@@ -292,6 +349,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-unified-en-0.6b",
         description: "Parakeet Unified — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -307,6 +368,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en"],
         license: "other",
+        license_name: "NVIDIA Open Model License",
+        license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-unified-en-0.6b",
         description: "Parakeet Unified",
     },
     TranscribeModel {
@@ -322,6 +387,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en", "fr", "es", "de", "ru", "zh", "ja", "it", "pt", "nl", "ar", "hi", "ko"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "mistralai/Voxtral-Mini-4B-Realtime-2602",
         description: "Voxtral Realtime — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -337,6 +406,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: true,
         languages: &["en", "fr", "es", "de", "ru", "zh", "ja", "it", "pt", "nl", "ar", "hi", "ko"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "mistralai/Voxtral-Mini-4B-Realtime-2602",
         description: "Voxtral Realtime",
     },
     TranscribeModel {
@@ -352,6 +425,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "MediaTek-Research/Breeze-ASR-25",
         description: "Breeze ASR — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -367,6 +444,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "MediaTek-Research/Breeze-ASR-25",
         description: "Breeze ASR",
     },
     TranscribeModel {
@@ -382,6 +463,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "es", "fr"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-180m-flash",
         description: "Canary",
     },
     TranscribeModel {
@@ -397,6 +482,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "es", "fr"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-1b-flash",
         description: "Canary — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -412,6 +501,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "es", "fr"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-1b-flash",
         description: "Canary",
     },
     TranscribeModel {
@@ -427,6 +520,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "es", "fr"],
         license: "cc-by-nc-4.0",
+        license_name: "CC BY-NC 4.0",
+        license_url: "https://creativecommons.org/licenses/by-nc/4.0/",
+        license_mark: LicenceMark::NonCommercial,
+        upstream_repo: "nvidia/canary-1b",
         description: "Canary — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -442,6 +539,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "es", "fr"],
         license: "cc-by-nc-4.0",
+        license_name: "CC BY-NC 4.0",
+        license_url: "https://creativecommons.org/licenses/by-nc/4.0/",
+        license_mark: LicenceMark::NonCommercial,
+        upstream_repo: "nvidia/canary-1b",
         description: "Canary",
     },
     TranscribeModel {
@@ -457,6 +558,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-1b-v2",
         description: "Canary v2 — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -472,6 +577,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-1b-v2",
         description: "Canary v2",
     },
     TranscribeModel {
@@ -487,6 +596,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-qwen-2.5b",
         description: "Canary-Qwen — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -502,6 +615,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/canary-qwen-2.5b",
         description: "Canary-Qwen",
     },
     TranscribeModel {
@@ -517,6 +634,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "it", "pt", "nl", "pl", "el", "ar", "ja", "zh", "vi", "ko"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "CohereLabs/cohere-transcribe-03-2026",
         description: "Cohere Transcribe — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -532,6 +653,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "it", "pt", "nl", "pl", "el", "ar", "ja", "zh", "vi", "ko"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "CohereLabs/cohere-transcribe-03-2026",
         description: "Cohere Transcribe",
     },
     TranscribeModel {
@@ -547,6 +672,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "ar"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "CohereLabs/cohere-transcribe-arabic-07-2026",
         description: "Cohere Transcribe — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -562,6 +691,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "ar"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "CohereLabs/cohere-transcribe-arabic-07-2026",
         description: "Cohere Transcribe",
     },
     TranscribeModel {
@@ -577,6 +710,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ja", "ko", "vi", "id", "th", "ms", "tl", "ar", "hi", "bg", "hr", "cs", "da", "nl", "et", "fi", "el", "hu", "ga", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "sv"],
         license: "other",
+        license_name: "FunASR Model License v1.1",
+        license_url: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        license_mark: LicenceMark::None,
+        upstream_repo: "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
         description: "FunASR Nano MLT — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -592,6 +729,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ja", "ko", "vi", "id", "th", "ms", "tl", "ar", "hi", "bg", "hr", "cs", "da", "nl", "et", "fi", "el", "hu", "ga", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "sv"],
         license: "other",
+        license_name: "FunASR Model License v1.1",
+        license_url: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        license_mark: LicenceMark::None,
+        upstream_repo: "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
         description: "FunASR Nano MLT",
     },
     TranscribeModel {
@@ -607,6 +748,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "ja"],
         license: "other",
+        license_name: "FunASR Model License v1.1",
+        license_url: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        license_mark: LicenceMark::None,
+        upstream_repo: "FunAudioLLM/Fun-ASR-Nano-2512",
         description: "FunASR Nano — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -622,6 +767,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "ja"],
         license: "other",
+        license_name: "FunASR Model License v1.1",
+        license_url: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        license_mark: LicenceMark::None,
+        upstream_repo: "FunAudioLLM/Fun-ASR-Nano-2512",
         description: "FunASR Nano",
     },
     TranscribeModel {
@@ -637,6 +786,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["ru"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ai-sage/GigaAM-v3",
         description: "GigaAM",
     },
     TranscribeModel {
@@ -652,6 +805,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["ru"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ai-sage/GigaAM-v3",
         description: "GigaAM",
     },
     TranscribeModel {
@@ -667,6 +824,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["ru"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ai-sage/GigaAM-v3",
         description: "GigaAM",
     },
     TranscribeModel {
@@ -682,6 +843,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["ru"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ai-sage/GigaAM-v3",
         description: "GigaAM",
     },
     TranscribeModel {
@@ -697,6 +862,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt", "ja"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-4.0-1b-speech",
         description: "Granite Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -712,6 +881,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt", "ja"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-4.0-1b-speech",
         description: "Granite Speech",
     },
     TranscribeModel {
@@ -727,6 +900,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b-nar",
         description: "Granite Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -742,6 +919,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b-nar",
         description: "Granite Speech",
     },
     TranscribeModel {
@@ -757,6 +938,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b-plus",
         description: "Granite Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -772,6 +957,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b-plus",
         description: "Granite Speech",
     },
     TranscribeModel {
@@ -787,6 +976,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt", "ja"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b",
         description: "Granite Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -802,6 +995,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "pt", "ja"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-4.1-2b",
         description: "Granite Speech",
     },
     TranscribeModel {
@@ -817,6 +1014,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-5.0-470m-turboctc",
         description: "Granite Speech — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -832,6 +1033,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "ibm-granite/granite-speech-5.0-470m-turboctc",
         description: "Granite Speech",
     },
     TranscribeModel {
@@ -847,6 +1052,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "UsefulSensors/moonshine-base",
         description: "Moonshine",
     },
     TranscribeModel {
@@ -862,6 +1071,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "UsefulSensors/moonshine-tiny",
         description: "Moonshine",
     },
     TranscribeModel {
@@ -877,6 +1090,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "OpenMOSS-Team/MOSS-Transcribe-Diarize",
         description: "MOSS Transcribe-Diarize — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -892,6 +1109,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "OpenMOSS-Team/MOSS-Transcribe-Diarize",
         description: "MOSS Transcribe-Diarize",
     },
     TranscribeModel {
@@ -907,6 +1128,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-ctc-0.6b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -922,6 +1147,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-ctc-0.6b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -937,6 +1166,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-ctc-1.1b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -952,6 +1185,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-ctc-1.1b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -967,6 +1204,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "primeline/parakeet-primeline",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -982,6 +1223,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "primeline/parakeet-primeline",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -997,6 +1242,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-rnnt-0.6b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1012,6 +1261,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-rnnt-0.6b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1027,6 +1280,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-rnnt-1.1b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1042,6 +1299,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-rnnt-1.1b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1057,6 +1318,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-0.6b-v2",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1072,6 +1337,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-0.6b-v2",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1087,6 +1356,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-0.6b-v3",
         description: "Parakeet TDT v3 — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1102,6 +1375,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-0.6b-v3",
         description: "Parakeet TDT v3",
     },
     TranscribeModel {
@@ -1117,6 +1394,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-1.1b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1132,6 +1413,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt-1.1b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1147,6 +1432,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt_ctc-1.1b",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1162,6 +1451,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt_ctc-1.1b",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1177,6 +1470,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "nvidia/parakeet-tdt_ctc-110m",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1192,6 +1489,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et", "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "moondream/parakeet-ultra",
         description: "Parakeet — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1207,6 +1508,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et", "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt"],
         license: "cc-by-4.0",
+        license_name: "CC BY 4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        license_mark: LicenceMark::None,
+        upstream_repo: "moondream/parakeet-ultra",
         description: "Parakeet",
     },
     TranscribeModel {
@@ -1222,6 +1527,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "Qwen/Qwen3-ASR-0.6B",
         description: "Qwen3-ASR — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1237,6 +1546,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "Qwen/Qwen3-ASR-0.6B",
         description: "Qwen3-ASR",
     },
     TranscribeModel {
@@ -1252,6 +1565,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "Qwen/Qwen3-ASR-1.7B",
         description: "Qwen3-ASR — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1267,6 +1584,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "Qwen/Qwen3-ASR-1.7B",
         description: "Qwen3-ASR",
     },
     TranscribeModel {
@@ -1282,6 +1603,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["zh", "yue", "en", "ja", "ko"],
         license: "other",
+        license_name: "FunASR Model License v1.1",
+        license_url: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        license_mark: LicenceMark::None,
+        upstream_repo: "FunAudioLLM/SenseVoiceSmall",
         description: "SenseVoice",
     },
     TranscribeModel {
@@ -1297,6 +1622,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "it", "pt", "nl", "hi"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "mistralai/Voxtral-Mini-3B-2507",
         description: "Voxtral — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1312,6 +1641,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en", "fr", "de", "es", "it", "pt", "nl", "hi"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "mistralai/Voxtral-Mini-3B-2507",
         description: "Voxtral",
     },
     TranscribeModel {
@@ -1327,6 +1660,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-base",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1342,6 +1679,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-base.en",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1357,6 +1698,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1372,6 +1717,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1387,6 +1736,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v2",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1402,6 +1755,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v2",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1417,6 +1774,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v3",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1432,6 +1793,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v3",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1447,6 +1812,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue", "zh"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v3-turbo",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1462,6 +1831,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue", "zh"],
         license: "mit",
+        license_name: "MIT License",
+        license_url: "https://opensource.org/license/mit",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-large-v3-turbo",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1477,6 +1850,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-medium",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1492,6 +1869,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-medium",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1507,6 +1888,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-medium.en",
         description: "Whisper — smaller download, lower memory use",
     },
     TranscribeModel {
@@ -1522,6 +1907,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-medium.en",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1537,6 +1926,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-small",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1552,6 +1945,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-small.en",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1567,6 +1964,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-tiny",
         description: "Whisper",
     },
     TranscribeModel {
@@ -1582,6 +1983,10 @@ pub const TRANSCRIBE_MODEL_CATALOG: &[TranscribeModel] = &[
         streaming: false,
         languages: &["en"],
         license: "apache-2.0",
+        license_name: "Apache License 2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        license_mark: LicenceMark::None,
+        upstream_repo: "openai/whisper-tiny.en",
         description: "Whisper",
     },
     // END GENERATED
@@ -1615,9 +2020,16 @@ pub fn model_diarizes(name: &str) -> bool {
 /// model, and `gen_model_catalog.py`'s exclusion comment would stop being true.
 ///
 /// `TranscribeEngine::download_file` takes repo and filename as plain
-/// arguments, so these four fields are the whole integration.
+/// arguments, so its first four fields are the whole download integration. The
+/// other four carry its licence and upstream repository (ADR 0030).
 pub struct DiarizerModel {
     pub hf_repo: &'static str,
+    /// Held equal to the generator's map entry for its record by
+    /// `test_the_diarizer_carries_its_records_licence` (#197).
+    pub license_name: &'static str,
+    pub license_url: &'static str,
+    pub license_mark: LicenceMark,
+    pub upstream_repo: &'static str,
     pub filename: &'static str,
     pub size_mb: u64,
     /// Architectural cap. A fifth speaker is silently folded into one of the
@@ -1632,6 +2044,10 @@ pub struct DiarizerModel {
 /// on the upstream 16-meeting acceptance set.
 pub const SPEAKER_DIARIZER: DiarizerModel = DiarizerModel {
     hf_repo: "diar_streaming_sortformer_4spk-v2.1-gguf",
+    license_name: "NVIDIA Open Model License",
+    license_url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+    license_mark: LicenceMark::None,
+    upstream_repo: "nvidia/diar_streaming_sortformer_4spk-v2.1",
     filename: "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf",
     size_mb: 139,
     max_speakers: 4,
@@ -1656,6 +2072,61 @@ pub fn is_recommended_model(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::summary::summary_engine::models::get_available_models;
+
+    /// Every model the app offers or runs, by name, with its licence (#197): the catalogue's rows,
+    /// the diarizer and the summary models. The three populations ADR 0030's marks are held over.
+    fn every_model() -> Vec<(String, String, String, LicenceMark)> {
+        let mut all: Vec<_> = TRANSCRIBE_MODEL_CATALOG
+            .iter()
+            .map(|m| (m.name.to_string(), m.license_name.to_string(), m.license_url.to_string(), m.license_mark))
+            .collect();
+        all.push((
+            "speaker-diarizer".to_string(),
+            SPEAKER_DIARIZER.license_name.to_string(),
+            SPEAKER_DIARIZER.license_url.to_string(),
+            SPEAKER_DIARIZER.license_mark,
+        ));
+        all.extend(get_available_models().into_iter().map(|m| (m.name, m.license_name, m.license_url, m.license_mark)));
+        all
+    }
+
+    #[test]
+    fn every_model_names_its_licence_with_a_link() {
+        let missing: Vec<_> = every_model()
+            .into_iter()
+            .filter(|(_, name, url, _)| name.trim().is_empty() || !url.starts_with("https://") || url.len() <= "https://".len())
+            .map(|(model, ..)| model)
+            .collect();
+        assert!(missing.is_empty(), "models without a licence name or an https:// link: {missing:?}");
+    }
+
+    #[test]
+    fn every_catalogue_row_and_the_diarizer_name_their_upstream_repository() {
+        let missing: Vec<_> = TRANSCRIBE_MODEL_CATALOG.iter().filter(|m| !m.upstream_repo.contains('/')).map(|m| m.name).collect();
+        assert!(missing.is_empty(), "rows without an upstream repository: {missing:?}");
+        assert!(SPEAKER_DIARIZER.upstream_repo.contains('/'), "the diarizer has no upstream repository");
+    }
+
+    /// ADR 0030's two marks, each exactly where the licence texts put them, over all three populations.
+    #[test]
+    fn the_marks_are_exactly_where_the_licences_put_them() {
+        let all = every_model();
+        let non_commercial: Vec<_> = all.iter().filter(|m| m.3 == LicenceMark::NonCommercial).map(|m| m.0.as_str()).collect();
+        assert_eq!(non_commercial, ["canary-1b-q4", "canary-1b-q8"], "non-commercial only");
+        let revenue: Vec<_> = all.iter().filter(|m| matches!(m.3, LicenceMark::RevenueLimit { .. })).map(|m| (m.0.as_str(), m.3)).collect();
+        assert_eq!(revenue, [("lfm2.5:2.6b", LicenceMark::RevenueLimit { usd: 10_000_000 })], "revenue-limited");
+    }
+
+    /// FunASR's §3 is read as a disclaimer (ADR 0030), so its rows are not marked.
+    #[test]
+    fn the_funasr_rows_carry_no_mark() {
+        for name in ["fun-asr-mlt-nano-2512-q4", "fun-asr-mlt-nano-2512-q8", "fun-asr-nano-2512-q4", "fun-asr-nano-2512-q8", "sensevoicesmall-q8"] {
+            let row = super::transcribe_model(name).unwrap_or_else(|| panic!("{name} is not a catalogue row"));
+            assert_eq!(row.license_mark, LicenceMark::None, "{name}");
+        }
+    }
+
     #[test]
     fn exactly_the_documented_variants_diarize() {
         let diarizing: Vec<&str> = super::TRANSCRIBE_MODEL_CATALOG
