@@ -19,10 +19,11 @@ import { fileURLToPath } from 'node:url';
 const frontend = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const dir = path.join(frontend, 'src', 'app', 'fonts');
 const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-const css = fs.readFileSync(path.join(frontend, 'src', 'app', 'fonts.css'), 'utf8');
+// Line endings normalised: a core.autocrlf=true checkout writes fonts.css with CRLF.
+const css = fs.readFileSync(path.join(frontend, 'src', 'app', 'fonts.css'), 'utf8').replace(/\r\n/g, '\n');
 
 test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md records', () => {
-  const rows = [...fs.readFileSync(path.join(dir, 'SOURCES.md'), 'utf8').matchAll(/^\| `([^`]+)` \| (\d+) \| `([0-9a-f]{64})` \| (https:\/\/raw\.githubusercontent\.com\/IBM\/plex\/\S+) \|$/gm)];
+  const rows = [...fs.readFileSync(path.join(dir, 'SOURCES.md'), 'utf8').replace(/\r\n/g, '\n').matchAll(/^\| `([^`]+)` \| (\d+) \| `([0-9a-f]{64})` \| (https:\/\/raw\.githubusercontent\.com\/IBM\/plex\/\S+) \|$/gm)];
   assert.equal(rows.length, 11, 'SOURCES.md does not record ten files and the licence');
   for (const [, file, bytes, digest, url] of rows) {
     const p = path.join(dir, file);
@@ -31,7 +32,11 @@ test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md rec
     assert.equal(sha(p), digest, `${file} is not the file SOURCES.md records`);
     assert.ok(url.endsWith(`/${file}`), `${file}: its URL names another file`);
   }
-  assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith('.woff2')).length, 10, 'a font file nothing records');
+  // Each row names its own file, and the rows name exactly the files on disk: a row copied over
+  // another would otherwise let an unrecorded file through.
+  const recorded = rows.map(([, file]) => file);
+  assert.equal(new Set(recorded).size, recorded.length, `SOURCES.md records a file twice: ${recorded.join(', ')}`);
+  assert.deepEqual(recorded.filter((f) => f.endsWith('.woff2')).sort(), fs.readdirSync(dir).filter((f) => f.endsWith('.woff2')).sort(), 'the font files on disk are not the ones SOURCES.md records');
   assert.equal(sha(path.join(frontend, 'public', 'IBM-Plex-LICENSE.txt')), sha(path.join(dir, 'LICENSE.txt')), 'the shipped licence is not the committed one');
   assert.match(fs.readFileSync(path.join(dir, 'LICENSE.txt'), 'utf8').split('\n')[0], /Reserved Font Name "Plex"/);
 });
@@ -70,7 +75,7 @@ test('git stores the files as they are, so a fresh clone carries IBM\'s bytes', 
   assert.equal(attrs.length, files.length);
   for (const line of attrs) assert.match(line, /: text: unset$/, `git may rewrite ${line.split(':')[0]}'s line endings`);
   for (const f of files) {
-    const blob = execFileSync('git', ['cat-file', '-p', `:frontend/${f}`], { cwd: frontend, maxBuffer: 1 << 24 });
+    const blob = execFileSync('git', ['cat-file', '-p', `:frontend/${f.split(path.sep).join('/')}`], { cwd: frontend, maxBuffer: 1 << 24 });
     assert.equal(crypto.createHash('sha256').update(blob).digest('hex'), sha(path.join(frontend, f)), `the blob git stores for ${f} is not the file on disk`);
   }
 });
