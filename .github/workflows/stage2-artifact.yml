@@ -3,8 +3,8 @@ name: Stage 2 artifact
 # The AppImage a Stage 2 pass is run against, built by a machine instead of a person (#43).
 #
 # Why this exists: every Stage 2 observation in this repository's history was made on one
-# laptop, by hand. Sixteen stage 2 entries; 5-12 need a display and 13-16 need a live
-# PipeWire session, so those stay on a real machine. Entries 1-4 need neither, and entry 3 --
+# laptop, by hand. From entry 5 on, every stage 2 entry needs a display, and the audio passes a
+# live PipeWire session, so those stay on a real machine. Entries 1-3 need neither, and entry 3 --
 # the AppImage build -- is 8.7 min of the ~9-13 min an observation costs (49 s Next.js,
 # 471 s `tauri build`, measured on 4daa4af with warm caches). Moving it here means a person's
 # Stage 2 starts at entry 4, the disk floor, with a downloaded artifact (#248 put the floor there;

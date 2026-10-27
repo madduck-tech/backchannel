@@ -98,6 +98,35 @@ test('BC_KEEP_MODELS=1 keeps every model, writes no manifest, and says so', () =
   assert.match(said, /BC_KEEP_MODELS=1/);
 });
 
+test('a model file the step cannot remove is named, and the step goes on', () => {
+  const { profile, app } = fixture('stuck');
+  fs.chmodSync(path.join(app, 'models'), 0o500);
+  try {
+    const said = strip(profile);
+    assert.match(said, /could not remove .*models\/seeded\.gguf/, 'a failed removal was not named');
+    assert.match(said, /stripped \d+ bytes/, 'the step stopped at the first file it could not remove');
+  } finally {
+    fs.chmodSync(path.join(app, 'models'), 0o700);
+  }
+});
+
+// Every pass that creates its profile sets its EXIT trap first, so a pass that dies seeding the
+// profile still strips it and names it. Before #248's adversary, onboarding and ui-check set it
+// after the seed copies, and nine exits in between left a 448 MB summary seed behind unnamed.
+test('every pass sets its EXIT trap before it creates its profile', () => {
+  const dir = path.join(repo, 'scripts');
+  let checked = 0;
+  for (const f of fs.readdirSync(dir).filter((n) => /^stage2-.*\.sh$/.test(n))) {
+    const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+    const created = lines.findIndex((l) => /mktemp -d \/tmp\/backchannel-/.test(l));
+    if (created < 0) continue;
+    checked++;
+    const trap = lines.findIndex((l) => /^trap cleanup EXIT/.test(l));
+    assert.ok(trap >= 0 && trap < created, `${f}:${created + 1} creates its profile before its EXIT trap (line ${trap + 1})`);
+  }
+  assert.equal(checked, 5, 'the passes that create a profile are core, two-channel, ui-record, onboarding and ui-check');
+});
+
 // The census. A keep branch is the line that prints "profile kept"; the step is called on that line
 // or the one before it, so a new pass that keeps a profile and forgets the step goes red here.
 test('every pass that keeps its profile strips it', () => {

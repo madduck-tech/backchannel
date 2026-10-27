@@ -11,14 +11,16 @@
 #   disk-floor.sh            the full check: on failure, what is taking the space
 #   disk-floor.sh --brief    one line, for the prefix in front of a cargo entry
 #
-# Inputs, so tests can point it at fixtures: BC_DISK_FLOOR_GB (the floor, in decimal GB) and
+# Inputs, so tests can point it at fixtures: BC_DISK_FLOOR_GB (the floor, in decimal GB; default in
+# scripts/lib/disk-floor-default.sh) and
 # BC_DISK_FLOOR_LIST (the directory whose largest entries a failure names; default /tmp). It is not
 # in test.yml: CI runners have their own disk, and environment-record.sh must always exit 0
 # (ADR 0019).
 set -uo pipefail
 
 BRIEF=""; [ "${1:-}" = "--brief" ] && BRIEF=1
-FLOOR_GB=${BC_DISK_FLOOR_GB:-20}
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/disk-floor-default.sh"
+FLOOR_GB=${BC_DISK_FLOOR_GB:-$DISK_FLOOR_DEFAULT_GB}
 LIST=${BC_DISK_FLOOR_LIST:-/tmp}
 FLOOR=$((FLOOR_GB * 1000000000))
 say() { printf 'disk-floor: %s\n' "$*" >&2; }
@@ -26,9 +28,15 @@ say() { printf 'disk-floor: %s\n' "$*" >&2; }
 # The recording folder is the application's own: `preferences.save_folder` in its store, else the
 # Linux default from recording_preferences.rs.
 recording_folder() {
-  local prefs="$HOME/.local/share/tech.madduck.backchannel/recording_preferences.json" f=""
+  local prefs="${XDG_DATA_HOME:-$HOME/.local/share}/tech.madduck.backchannel/recording_preferences.json" f="" docs
   [ -f "$prefs" ] && f=$(python3 -I -c 'import json,sys; print((json.load(open(sys.argv[1])).get("preferences") or {}).get("save_folder") or "")' "$prefs" 2>/dev/null)
-  printf '%s\n' "${f:-$HOME/Documents/backchannel-recordings}"
+  # The default mirrors get_default_recordings_folder(): dirs::document_dir(), the XDG documents
+  # folder from user-dirs.dirs (a localized desktop names it in its own language), else the home
+  # directory itself (recordings_dir_fallback).
+  docs=$(sed -n 's/^XDG_DOCUMENTS_DIR="\(.*\)"$/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" 2>/dev/null | head -1)
+  docs=${docs//\$HOME/$HOME}
+  [ -n "$docs" ] && [ "${docs%/}" != "$HOME" ] || docs=$HOME
+  printf '%s\n' "${f:-${docs%/}/backchannel-recordings}"
 }
 
 # A path that does not exist yet (a fresh checkout's target/, a cache not filled, a recording

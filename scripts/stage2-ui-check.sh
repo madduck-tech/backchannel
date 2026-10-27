@@ -82,23 +82,7 @@ done
     to that one and exits, and the WebDriver handshake then times out with 'IncompleteMessage'.
     Stop it and re-run."
 
-if [ -z "$PROFILE" ]; then
-  kept_profile_prune /tmp ui-check "$(kept_profile_keep_count stage2-ui-check.sh)"
-  PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1
-  kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
-fi
-APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
-mkdir -p "$APPDATA"
-# The onboarding marker alone -- no models. This pass never records, so it does not need them,
-# and that is what makes it cheap enough to run on every gate.
-if [ -f "$CACHE/onboarding-status.json" ]; then
-  cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
-  say "seeded the onboarding marker only ($(du -sh "$PROFILE" | cut -f1)); no models"
-else
-  say "no onboarding marker in $CACHE; the app will start at first-run and this pass will fail"
-fi
-
-DRIVER_LOG="$PROFILE/tauri-driver.log"
+# Set before the profile exists, so a pass that dies seeding it still strips and names it (#248).
 cleanup() {
   [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
   # The group, not the name: `pkill -x WebKitWebDriver` kills drivers this run never started,
@@ -118,6 +102,23 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+if [ -z "$PROFILE" ]; then
+  kept_profile_prune /tmp ui-check "$(kept_profile_keep_count stage2-ui-check.sh)"
+  PROFILE=$(mktemp -d /tmp/backchannel-ui-check.XXXXXX); OWN_PROFILE=1
+  kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
+fi
+APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
+mkdir -p "$APPDATA"
+# The onboarding marker alone -- no models. This pass never records, so it does not need them,
+# and that is what makes it cheap enough to run on every gate.
+if [ -f "$CACHE/onboarding-status.json" ]; then
+  cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
+  say "seeded the onboarding marker only ($(du -sh "$PROFILE" | cut -f1)); no models"
+else
+  say "no onboarding marker in $CACHE; the app will start at first-run and this pass will fail"
+fi
+
+DRIVER_LOG="$PROFILE/tauri-driver.log"
 
 HOME="$PROFILE/home" XDG_CONFIG_HOME="$PROFILE/home/.config" \
   XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" \

@@ -26,8 +26,9 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kept-prune-'));
 const holders = [];
 process.on('exit', () => { for (const h of holders) h.kill('SIGKILL'); fs.rmSync(base, { recursive: true, force: true }); });
 
-const lib = (body, ...args) => spawnSync('bash', ['-c', `set -euo pipefail; say() { printf 'pass: %s\\n' "$*" >&2; }; . "$1"; shift; ${body}`, 'x', LIB, ...args],
-  { encoding: 'utf8', env: { ...process.env, BC_KEEP_MODELS: '' } });
+const libEnv = (env, body, ...args) => spawnSync('bash', ['-c', `set -euo pipefail; say() { printf 'pass: %s\\n' "$*" >&2; }; . "$1"; shift; ${body}`, 'x', LIB, ...args],
+  { encoding: 'utf8', env: { ...process.env, BC_KEEP_MODELS: '', ...env } });
+const lib = (body, ...args) => libEnv({}, body, ...args);
 const MIN = 60_000;
 
 // A profile as a pass leaves it: a seeded model and a log, every file `ageMin` minutes old, and the
@@ -117,6 +118,59 @@ test('what the prune never touches, and what it keeps', () => {
   assert.ok(exists(path.join(target, 'run.log')) && !stripped(target), 'the prune followed a symlink');
 });
 
+test('BC_KEEP_MODELS=1 keeps the models of its own run, not of the profiles a prune keeps', () => {
+  const root = fs.mkdtempSync(path.join(base, 'keep-'));
+  const a = profile(root, 'backchannel-core.keepaa', { ageMin: 300, lock: 'free' });
+  const b = profile(root, 'backchannel-core.keepbb', { ageMin: 200, lock: 'free' });
+  const r = libEnv({ BC_KEEP_MODELS: '1' }, 'kept_profile_prune "$1" core 4', root);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(stripped(a) && stripped(b), `a prune run under BC_KEEP_MODELS=1 left the profiles it keeps with their models:\n${r.stderr}`);
+});
+
+test('a profile is ranked by its own files, so a strip does not make it the newest', () => {
+  const root = fs.mkdtempSync(path.join(base, 'rank-'));
+  const oldest = profile(root, 'backchannel-core.rank30', { ageMin: 300, lock: 'free' });
+  const middle = profile(root, 'backchannel-core.rank20', { ageMin: 200, lock: 'free' });
+  const newest = profile(root, 'backchannel-core.rank10', { ageMin: 100, lock: 'free' });
+  assert.equal(lib('kept_profile_prune "$1" core 3', root).status, 0);
+  assert.ok([oldest, middle, newest].every(stripped), 'the first prune did not strip the three it keeps');
+  const r = lib('kept_profile_prune "$1" core 2', root);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!exists(oldest), `the oldest profile survived a prune to two, ranked by when it was stripped:\n${r.stderr}`);
+  assert.ok(exists(middle) && exists(newest), 'a prune to two removed one of the two newest');
+});
+
+test('kept_profile_lock holds a live profile against a concurrent prune', async () => {
+  const root = fs.mkdtempSync(path.join(base, 'live-'));
+  const live = profile(root, 'backchannel-core.live00', { ageMin: 300 });
+  // The real function, in a shell that stays alive as a pass does, and says when it holds the lock.
+  const holder = spawn('bash', ['-c', `say() { :; }; . "$1"; kept_profile_lock "$2" && echo locked; sleep 30`, 'x', LIB, live], { stdio: ['ignore', 'pipe', 'ignore'] });
+  holder.unref(); holders.push(holder);
+  await new Promise((resolve, reject) => {
+    holder.stdout.on('data', (d) => { if (String(d).includes('locked')) resolve(); });
+    holder.on('exit', () => reject(new Error('kept_profile_lock did not take the lock')));
+  });
+  holder.stdout.destroy();
+  const r = lib('kept_profile_prune "$1" core 0', root);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(exists(live) && !stripped(live), `a prune removed or stripped a profile whose run holds kept_profile_lock:\n${r.stderr}`);
+});
+
+test('a profile the prune cannot remove is named, and the pass goes on', () => {
+  const root = fs.mkdtempSync(path.join(base, 'stuck-'));
+  const stuck = profile(root, 'backchannel-core.stuck0', { ageMin: 500, lock: 'free' });
+  const locked = path.join(stuck, 'home');
+  fs.chmodSync(locked, 0o500);
+  try {
+    const r = lib('kept_profile_prune "$1" core 0; echo "the pass went on"', root);
+    assert.equal(r.status, 0, `a failed removal stopped a set -e pass:\n${r.stderr}`);
+    assert.match(r.stdout, /the pass went on/);
+    assert.match(r.stderr, /could not remove .*backchannel-core\.stuck0/);
+  } finally {
+    fs.chmodSync(locked, 0o700);
+  }
+});
+
 // The census, under set equality: every kind a run creates with `mktemp -d /tmp/backchannel-` is a
 // kind it prunes first, in scripts/ and in gopnik.json, and each prune's K is the one above.
 test('every profile kind created is pruned first, with its K', () => {
@@ -142,6 +196,11 @@ test('every profile kind created is pruned first, with its K', () => {
       if (!m) return;
       const before = lines.slice(Math.max(0, i - 2), i + 1).join('\n').split(m[0])[0];
       assert.ok(before.includes(`kept_profile_prune /tmp ${m[1]} `), `${where}:${i + 1} creates ${m[1]} without pruning it just before`);
+      // stage2 (gopnik.json entry 5) spans entries 5-12 in separate shells, so nothing can hold a
+      // lock for it; it is left to the one-hour rule, as #248 records.
+      if (m[1] === 'stage2') return;
+      const after = lines.slice(i, i + 3).join('\n').split(m[0])[1];
+      assert.ok(/kept_profile_lock /.test(after), `${where}:${i + 1} creates ${m[1]} without holding kept_profile_lock on it`);
     });
   }
 });

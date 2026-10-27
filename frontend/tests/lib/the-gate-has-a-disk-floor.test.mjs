@@ -30,6 +30,8 @@ function checkout(name, { target = true } = {}) {
   const work = path.join(root, name);
   fs.mkdirSync(path.join(work, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(repo, 'scripts', 'disk-floor.sh'), path.join(work, 'scripts', 'disk-floor.sh'));
+  fs.mkdirSync(path.join(work, 'scripts', 'lib'));
+  fs.copyFileSync(path.join(repo, 'scripts', 'lib', 'disk-floor-default.sh'), path.join(work, 'scripts', 'lib', 'disk-floor-default.sh'));
   if (target) write(path.join(work, 'target', 'debug', 'incremental', 'blob'), Buffer.alloc(2_000_000));
   const g = (...a) => spawnSync('git', ['-C', work, ...a], { encoding: 'utf8' });
   g('init', '-q');
@@ -59,7 +61,8 @@ const shimmed = (names) => { const d = fs.mkdtempSync(path.join(root, 'path-'));
 function floor(fx, env = {}, args = []) {
   const r = spawnSync('bash', [path.join(fx.work, 'scripts', 'disk-floor.sh'), ...args], {
     cwd: fx.work, encoding: 'utf8',
-    env: { ...process.env, HOME: fx.home, BC_DISK_FLOOR_LIST: fx.list, BC_DISK_FLOOR_GB: '0', ...env },
+    env: { ...process.env, HOME: fx.home, XDG_DATA_HOME: path.join(fx.home, '.local', 'share'), XDG_CONFIG_HOME: path.join(fx.home, '.config'),
+      BC_DISK_FLOOR_LIST: fx.list, BC_DISK_FLOOR_GB: '0', ...env },
   });
   return { status: r.status, out: r.stderr + r.stdout };
 }
@@ -138,6 +141,15 @@ test('a seed bigger than the headroom is refused, with the bytes it needs, and n
   assert.doesNotMatch(r.stdout, /the pass went on/);
 });
 
+test('a seed that fits the disk but not the floor is refused', () => {
+  const { src, app } = seedFixture('floor');
+  // 10 GB free and a 5000-byte seed: it fits, and it would leave less than a 20 GB floor.
+  const r = seed({ PATH: `${shimmed(['df'])}:${process.env.PATH}`, SHIM_DF: '10000000000', BC_DISK_FLOOR_GB: '20' }, src, `${app}/`);
+  assert.notEqual(r.status, 0, `a seed leaving 10 GB under a 20 GB floor went ahead:\n${r.stderr}`);
+  assert.match(r.stderr, /of a 20000000000-byte floor/);
+  assert.ok(!fs.existsSync(path.join(app, 'models')), 'the refused copy copied something');
+});
+
 test('a copy that fails stops the pass', () => {
   const { src, app } = seedFixture('cpfail');
   const r = seed({ PATH: `${shimmed(['cp'])}:${process.env.PATH}` }, src, `${app}/`);
@@ -156,6 +168,17 @@ test('the floor is Stage 1 entry 2 and Stage 2 entry 4, and fronts every Stage 1
   for (const c of cargo) assert.ok(c.startsWith('scripts/disk-floor.sh --brief && '), `a Stage 1 cargo entry runs past a red floor:\n  ${c}`);
   for (const [f, needle] of [['.github/workflows/stage2-artifact.yml', 'Stage 2 starts at entry 4'], ['frontend/tests/lib/stage2-artifact-matches-the-gate.test.mjs', 'starts Stage 2 at entry 4']]) {
     assert.ok(fs.readFileSync(path.join(repo, f), 'utf8').includes(needle), `${f} still tells a person with a downloaded artifact to skip the floor`);
+  }
+});
+
+test('the floor has one default, which the check and the seed copy both read', () => {
+  const file = path.join(repo, 'scripts', 'lib', 'disk-floor-default.sh');
+  assert.match(fs.readFileSync(file, 'utf8'), /^DISK_FLOOR_DEFAULT_GB=\d+$/m);
+  for (const f of ['scripts/disk-floor.sh', 'scripts/lib/kept-profile.sh']) {
+    const text = fs.readFileSync(path.join(repo, f), 'utf8');
+    assert.match(text, /disk-floor-default\.sh"/, `${f} does not source the default`);
+    assert.doesNotMatch(text, /BC_DISK_FLOOR_GB:-\d/, `${f} carries a default of its own`);
+    assert.match(text, /\$\{BC_DISK_FLOOR_GB:-\$DISK_FLOOR_DEFAULT_GB\}/, `${f} does not read the shared default`);
   }
 });
 

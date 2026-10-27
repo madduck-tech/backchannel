@@ -116,6 +116,27 @@ command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo 
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
 
+# Set before the profile exists, so a pass that dies seeding it still strips and names it (#248).
+cleanup() {
+  [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
+  # The group, not the name: `pkill -x WebKitWebDriver` kills drivers this run never started,
+  # which defeats the BC_WD_PORT knobs whose only purpose is a second concurrent run. Same
+  # class as the fix in 6db27e9 for the other harness. setsid is already used above, so the
+  # group id is the driver's own pid.
+  [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
+  sleep 1
+  [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
+  [ -n "${HARNESS_UP:-}" ] && "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
+  # Kept on failure: the application's own logs/ live in there, and the driver log alone does
+  # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
+  if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
+    rm -rf "$PROFILE"
+  elif [ -n "${OWN_PROFILE:-}" ]; then
+    kept_profile_strip "$PROFILE"
+    printf 'stage2-onboarding-check: profile kept for inspection: %s\n' "$PROFILE" >&2
+  fi
+}
+trap cleanup EXIT
 OWN_PROFILE=""
 if [ -z "$PROFILE" ]; then
   kept_profile_prune /tmp onboarding "$(kept_profile_keep_count stage2-onboarding-check.sh)"
@@ -191,26 +212,6 @@ if [ "$MODE" = resumes ]; then
   HARNESS_UP=1
 fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
-cleanup() {
-  [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
-  # The group, not the name: `pkill -x WebKitWebDriver` kills drivers this run never started,
-  # which defeats the BC_WD_PORT knobs whose only purpose is a second concurrent run. Same
-  # class as the fix in 6db27e9 for the other harness. setsid is already used above, so the
-  # group id is the driver's own pid.
-  [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
-  sleep 1
-  [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
-  [ -n "${HARNESS_UP:-}" ] && "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
-  # Kept on failure: the application's own logs/ live in there, and the driver log alone does
-  # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
-  if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
-    rm -rf "$PROFILE"
-  elif [ -n "${OWN_PROFILE:-}" ]; then
-    kept_profile_strip "$PROFILE"
-    printf 'stage2-onboarding-check: profile kept for inspection: %s\n' "$PROFILE" >&2
-  fi
-}
-trap cleanup EXIT
 
 # The PATH the application inherits, which is half of what it searches for an agent CLI (#212).
 # `agents-absent` cuts it to the system directories; the driver is then named by its full path.

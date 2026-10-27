@@ -9,6 +9,8 @@
 # The caller supplies `say`; bash resolves it at call time, so each pass keeps its own prefix. Five of
 # the passes run under `set -euo pipefail`, and so do the tests of this file.
 
+. "$(dirname -- "${BASH_SOURCE[0]}")/disk-floor-default.sh"
+
 # The bytes a file occupies, or 0.
 kept_profile__size() { stat -c %s -- "$1" 2>/dev/null || echo 0; }
 
@@ -40,7 +42,7 @@ kept_profile_strip() {
   # the write can fail, and the files are what frees it, so they go anyway and the list goes to
   # the log instead.
   printf '%s' "$records" >> "$manifest" || { say "could not write $manifest; the models removed were:"; printf '%s' "$records" >&2; }
-  while IFS= read -r f; do rm -f -- "$f"; done <<< "$list"
+  while IFS= read -r f; do rm -f -- "$f" || say "could not remove $f"; done <<< "$list"
   say "stripped $freed bytes of models from $profile; kept-models.txt lists them"
 }
 
@@ -56,6 +58,11 @@ kept_profile_lock() {
 # A maximum rather than `sort | head`: head closing the pipe early is a SIGPIPE, and a pass under
 # `set -eo pipefail` would die of it in a profile with enough files.
 kept_profile__newest() { { find "$1" -printf '%T@\n' 2>/dev/null || true; } | awk '$1 > m { m = $1 } END { printf "%d\n", m }'; }
+
+# What a profile is ranked by: its newest regular file, leaving out the two this file writes. A strip
+# writes kept-models.txt and touches the directories it empties, so ranking by the whole tree would
+# make every profile a prune strips the newest, and the next prune would keep the wrong ones.
+kept_profile__rank() { { find "$1" -type f ! -name kept-models.txt ! -name .lock -printf '%T@\n' 2>/dev/null || true; } | awk '$1 > m { m = $1 } END { printf "%d\n", m }'; }
 
 # kept_profile_keep_count <script-name> [gopnik.json] — how many kept profiles of a pass to keep: two, or the
 # number of Stage 2 entries in gopnik.json that run that script, if more. A gate run in which three
@@ -87,7 +94,7 @@ kept_profile_prune() {
       newest=$(kept_profile__newest "$d")
       [ "${newest:-0}" -ge "$cutoff" ] && continue
     fi
-    candidates+=("$(kept_profile__newest "$d") $d")
+    candidates+=("$(kept_profile__rank "$d") $d")
   done
   [ "${#candidates[@]}" -gt 0 ] || return 0
   sorted=$(printf '%s\n' "${candidates[@]}" | sort -rn | cut -d' ' -f2-)
@@ -95,16 +102,17 @@ kept_profile_prune() {
     [ -n "$d" ] || continue
     if [ "$kept" -lt "$keep" ]; then
       kept=$((kept + 1))
-      kept_profile_strip "$d"
+      # BC_KEEP_MODELS keeps the models of the run that set it, not of every profile it prunes.
+      BC_KEEP_MODELS='' kept_profile_strip "$d"
     else
       say "removed $d ($(du -sh -- "$d" 2>/dev/null | cut -f1)), an old kept profile of $kind"
-      rm -rf -- "$d"
+      rm -rf -- "$d" || say "could not remove $d"
     fi
   done <<< "$sorted"
 }
 
 # seed_copy <source> <destination> — copy a pass's seed, unless the copy would leave less than the
-# floor free (BC_DISK_FLOOR_GB, default as scripts/disk-floor.sh). It names the bytes needed, and
+# floor free (BC_DISK_FLOOR_GB, else DISK_FLOOR_DEFAULT_GB). It names the bytes needed, and
 # returns the copy's own status, so a full disk stops the pass rather than failing it as something
 # else (`stage2-core-check.sh` runs without `set -e`).
 seed_copy() {
@@ -114,7 +122,7 @@ seed_copy() {
   dir=$dst; while [ ! -e "$dir" ]; do dir=$(dirname -- "$dir"); done
   avail=$(df --output=avail -B1 -- "$dir" 2>/dev/null | tail -1 | tr -d ' ') || avail=""
   [ -n "$avail" ] && [ "$avail" -eq "$avail" ] 2>/dev/null || { say "cannot read the free space under $dir"; return 1; }
-  floor=$(( ${BC_DISK_FLOOR_GB:-20} * 1000000000 ))
+  floor=$(( ${BC_DISK_FLOOR_GB:-$DISK_FLOOR_DEFAULT_GB} * 1000000000 ))
   if [ $((avail - need)) -lt "$floor" ]; then
     say "refusing to seed $dst: it needs $need bytes, and would leave $((avail - need)) of a $floor-byte floor"
     return 1
