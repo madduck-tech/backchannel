@@ -409,13 +409,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 5. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
 
-6. **No text injection into other applications without a verified caret anchor**: No injection code exists today. This is a rule for whoever builds it, not a description of current behavior.
-
-   - Never write a whole field. FluidVoice, the macOS dictation app studied for this, has Accessibility rungs that replace the target's entire `kAXValue`, and the target is sometimes picked by a hierarchy walk rather than by focus. The field it destroys need not be the one the user is typing in.
-   - Those destructive rungs are reached precisely when `kAXValue` / `kAXSelectedTextRange` are unreadable: Electron apps, web views, terminals. For a desktop dictation tool that is the majority case, not the tail.
-   - One occurrence is unbounded loss of someone else's document, and we leave no undo entry behind for them to recover it.
-   - A verified caret anchor — insert, then read back what landed and where — is a prerequisite that gates the feature. It is not a follow-up.
-   - Do not add `enigo`, `rdev`, or a CGEventTap. Synthesizing keystrokes gives no read-back, so it cannot satisfy the anchor requirement, and it needs a blanket Accessibility grant that turns every keystroke the user types into something the app can see.
+6. **No text injection into other applications without a verified caret anchor.** This rule is Backchannel's own (2026-08-16), not inherited; it lives in `CLAUDE.md`'s "read this first" section, which every harness loads.
 
 ## Repository-Specific Conventions
 
@@ -430,22 +424,22 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 ## Key Files Reference
 
 **Core Coordination**:
-- [frontend/src-tauri/src/lib.rs](frontend/src-tauri/src/lib.rs) - Main Tauri entry point, command registration
-- [frontend/src-tauri/src/audio/mod.rs](frontend/src-tauri/src/audio/mod.rs) - Audio module exports
-- [frontend/src-tauri/src/database/mod.rs](frontend/src-tauri/src/database/mod.rs) - Local database module
+- [frontend/src-tauri/src/lib.rs](../frontend/src-tauri/src/lib.rs) - Main Tauri entry point, command registration
+- [frontend/src-tauri/src/audio/mod.rs](../frontend/src-tauri/src/audio/mod.rs) - Audio module exports
+- [frontend/src-tauri/src/database/mod.rs](../frontend/src-tauri/src/database/mod.rs) - Local database module
 
 **Audio System**:
-- [frontend/src-tauri/src/audio/recording_manager.rs](frontend/src-tauri/src/audio/recording_manager.rs) - Recording orchestration
-- [frontend/src-tauri/src/audio/pipeline.rs](frontend/src-tauri/src/audio/pipeline.rs) - Audio mixing and VAD
-- [frontend/src-tauri/src/audio/recording_saver.rs](frontend/src-tauri/src/audio/recording_saver.rs) - Audio file writing
+- [frontend/src-tauri/src/audio/recording_manager.rs](../frontend/src-tauri/src/audio/recording_manager.rs) - Recording orchestration
+- [frontend/src-tauri/src/audio/pipeline.rs](../frontend/src-tauri/src/audio/pipeline.rs) - Audio mixing and VAD
+- [frontend/src-tauri/src/audio/recording_saver.rs](../frontend/src-tauri/src/audio/recording_saver.rs) - Audio file writing
 
 **UI Components**:
-- [frontend/src/app/page.tsx](frontend/src/app/page.tsx) - Main recording interface
-- [frontend/src/components/Sidebar/SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx) - Global state management
+- [frontend/src/app/page.tsx](../frontend/src/app/page.tsx) - Main recording interface
+- [frontend/src/components/Sidebar/SidebarProvider.tsx](../frontend/src/components/Sidebar/SidebarProvider.tsx) - Global state management
 
 **Transcription**:
-- [frontend/src-tauri/src/transcribe_engine/engine.rs](frontend/src-tauri/src/transcribe_engine/engine.rs) - Model management, download, batch transcription
-- [frontend/src-tauri/src/audio/transcription/ports.rs](frontend/src-tauri/src/audio/transcription/ports.rs) - `Transcriber` / `TranscriptSink`, the live-transcription boundaries
-- [frontend/src-tauri/src/audio/transcription/service.rs](frontend/src-tauri/src/audio/transcription/service.rs) - The live-transcription use case (infrastructure-free, unit-tested)
-- [frontend/src-tauri/src/audio/transcription/adapters/](frontend/src-tauri/src/audio/transcription/adapters/) - transcribe.cpp streaming, VAD+batch, and the Tauri event sink
-- [frontend/src-tauri/src/audio/diarization.rs](frontend/src-tauri/src/audio/diarization.rs) - Post-hoc speaker labelling over a finished recording
+- [frontend/src-tauri/src/transcribe_engine/engine.rs](../frontend/src-tauri/src/transcribe_engine/engine.rs) - Model management, download, batch transcription
+- [frontend/src-tauri/src/audio/transcription/ports.rs](../frontend/src-tauri/src/audio/transcription/ports.rs) - `Transcriber` / `TranscriptSink`, the live-transcription boundaries
+- [frontend/src-tauri/src/audio/transcription/service.rs](../frontend/src-tauri/src/audio/transcription/service.rs) - The live-transcription use case (infrastructure-free, unit-tested)
+- [frontend/src-tauri/src/audio/transcription/adapters/](../frontend/src-tauri/src/audio/transcription/adapters/) - transcribe.cpp streaming, VAD+batch, and the Tauri event sink
+- [frontend/src-tauri/src/audio/diarization.rs](../frontend/src-tauri/src/audio/diarization.rs) - Post-hoc speaker labelling over a finished recording

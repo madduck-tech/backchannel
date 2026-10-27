@@ -43,6 +43,11 @@ test('the root AGENTS.md is CLAUDE.md\'s section and the two unscoped rules, and
   }
   assert.ok(agents.trimEnd().endsWith(AGENTS_END), 'AGENTS.md does not end with its sentinel');
   assert.ok(!agents.includes('## Inherited codebase guide'), 'the inherited guide is back in the always-loaded instructions');
+  // Backchannel's own hard rule, which sat in the guide's constraints only because CLAUDE.md was always
+  // loaded; moving the guide out must not take it with it (#250's adversary).
+  assert.ok(agents.includes('**No text injection into other applications without a verified caret anchor.**'), 'the text-injection rule no longer reaches every harness');
+  assert.ok(agents.includes('Do not add `enigo`, `rdev`, or a CGEventTap.'), 'the text-injection rule lost its prohibition');
+  assert.ok(!/Co-Authored-By: Claude [A-Z]\w+ \d/.test(agents), 'AGENTS.md tells every harness to sign as one Claude model');
 });
 
 test('nothing is generated under frontend/, whose agent files belong to Next.js', () => {

@@ -123,7 +123,7 @@ pnpm run tauri:dev:vulkan
 pnpm run tauri:dev:cpu
 ```
 
-Architecture notes and conventions for contributors live in [CLAUDE.md](CLAUDE.md); GPU backend details in [docs/GPU_ACCELERATION.md](docs/GPU_ACCELERATION.md).
+Architecture notes and conventions for contributors live in [docs/codebase-guide.md](docs/codebase-guide.md), and the working rules in [CLAUDE.md](CLAUDE.md); GPU backend details in [docs/GPU_ACCELERATION.md](docs/GPU_ACCELERATION.md).
 
 ## Contributing
 
