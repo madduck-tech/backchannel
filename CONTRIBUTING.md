@@ -1,155 +1,94 @@
 # Contributing to Backchannel
 
-Thank you for your interest in contributing to Conversationaly! This document provides guidelines and instructions for contributing to this project.
+Backchannel is a meeting copilot that records, transcribes and summarises meetings on your own machine: a Tauri desktop app with a Rust core and a Next.js interface. This file covers the mechanics.
 
-## Development Workflow
+**What is normative lives elsewhere, and wins over this file:**
+- [`docs/development-workflow.md`](docs/development-workflow.md): the cycles, approval gates and definition of done.
+- [`docs/decisions/README.md`](docs/decisions/README.md): every accepted decision (ADR).
+- [`CLAUDE.md`](CLAUDE.md) and the rules in `.claude/rules/`: the hard rules every change follows, for people and agents alike.
 
-The normative description of how this project is built — decisions, design, code, milestones,
-releases and approval gates — is [`docs/development-workflow.md`](docs/development-workflow.md).
-This file covers the mechanics.
+## Getting started
 
-### Branch Strategy
-
-- `main` - the only long-lived branch; it must always build
-- Feature branches are created from `main` and merged back through a pull request
-
-### Getting Started
-
-1. Fork the repository
-2. Clone your fork:
+1. Clone the repository. `main` is the only long-lived branch, and it always builds.
    ```bash
-   git clone https://github.com/YOUR_USERNAME/conversationaly.git
+   git clone https://github.com/madduck-tech/backchannel.git
+   cd backchannel
    ```
-3. Add the original repository as upstream:
+2. Install the toolchain and the system packages for your platform: [`docs/BUILDING.md`](docs/BUILDING.md).
+3. Run the app in development:
    ```bash
-   git remote add upstream https://github.com/bykof/conversationaly.git
-   ```
-4. Create a new branch from `devtest`:
-   ```bash
-   git checkout devtest
-   git pull upstream devtest
-   git checkout -b feature/your-feature-name
+   cd frontend
+   pnpm install
+   pnpm run tauri:dev
    ```
 
-### Development Process
+[`docs/codebase-guide.md`](docs/codebase-guide.md) explains how the code is laid out: the audio pipeline, live transcription, the Tauri command and event pattern, and the summary sidecar. Read it before working on any of them.
 
-1. Always start your work from the `devtest` branch
-2. Create a new branch for each feature/fix
-3. Make your changes
-4. Write or update tests as needed
-5. Ensure all tests pass
-6. Update documentation if necessary
+## Working with a coding agent
 
-### Issue Creation
+The repository carries the same instructions for three agents. `.claude/` is the one source; what Codex and opencode read is generated from it.
 
-Before starting work on a new feature or bug fix:
+| | Claude Code | Codex | opencode |
+| --- | --- | --- | --- |
+| **Instructions it loads** | `CLAUDE.md`, plus `.claude/rules/workflow.md` and `testing.md` | the root `AGENTS.md` | the root `AGENTS.md` |
+| **Rules for specific paths** (design, docs, platform code) | loaded on their own when a matching file is read | listed in `AGENTS.md`'s index: open the rule before you read or edit what it governs | the same |
+| **Work an issue through the whole cycle** | `/work 42` | `$work 42` | `/work 42` |
+| **Run the critic on an issue first** | `/critique 42` | `$critique 42` | `/critique 42` |
+| **Turn a discussion into an issue** | `/issue` | `$issue …`, only when named | `/issue …`, after asking you |
 
-1. Check if an issue already exists
-2. If not, create a new issue with:
-   - Clear title
-   - Detailed description
-   - Steps to reproduce (for bugs)
-   - Expected behavior
-   - Screenshots (if applicable)
-   - Labels (bug, enhancement, etc.)
+**Start an agent at the repository's root.** A session started in `frontend/` misses the root's instructions. Codex reads `frontend/AGENTS.md` too, which is Next.js's own.
 
-### Pull Request Process
+**Changing the instructions:**
+- Edit `CLAUDE.md`'s "read this first" section, the files in `.claude/rules/`, `.claude/skills/` or `.claude/commands/`.
+- Then run `node scripts/gen-agent-files.mjs`. It rewrites `AGENTS.md`, `.agents/skills/`, `.opencode/command/` and `opencode.json`.
+- Never edit those by hand. `pnpm test` fails when they drift from their sources, and the generator refuses to delete a file it did not write.
+- The gopnik skills (`.claude/skills/gopnik*`) stay identical to upstream [madduck-tech/gopnik](https://github.com/madduck-tech/gopnik); changes to them go there.
+- What each agent receives, file by file, is in [`docs/agent-harness-matrix.md`](docs/agent-harness-matrix.md).
 
-1. Create a PR from your feature branch to `devtest`
-2. Link the PR to the related issue using the issue number (e.g., "Fixes #123")
-3. Fill out the PR template completely
-4. Ensure CI checks pass
-5. Request review from at least one maintainer
-6. Address any review comments
-7. Once approved, the PR will be merged into `devtest`
+## How a change is made
 
-### PR Template
+Every change that executes goes through one cycle. [`docs/development-workflow.md`](docs/development-workflow.md) is the full text, and `/work N` (`$work N` in Codex) walks it.
 
-```markdown
-## Description
-[Describe your changes here]
+1. **An issue says what would settle it:** the observation that decides whether the change worked.
+2. **A critic attacks the issue before work starts.** The issue gets the `ready` label when it holds.
+3. **If the change touches the UI,** prototype variants are approved by the product owner first.
+4. **Stage 0:** the behaviour matrix is posted on the issue, before the first commit.
+5. **The work is done on a branch from `main`.**
+   - A bug starts with a test shown red on the unfixed code.
+   - A feature ships with controls: break the behaviour on purpose, show the test going red, restore.
+   - The rules are in `.claude/rules/testing.md`.
+6. **The gate is run:** the commands in [`gopnik.json`](gopnik.json), Stage 1 and then Stage 2, with the verdict posted on the issue.
+   - Stage 2 drives the built app on Linux, with a display and a PipeWire session.
+   - Its last passes play speech through the default output, so keep the machine quiet while it runs.
+7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.**
 
-## Related Issue
-[Link to the issue this PR addresses]
+**Documentation-only changes** skip the gate, but still go through a pull request, because CI must pass before `main` accepts a commit.
 
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
-- [ ] Other (please describe)
+## Commits
 
-## Testing
-- [ ] Unit tests added/updated
-- [ ] Manual testing performed
-- [ ] All tests pass
+- Conventional commits: `feat|fix|docs|design|refactor|test|chore|ci(scope): subject`.
+- **Everything in the repository is in English:** code, comments, commit messages, issues and pull requests (ADR 0010).
+- A commit an agent wrote ends with a `Co-Authored-By:` trailer naming the model.
 
-## Documentation
-- [ ] Documentation updated
-- [ ] No documentation needed
+## Tests
 
-## Checklist
-- [ ] Code follows project style
-- [ ] Self-reviewed the code
-- [ ] Added comments for complex code
-- [ ] Updated README if needed
+```bash
+cd frontend && pnpm test && pnpm typecheck && pnpm lint
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Code Style
+These are the first entries of Stage 1. The rest, including the tests that open real audio devices, are listed in `gopnik.json`.
 
-- Follow the existing code style
-- Use meaningful variable and function names
-- Add comments for complex logic
-- Keep functions small and focused
-- Write clear commit messages
+## Releases
 
-## Commit Message Format
+Every release has the same shape (ADR 0031):
+- it is built by `release.yml` from `main`, as a pre-release while the version is `0.x`;
+- the same seven files, with `SHA256SUMS`;
+- notes written from [`docs/release-notes-template.md`](docs/release-notes-template.md).
 
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-Types:
-- feat: New feature
-- fix: Bug fix
-- docs: Documentation changes
-- style: Code style changes
-- refactor: Code refactoring
-- test: Adding/updating tests
-- chore: Maintenance tasks
-
-## Testing
-
-- Write unit tests for new features
-- Update existing tests when modifying code
-- Ensure all tests pass before submitting PR
-- Include integration tests for complex features
-
-## Documentation
-
-- Update documentation for new features
-- Keep README up to date
-- Document API changes
-- Add comments for complex code
-
-## Review Process
-
-1. PRs require at least one review
-2. Address all review comments
-3. Keep the PR up to date with `devtest`
-4. Squash commits if requested
-
-## Getting Help
-
-- Create an issue for questions
-- Join our community chat
-- Contact maintainers
+Publishing is the product owner's call.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the project's MIT License. 
+By contributing, you agree that your contributions are licensed under the project's MIT License.
