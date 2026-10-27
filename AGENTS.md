@@ -65,6 +65,10 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
 - A verdict citing a green pass states whether that pass reached the surfaces the change touched, and
   a gap it names blocks until the product owner or an issue accepts it (ADR 0022). The #111 verdict
   named its gap correctly and merged anyway; the product owner found the consequence by hand.
+- An adversary's or a control's copy of the repository is a `git worktree add`, built without a
+  `CARGO_TARGET_DIR` outside it, and removed with `git worktree remove`, never `rm -rf`. A release
+  worktree is locked with `git worktree lock --reason release` until the release is published.
+  `scripts/disk-sweep.sh` removes the rest once they are merged and idle (#257).
 - Report outcomes faithfully: failed checks, skipped steps and unverified platforms are stated,
   never implied. A readiness claim without a gopnik verdict is not made.
 
