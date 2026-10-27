@@ -8,7 +8,7 @@
 # front of every Stage 1 entry that runs cargo, because the runner runs every entry whatever the
 # last one returned.
 #
-#   disk-floor.sh            the full check: on failure, what is taking the space
+#   disk-floor.sh [--profiles]   sweep (scripts/disk-sweep.sh), then check: on failure, what is taking the space
 #   disk-floor.sh --brief    one line, for the prefix in front of a cargo entry
 #
 # Inputs, so tests can point it at fixtures: BC_DISK_FLOOR_GB (the floor, in decimal GB; default in
@@ -18,7 +18,8 @@
 # (ADR 0019).
 set -uo pipefail
 
-BRIEF=""; [ "${1:-}" = "--brief" ] && BRIEF=1
+BRIEF=""; PROFILES=""
+for a in "$@"; do case "$a" in --brief) BRIEF=1 ;; --profiles) PROFILES=1 ;; esac; done
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib/disk-floor-default.sh"
 FLOOR_GB=${BC_DISK_FLOOR_GB:-$DISK_FLOOR_DEFAULT_GB}
 LIST=${BC_DISK_FLOOR_LIST:-/tmp}
@@ -44,6 +45,13 @@ recording_folder() {
 existing() { local p=$1; while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname -- "$p"); done; printf '%s\n' "$p"; }
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# The full form sweeps before it measures (#257): worktrees that are done, and each target/ over its
+# cap. --profiles adds the whole-profile step, which only Stage 1 entry 2 passes, before any build.
+# --brief never sweeps: it is the prefix of the cargo entries, in the middle of a gate run.
+if [ -z "$BRIEF" ]; then
+  "$(dirname -- "${BASH_SOURCE[0]}")/disk-sweep.sh" ${PROFILES:+--profiles} || say "the sweep failed (exit $?); measuring anyway"
+fi
 PATHS=("/tmp" "$TOP/target" "$(recording_folder)")
 # Every seed cache, or ~/.cache itself while there is none.
 for c in "$HOME"/.cache/backchannel-*; do [ -e "$c" ] && PATHS+=("$c"); done
