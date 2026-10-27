@@ -9,6 +9,13 @@
       ".claude/rules/docs.md",
       ".claude/rules/platform-code.md"
     ],
+    ".agents/skills/critique/SKILL.md": ".claude/commands/critique.md",
+    ".opencode/command/critique.md": ".claude/commands/critique.md",
+    ".agents/skills/issue/SKILL.md": ".claude/commands/issue.md",
+    ".agents/skills/issue/agents/openai.yaml": ".claude/commands/issue.md",
+    ".opencode/command/issue.md": ".claude/commands/issue.md",
+    ".agents/skills/work/SKILL.md": ".claude/commands/work.md",
+    ".opencode/command/work.md": ".claude/commands/work.md",
     ".agents/skills/gopnik-critic/SKILL.md": ".claude/skills/gopnik-critic/SKILL.md",
     ".agents/skills/gopnik-critic/SKILL.ru.md": ".claude/skills/gopnik-critic/SKILL.ru.md",
     ".agents/skills/gopnik-critic/agents/openai.yaml": ".claude/skills/gopnik-critic/agents/openai.yaml",

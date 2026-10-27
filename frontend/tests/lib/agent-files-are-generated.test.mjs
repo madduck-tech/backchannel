@@ -101,6 +101,26 @@ test('the root AGENTS.md indexes every rule scoped to paths, with its globs, and
   assert.ok(agents.includes('| `frontend/AGENTS.md` | `frontend/**`'), 'the index does not name frontend/AGENTS.md');
 });
 
+test('the commands reach Codex as skills and opencode as commands, with the issue number where each harness puts it', () => {
+  const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
+  const read = (f) => fs.readFileSync(path.join(repo, f), 'utf8');
+  for (const name of ['critique', 'issue', 'work']) {
+    assert.equal(files[`.agents/skills/${name}/SKILL.md`], `.claude/commands/${name}.md`, `${name} is not a skill`);
+    assert.equal(files[`.opencode/command/${name}.md`], `.claude/commands/${name}.md`, `${name} is not an opencode command`);
+    assert.match(read(`.agents/skills/${name}/SKILL.md`), new RegExp(`^---\nname: ${name}\ndescription: .+\n---\n`), `${name}'s skill has no name and description`);
+  }
+  for (const name of ['critique', 'work']) {
+    // In Codex `$issue` names the skill that opens GitHub issues.
+    assert.ok(!read(`.agents/skills/${name}/SKILL.md`).includes('$issue'), `${name}'s skill still says $issue, which Codex reads as the issue skill`);
+    assert.match(read(`.opencode/command/${name}.md`), /\*\*\$1\*\*/, `${name}'s opencode command does not put the argument where the command had it`);
+    assert.ok(!read(`.opencode/command/${name}.md`).includes('$issue'), `${name}'s opencode command still says $issue`);
+  }
+  assert.match(read('.agents/skills/issue/agents/openai.yaml'), /^policy:\n  allow_implicit_invocation: false$/m, 'Codex may invoke issue without being asked');
+  for (const name of ['critique', 'work']) assert.ok(!fs.existsSync(path.join(repo, `.agents/skills/${name}/agents/openai.yaml`)), `${name} should stay implicitly invocable`);
+  const oc = JSON.parse(read('opencode.json'));
+  assert.deepEqual(oc.permission?.skill, { issue: 'ask' }, 'opencode does not ask before the issue skill, or asks before another');
+});
+
 test('nothing is generated under frontend/, whose agent files belong to Next.js', () => {
   const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
   assert.deepEqual(Object.keys(files).filter((f) => f.startsWith('frontend/')), []);
@@ -109,7 +129,7 @@ test('nothing is generated under frontend/, whose agent files belong to Next.js'
 // A repository of its own: the generator, the list, both skill trees and .gitattributes, committed.
 function fixture(name) {
   const r = path.join(base, name);
-  for (const p of ['scripts/gen-agent-files.mjs', LIST, NOT_DELIVERED, '.claude/skills', '.claude/rules', 'CLAUDE.md', 'AGENTS.md', 'frontend/AGENTS.md', '.agents', '.gitattributes']) {
+  for (const p of ['scripts/gen-agent-files.mjs', LIST, NOT_DELIVERED, '.claude/skills', '.claude/rules', '.claude/commands', 'CLAUDE.md', 'AGENTS.md', 'frontend/AGENTS.md', '.agents', '.opencode', 'opencode.json', '.gitattributes']) {
     fs.cpSync(path.join(repo, p), path.join(r, p), { recursive: true });
   }
   const git = (...a) => spawnSync('git', ['-C', r, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
