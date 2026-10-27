@@ -109,15 +109,39 @@ case "$CHOSEN_MB" in ''|*[!0-9]*) printf 'stage2-onboarding-check: no size_mb fo
 
 say() { printf 'stage2-onboarding-check: %s\n' "$*"; }
 die() { printf 'stage2-onboarding-check: %s\n' "$*" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
 
 case "$MODE" in chooses|keeps|remote|present|narrow|catalogue|resumes|resumes-gone|agents|agents-absent) ;; *) die "mode must be chooses, keeps, remote, present, narrow, catalogue, resumes, resumes-gone, agents or agents-absent, not '$MODE'" ;; esac
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
 [ -x "$APP" ] || die "not executable: $APP"
 
+# Set before the profile exists, so a pass that dies seeding it still strips and names it (#248).
+cleanup() {
+  [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
+  # The group, not the name: `pkill -x WebKitWebDriver` kills drivers this run never started,
+  # which defeats the BC_WD_PORT knobs whose only purpose is a second concurrent run. Same
+  # class as the fix in 6db27e9 for the other harness. setsid is already used above, so the
+  # group id is the driver's own pid.
+  [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
+  sleep 1
+  [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
+  [ -n "${HARNESS_UP:-}" ] && "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
+  # Kept on failure: the application's own logs/ live in there, and the driver log alone does
+  # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
+  if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
+    rm -rf "$PROFILE"
+  elif [ -n "${OWN_PROFILE:-}" ]; then
+    kept_profile_strip "$PROFILE"
+    printf 'stage2-onboarding-check: profile kept for inspection: %s\n' "$PROFILE" >&2
+  fi
+}
+trap cleanup EXIT
 OWN_PROFILE=""
 if [ -z "$PROFILE" ]; then
+  kept_profile_prune /tmp onboarding "$(kept_profile_keep_count stage2-onboarding-check.sh)"
   PROFILE="$(mktemp -d /tmp/backchannel-onboarding.XXXXXX)"; OWN_PROFILE=1
+  kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
 fi
 APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA/models"
@@ -129,8 +153,7 @@ mkdir -p "$APPDATA/models"
 # "fetched" that were the seed itself, mtime and all -- a non-empty result that was not a finding,
 # which is the same class of mistake as an empty one that is not a pass.
 if [ "$MODE" != remote ] && [ "$MODE" != catalogue ] && [ "$MODE" != resumes ] && [ "$MODE" != resumes-gone ] && [ "$MODE" != agents ] && [ "$MODE" != agents-absent ] && [ -d "$CACHE/models/summary" ]; then
-  cp -a --reflink=auto "$CACHE/models/summary" "$APPDATA/models/summary" 2>/dev/null \
-    || cp -a "$CACHE/models/summary" "$APPDATA/models/summary"
+  seed_copy "$CACHE/models/summary" "$APPDATA/models/summary" || die "could not seed $APPDATA/models/summary"
   # Not "no downloads this run": the cached summary model is **partial** -- 448 MB of a 3651 MiB
   # model -- so first run fetches the rest every time. Measured 2026-09-10, after this pass had
   # claimed otherwise in its own output for as long as the cache had been incomplete.
@@ -141,7 +164,7 @@ fi
 
 if [ "$MODE" = keeps ]; then
   [ -f "$CACHE/models/$PRESENT_FILE" ] || die "mode 'keeps' needs $PRESENT_FILE in $CACHE/models"
-  cp -a "$CACHE/models/$PRESENT_FILE" "$APPDATA/models/$PRESENT_FILE"
+  seed_copy "$CACHE/models/$PRESENT_FILE" "$APPDATA/models/$PRESENT_FILE" || die "could not seed $PRESENT_FILE"
   PRESENT_BEFORE=$(stat -c '%Y %s' "$APPDATA/models/$PRESENT_FILE")
   say "placed $PRESENT_FILE on disk first: $PRESENT_BEFORE"
 fi
@@ -150,7 +173,7 @@ if [ "$MODE" = present ]; then
   # The state the product owner photographed: a file already there, drawn as a bar over
   # `0.0 MB / 705.3 MB`. Seeding the chosen model is the only way to enter it deliberately.
   [ -f "$CACHE/models/$CHOSEN_FILE" ] || die "mode 'present' needs $CHOSEN_FILE in $CACHE/models"
-  cp -a "$CACHE/models/$CHOSEN_FILE" "$APPDATA/models/$CHOSEN_FILE"
+  seed_copy "$CACHE/models/$CHOSEN_FILE" "$APPDATA/models/$CHOSEN_FILE" || die "could not seed $CHOSEN_FILE"
   say "placed the model the person will choose on disk first: $CHOSEN_FILE"
 else
   [ -f "$APPDATA/models/$CHOSEN_FILE" ] && die "the chosen model is already on disk; this pass would prove nothing"
@@ -189,25 +212,6 @@ if [ "$MODE" = resumes ]; then
   HARNESS_UP=1
 fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
-cleanup() {
-  [ -n "${SESSION:-}" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1 || true
-  # The group, not the name: `pkill -x WebKitWebDriver` kills drivers this run never started,
-  # which defeats the BC_WD_PORT knobs whose only purpose is a second concurrent run. Same
-  # class as the fix in 6db27e9 for the other harness. setsid is already used above, so the
-  # group id is the driver's own pid.
-  [ -n "${DRIVER_PID:-}" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null || true
-  sleep 1
-  [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
-  [ -n "${HARNESS_UP:-}" ] && "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
-  # Kept on failure: the application's own logs/ live in there, and the driver log alone does
-  # not say what the app was doing. stage2-record-check.sh keeps its profile for the same reason.
-  if [ -n "${OWN_PROFILE:-}" ] && [ "${PASSED:-}" = "1" ]; then
-    rm -rf "$PROFILE"
-  elif [ -n "${OWN_PROFILE:-}" ]; then
-    printf 'stage2-onboarding-check: profile kept for inspection: %s\n' "$PROFILE" >&2
-  fi
-}
-trap cleanup EXIT
 
 # The PATH the application inherits, which is half of what it searches for an agent CLI (#212).
 # `agents-absent` cuts it to the system directories; the driver is then named by its full path.

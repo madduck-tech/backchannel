@@ -103,7 +103,7 @@ cleanup() {
   type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
-  elif [ -n "$PROFILE" ]; then printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
+  elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
 }
 trap cleanup EXIT
 
@@ -126,10 +126,13 @@ for o in json.load(sys.stdin):
 PICK="Monitor of $SINK_DESC"
 say "system audio pinned to '$PICK' — this pass records its own sample, never the room"
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
+kept_profile_prune /tmp core "$(kept_profile_keep_count stage2-core-check.sh)"
 PROFILE=$(mktemp -d /tmp/backchannel-core.XXXXXX)
+kept_profile_lock "$PROFILE" || die "cannot lock $PROFILE"
 APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
-cp -a --reflink=auto "$CACHE/models" "$APPDATA/" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/"
+seed_copy "$CACHE/models" "$APPDATA/" || die "could not seed $APPDATA from $CACHE/models"
 # **No onboarding marker.** The Settings catalogue lists every model but offers no control to select
 # one already on disk, so first run is where a non-default transcription model is chosen — the same
 # path `stage2-onboarding-check.sh chooses` drives. It also makes this the one pass that carries a

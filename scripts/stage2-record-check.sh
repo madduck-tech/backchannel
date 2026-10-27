@@ -41,6 +41,7 @@ PIDFILE="$PROFILE/pid"
 
 say() { printf 'stage2-record-check: %s\n' "$*"; }
 die() { printf 'stage2-record-check: %s\n' "$*" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
 
 tree() {
   orca-ide computer get-app-state --app "pid:$(cat "$PIDFILE")" --no-screenshot --json 2>/dev/null \
@@ -92,7 +93,7 @@ mkdir -p "$PROFILE/home"
 # application state beyond what a second launch on a real machine would already have.
 if [ -d "$CACHE/models" ]; then
   mkdir -p "$APPDATA"
-  cp -a --reflink=auto "$CACHE/models" "$APPDATA/models" 2>/dev/null || cp -a "$CACHE/models" "$APPDATA/models"
+  seed_copy "$CACHE/models" "$APPDATA/models" || die "could not seed $APPDATA/models from $CACHE/models"
   if [ -f "$CACHE/onboarding-status.json" ]; then
     cp -a "$CACHE/onboarding-status.json" "$APPDATA/"
     SEEDED_ONBOARDING=1
