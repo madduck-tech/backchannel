@@ -43,8 +43,21 @@ const isFile = (repo, f) => { try { return fs.lstatSync(path.join(repo, f)).isFi
 // The root AGENTS.md: its sources, and the line that ends it, which a harness that cut the file
 // short would not show.
 export const AGENTS_SOURCES = ['CLAUDE.md', '.claude/rules/workflow.md', '.claude/rules/testing.md'];
+// Not embedded, because Claude Code loads them only for the paths they name and Codex would load
+// them for everything. The root AGENTS.md indexes them instead: each rule, its paths, and when to
+// open it (#251). frontend/AGENTS.md is in the index too: Codex started at the root never reads it.
+export const NOT_DELIVERED = 'scripts/agent-files-not-delivered.json';
 export const AGENTS_END = '<!-- END:backchannel-agents-md -->';
 const BACKCHANNEL = '## Backchannel — read this first';
+
+// The scoped rules, from their front matter: path -> globs.
+export function scopedRules(repo = REPO) {
+  return gitFiles(repo, '.claude/rules').filter((f) => f.endsWith('.md')).flatMap((f) => {
+    const text = fs.readFileSync(path.join(repo, f), 'utf8').replace(/\r\n/g, '\n');
+    const m = /^---\npaths:\n((?:\s+- .+\n)+)---\n/.exec(text);
+    return m ? [[f, [...m[1].matchAll(/- "?([^"\n]+)"?/g)].map((g) => g[1])]] : [];
+  });
+}
 
 function agentsMd(repo) {
   const read = (f) => fs.readFileSync(path.join(repo, f), 'utf8').replace(/\r\n/g, '\n');
@@ -61,14 +74,25 @@ function agentsMd(repo) {
     '# Backchannel: instructions for coding agents',
     claude.slice(at).trimEnd(),
     ...rules,
+    index(repo),
     AGENTS_END,
   ].join('\n\n') + '\n', 'utf8');
+}
+
+function index(repo) {
+  const rows = scopedRules(repo).map(([f, globs]) => `| \`${f}\` | ${globs.map((g) => `\`${g}\``).join(', ')} |`);
+  return [
+    '## Rules scoped to paths: open the file before you edit what it governs',
+    'Claude Code loads these on its own when a file under their paths is read. Codex and opencode do not, so open the rule yourself before editing a file it names.',
+    ['| rule | governs |', '| --- | --- |', ...rows,
+      '| `frontend/AGENTS.md` | `frontend/**` (Next.js 16\'s own notes; Codex started at the root never reads it) |'].join('\n'),
+  ].join('\n\n');
 }
 
 // What should exist: generated path -> { source, content }. A source is a path, or a list of them.
 export function plan(repo = REPO) {
   const out = new Map();
-  out.set('AGENTS.md', { source: AGENTS_SOURCES, content: agentsMd(repo) });
+  out.set('AGENTS.md', { source: [...AGENTS_SOURCES, ...scopedRules(repo).map(([f]) => f), 'frontend/AGENTS.md'], content: agentsMd(repo) });
   for (const source of gitFiles(repo, '.claude/skills')) {
     if (!isFile(repo, source)) throw new Error(`${source} is not a regular file; a skill is copied as files, never as links`);
     out.set(source.replace(/^\.claude\/skills\//, '.agents/skills/'), { source, content: fs.readFileSync(path.join(repo, source)) });

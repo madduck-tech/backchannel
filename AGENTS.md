@@ -268,4 +268,15 @@ Named here so their absence is a decision rather than a silence:
 - macOS and Windows are verified by CI builds only (ADR 0005). A verdict names them as not proven and
   never implies them.
 
+## Rules scoped to paths: open the file before you edit what it governs
+
+Claude Code loads these on its own when a file under their paths is read. Codex and opencode do not, so open the rule yourself before editing a file it names.
+
+| rule | governs |
+| --- | --- |
+| `.claude/rules/design-system.md` | `design/**`, `frontend/src/app/globals.css`, `frontend/tailwind.config.js`, `frontend/src/components/ui/**`, `frontend/src/app/**/*.tsx`, `frontend/src/components/**/*.tsx` |
+| `.claude/rules/docs.md` | `docs/**`, `*.md` |
+| `.claude/rules/platform-code.md` | `frontend/src-tauri/src/audio/**`, `frontend/src-tauri/src/transcribe_engine/**`, `frontend/src-tauri/src/capture/**`, `llama-helper/**`, `frontend/src-tauri/Cargo.toml` |
+| `frontend/AGENTS.md` | `frontend/**` (Next.js 16's own notes; Codex started at the root never reads it) |
+
 <!-- END:backchannel-agents-md -->
