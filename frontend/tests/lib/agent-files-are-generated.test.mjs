@@ -116,9 +116,15 @@ test('the commands reach Codex as skills and opencode as commands, with the issu
     assert.ok(!read(`.opencode/command/${name}.md`).includes('$issue'), `${name}'s opencode command still says $issue`);
   }
   assert.match(read('.agents/skills/issue/agents/openai.yaml'), /^policy:\n  allow_implicit_invocation: false$/m, 'Codex may invoke issue without being asked');
+  // opencode's last placeholder takes every remaining word; a $2 after the number keeps $1 to one.
+  for (const name of ['critique', 'work']) assert.match(read(`.opencode/command/${name}.md`), /\$2\s*$/, `${name}'s opencode command ends without a $2, so $1 would take every word`);
+  // How each harness starts the cycle is written where every harness reads it.
+  const agents = read('AGENTS.md');
+  assert.ok(agents.includes('`$work N` in Codex') && agents.includes('`/work N` in Claude Code and opencode'), 'AGENTS.md does not say how to start the cycle in each harness');
   for (const name of ['critique', 'work']) assert.ok(!fs.existsSync(path.join(repo, `.agents/skills/${name}/agents/openai.yaml`)), `${name} should stay implicitly invocable`);
   const oc = JSON.parse(read('opencode.json'));
   assert.deepEqual(oc.permission?.skill, { issue: 'ask' }, 'opencode does not ask before the issue skill, or asks before another');
+  assert.deepEqual(files['opencode.json'], ['.claude/commands/issue.md'], 'opencode.json is not generated from the commands');
 });
 
 test('nothing is generated under frontend/, whose agent files belong to Next.js', () => {

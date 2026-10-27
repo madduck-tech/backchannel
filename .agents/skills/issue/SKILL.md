@@ -39,7 +39,7 @@ Then:
 1. Open it: `gh issue create --title … --body … [--label ui]`. Use the template's headings so
    the issue reads like the form, since `gh` does not apply the form itself.
 2. Print the URL, and say in one line what the next step is — usually
-   `$work <number>`.
+   `$work <number>` in Codex, `/work <number>` in opencode.
 
 Do not start the work in the same turn. The point of the issue is that it exists
 **before** the work, and a claim written after the fact is the failure this

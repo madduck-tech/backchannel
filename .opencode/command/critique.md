@@ -21,3 +21,5 @@ Attack issue **$1** before anyone works it. Read
    override is the record, not the verdict.
 
 Do not start the work in the same turn.
+
+Anything else the request said: $2
