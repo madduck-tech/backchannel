@@ -156,8 +156,14 @@ for t in "${targets[@]+"${targets[@]}"}"; do
   # What is left, counted down as things go, so a dry run stops where a real one would.
   remaining=$(bytes_of "$t")
   over() { [ "$remaining" -gt "$CAP" ]; }
+  # A dry run removes nothing, so it remembers what it would have removed, and never counts a path
+  # twice, or a path under one it already counted.
+  planned=()
   remove() {
-    local n; n=$(bytes_of "$1"); remaining=$(( remaining - ${n:-0} ))
+    local n q
+    for q in "${planned[@]+"${planned[@]}"}"; do case "$1" in "$q"|"$q"/*) return 0 ;; esac; done
+    planned+=("$1")
+    n=$(bytes_of "$1"); remaining=$(( remaining - ${n:-0} ))
     say "$verb $1 ($(size_of "$1"))"; [ -n "$DRY" ] || rm -rf -- "$1"
   }
   profile_of() { local p; for p in "${profiles[@]+"${profiles[@]}"}"; do case "$1" in "$p"/*) echo "$p"; return ;; esac; done; }
