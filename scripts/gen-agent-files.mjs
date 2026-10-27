@@ -3,41 +3,45 @@
 //
 // `.claude/` is the one source. Codex reads skills only from `.agents/skills/`, so without a copy
 // there it sees none of this repository's skills (0 in `skills/list` at 6512ac9, measured), and
-// opencode lists a `.agents/` copy over a `.claude/` one of the same name. The copies are files,
-// not symlinks, because the product owner's colleagues work on Windows.
+// opencode lists either copy of a same-named pair, by a race. The copies are files, not symlinks,
+// because the product owner's colleagues work on Windows.
 //
 // Usage:
 //   node scripts/gen-agent-files.mjs           write every generated file and scripts/agent-files.json
 //   node scripts/gen-agent-files.mjs --check   exit 1, naming each difference, if anything has drifted
 //
-// Never edit a generated file: edit its source and re-run this. Nothing is generated under
-// frontend/, whose AGENTS.md and CLAUDE.md belong to Next.js. The gopnik skills are copied byte for
-// byte, because they stay identical to upstream (scripts/gopnik-upstream.lock.json).
+// Never edit a generated file: edit its source and re-run this. Every skill under .claude/skills/
+// is copied byte for byte (the gopnik ones stay identical to upstream, scripts/gopnik-upstream.lock.json).
+// Nothing is generated under frontend/, whose AGENTS.md and CLAUDE.md belong to Next.js.
+//
+// Files are listed through git (tracked, plus untracked that .gitignore does not exclude), so an
+// ignored `.DS_Store` never becomes a source. A file under `.agents/` that nothing generates is
+// drift, and this script never deletes one it did not write: `npx skills add` and Codex plugins
+// put files there too, and an untracked file deleted is gone.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const LIST = 'scripts/agent-files.json';
-// Every directory a generated file may live in. A file under one of them that the list does not
-// name is drift too: a copy left behind when its source was removed.
+// Every directory a generated file may live in.
 export const GENERATED_ROOTS = ['.agents'];
 
-const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-  const p = path.join(dir, e.name);
-  return e.isDirectory() ? walk(p) : e.isFile() ? [p] : [];
-});
-const rel = (repo, p) => path.relative(repo, p).split(path.sep).join('/');
+// The files git would commit under a directory, relative to the repository, with `/` separators.
+function gitFiles(repo, dir) {
+  const out = execFileSync('git', ['-C', repo, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', dir], { encoding: 'utf8' });
+  return [...new Set(out.split('\0').filter(Boolean))].filter((f) => fs.existsSync(path.join(repo, f)) || isLink(repo, f)).sort();
+}
+const isLink = (repo, f) => { try { return fs.lstatSync(path.join(repo, f)).isSymbolicLink(); } catch { return false; } };
+const isFile = (repo, f) => { try { return fs.lstatSync(path.join(repo, f)).isFile(); } catch { return false; } };
 
 // What should exist: generated path -> { source, content }.
 export function plan(repo = REPO) {
   const out = new Map();
-  const skills = path.join(repo, '.claude', 'skills');
-  for (const name of fs.readdirSync(skills).filter((n) => n.startsWith('gopnik')).sort()) {
-    for (const file of walk(path.join(skills, name)).sort()) {
-      const source = rel(repo, file);
-      out.set(source.replace(/^\.claude\/skills\//, '.agents/skills/'), { source, content: fs.readFileSync(file) });
-    }
+  for (const source of gitFiles(repo, '.claude/skills')) {
+    if (!isFile(repo, source)) throw new Error(`${source} is not a regular file; a skill is copied as files, never as links`);
+    out.set(source.replace(/^\.claude\/skills\//, '.agents/skills/'), { source, content: fs.readFileSync(path.join(repo, source)) });
   }
   return out;
 }
@@ -50,7 +54,12 @@ export function listOf(files) {
 }
 
 // Line endings are normalized, so a Windows checkout with core.autocrlf compares equal.
-const lf = (b) => b.toString('utf8').replace(/\r\n/g, '\n');
+export const lf = (b) => b.toString('utf8').replace(/\r\n/g, '\n');
+
+// Files under the generated roots that the plan does not produce.
+function strays(repo, files) {
+  return GENERATED_ROOTS.flatMap((root) => gitFiles(repo, root)).filter((f) => !files.has(f));
+}
 
 export function drift(repo = REPO) {
   const files = plan(repo);
@@ -59,38 +68,45 @@ export function drift(repo = REPO) {
   if (!fs.existsSync(listPath)) problems.push(`${LIST} is missing`);
   else if (lf(fs.readFileSync(listPath)) !== listOf(files)) problems.push(`${LIST} does not name what the sources generate`);
   for (const [target, { source, content }] of files) {
-    const p = path.join(repo, target);
-    if (!fs.existsSync(p)) problems.push(`${target} is missing (from ${source})`);
-    else if (lf(fs.readFileSync(p)) !== lf(content)) problems.push(`${target} differs from ${source}`);
+    if (isLink(repo, target)) problems.push(`${target} is a link; a generated file is a copy`);
+    else if (!isFile(repo, target)) problems.push(`${target} is missing (from ${source})`);
+    else if (lf(fs.readFileSync(path.join(repo, target))) !== lf(content)) problems.push(`${target} differs from ${source}`);
   }
-  for (const root of GENERATED_ROOTS) {
-    if (!fs.existsSync(path.join(repo, root))) continue;
-    for (const f of walk(path.join(repo, root))) {
-      const r = rel(repo, f);
-      if (!files.has(r)) problems.push(`${r} is not generated from anything; remove it or give it a source`);
-    }
-  }
+  for (const f of strays(repo, files)) problems.push(`${f} is not generated from anything; remove it or give it a source`);
   return problems;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Write the plan. Remove only what the previous list named; refuse, naming it, anything else.
+export function write(repo = REPO) {
+  const files = plan(repo);
+  const listPath = path.join(repo, LIST);
+  const previous = fs.existsSync(listPath) ? Object.keys(JSON.parse(fs.readFileSync(listPath, 'utf8')).files ?? {}) : [];
+  const unknown = strays(repo, files).filter((f) => !previous.includes(f));
+  if (unknown.length) {
+    return { ok: false, lines: unknown.map((f) => `${f} is under a generated directory, and nothing generated it; move it, or give it a source in .claude/. Nothing was written.`) };
+  }
+  const lines = [];
+  for (const f of strays(repo, files)) { fs.rmSync(path.join(repo, f)); lines.push(`removed ${f}, which its source no longer generates`); }
+  for (const [target, { content }] of files) {
+    if (isLink(repo, target)) fs.rmSync(path.join(repo, target));
+    fs.mkdirSync(path.dirname(path.join(repo, target)), { recursive: true });
+    fs.writeFileSync(path.join(repo, target), content);
+  }
+  fs.writeFileSync(listPath, listOf(files));
+  lines.push(`wrote ${files.size} files and ${LIST}`);
+  return { ok: true, lines };
+}
+
+// Resolved on both sides: a checkout reached through a symlink must not skip the whole script.
+const invoked = process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (invoked) {
   if (process.argv.includes('--check')) {
     const problems = drift();
     for (const p of problems) console.error(`gen-agent-files: ${p}`);
+    if (!problems.length) console.log('gen-agent-files: every generated file matches its source');
     process.exit(problems.length ? 1 : 0);
   }
-  const files = plan();
-  // A copy whose source is gone goes with it, and is named.
-  for (const root of GENERATED_ROOTS.filter((r) => fs.existsSync(path.join(REPO, r)))) {
-    for (const f of walk(path.join(REPO, root)).filter((f) => !files.has(rel(REPO, f)))) {
-      fs.rmSync(f);
-      console.log(`gen-agent-files: removed ${rel(REPO, f)}, which nothing generates`);
-    }
-  }
-  for (const [target, { content }] of files) {
-    fs.mkdirSync(path.dirname(path.join(REPO, target)), { recursive: true });
-    fs.writeFileSync(path.join(REPO, target), content);
-  }
-  fs.writeFileSync(path.join(REPO, LIST), listOf(files));
-  console.log(`gen-agent-files: wrote ${files.size} files and ${LIST}`);
+  const { ok, lines } = write();
+  for (const l of lines) (ok ? console.log : console.error)(`gen-agent-files: ${l}`);
+  process.exit(ok ? 0 : 1);
 }
