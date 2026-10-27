@@ -75,7 +75,7 @@ Re-enable both in **System Settings → Privacy & Security**, then fully quit an
 Or clear the download flag first and skip the warning entirely:
 
 ```powershell
-Unblock-File .\Backchannel_0.1.0_x64-setup.exe
+Unblock-File .\Backchannel_0.1.1_x64-setup.exe
 ```
 
 The `.msi` installs the same app, for machines where an MSI is what is allowed.
@@ -93,9 +93,9 @@ to allow it rather than working around it.
 ## Linux
 
 ```bash
-sudo apt install ./Backchannel_0.1.0_amd64.deb     # Debian, Ubuntu: pulls in its dependencies
-chmod +x Backchannel_0.1.0_amd64.AppImage          # anything else
-./Backchannel_0.1.0_amd64.AppImage
+sudo apt install ./Backchannel_0.1.1_amd64.deb     # Debian, Ubuntu: pulls in its dependencies
+chmod +x Backchannel_0.1.1_amd64.AppImage          # anything else
+./Backchannel_0.1.1_amd64.AppImage
 ```
 
 `dpkg -i` installs the package without its dependencies (for example `libopenblas0`), so use
@@ -114,6 +114,6 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 ```powershell
 # Windows
-(Get-FileHash .\Backchannel_0.1.0_x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\Backchannel_0.1.1_x64-setup.exe -Algorithm SHA256).Hash.ToLower()
 # compare against the matching line in SHA256SUMS
 ```
