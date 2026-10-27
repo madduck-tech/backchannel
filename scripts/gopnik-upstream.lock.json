@@ -1,0 +1,18 @@
+{
+  "comment": "Written by scripts/refresh-gopnik-lock.mjs; never edit by hand. Git blob ids at the tag, LF line endings. (#233)",
+  "repository": "https://github.com/madduck-tech/gopnik",
+  "tag": "v6.0.0",
+  "path": "plugins/gopnik/skills/",
+  "files": {
+    "gopnik-critic/SKILL.md": "22176b02a32b4837fd8662675a47c64df0281e32",
+    "gopnik-critic/SKILL.ru.md": "67175b49a22cea58681e6c2288a23bb5a3e493ae",
+    "gopnik-critic/agents/openai.yaml": "1e8c5f6d151cc1c4d993359985e2b48ce1a9b80e",
+    "gopnik-setup/SKILL.md": "e238fd61209024a298d3e4c981e377198bb72230",
+    "gopnik-setup/SKILL.ru.md": "b445cb5daf6ba83267316e5d6087e5f54615256d",
+    "gopnik-setup/agents/openai.yaml": "d91f6c9f8a3e686fff8bbb06fb626ca551a570c3",
+    "gopnik-setup/gopnik_setup.py": "104ea143ba57e9f6f0be073b4332d9f9e1623cea",
+    "gopnik/SKILL.md": "d3c96a6a94d9889e527ee68568e1460bdb18d4c9",
+    "gopnik/SKILL.ru.md": "e471e1493740db17f6d0ec0e4a4327d76c80431c",
+    "gopnik/agents/openai.yaml": "e8be9ab30f36fefa08fbe67f7bc8a783e5876f1e"
+  }
+}
