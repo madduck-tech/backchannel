@@ -3,8 +3,8 @@
 // Cargo never removes an artifact it no longer uses: on 2026-10-27 the main checkout's target/ was
 // 29 GiB. Over the cap, scripts/disk-sweep.sh deletes every incremental/, then every AppImage but the
 // newest, then -- only with --profiles -- whole profiles, least recently written first. It never
-// touches a target without Cargo's CACHEDIR.TAG, a profile whose Cargo lock is held, the lock files,
-// CACHEDIR.TAG, or the newest AppImage. A file-by-file step was rejected: deleting a build script's
+// touches a target without Cargo's CACHEDIR.TAG, a profile whose Cargo lock is held or that a process
+// uses, the lock files, CACHEDIR.TAG, or the newest AppImage. A file-by-file step was rejected: deleting a build script's
 // out/ file alone leaves Cargo trusting an output that is gone (#257, round 2). Every target here
 // lives in the fixture's own directory, and that is asserted before each run.
 import assert from 'node:assert/strict';
@@ -28,11 +28,14 @@ const bytes = (p) => Number(execFileSync('du', ['-sxB1', p], { encoding: 'utf8' 
 const DAY = 24 * 3600 * 1000;
 const at = (p, daysAgo) => { const t = new Date(Date.now() - daysAgo * DAY); fs.utimesSync(p, t, t); };
 const LOCKS = ['.cargo-lock', '.cargo-build-lock', '.cargo-artifact-lock'];
+// What cargo writes, byte for byte; the first line alone is the generic cache-directory signature.
+const CARGO_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n# For information about cache directory tags see https://bford.info/cachedir/\n';
+const PIPX_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by pipx.\n';
 
 // A Cargo target/: a fresh debug profile, a release profile with two AppImages, and a stale Windows
 // profile whose incremental/ is empty, written weeks ago.
-function target(t, { tag = true } = {}) {
-  if (tag) write(path.join(t, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# cargo\n');
+function target(t, { tag = CARGO_TAG } = {}) {
+  if (tag) write(path.join(t, 'CACHEDIR.TAG'), tag);
   for (const p of ['debug', 'release', 'x86_64-pc-windows-msvc/debug']) for (const l of LOCKS) write(path.join(t, p, l), '');
   write(path.join(t, 'debug/incremental/s1/x.bin'), KB(400));
   write(path.join(t, 'debug/deps/libx.rlib'), KB(200));
@@ -116,7 +119,8 @@ test('step 3 runs only under --profiles, empties the least recently written prof
 for (const lock of LOCKS) {
   test(`a profile whose ${lock} is held is not touched`, async () => {
     const fx = fixture(`held${lock}`); const t = path.join(fx.main, 'target');
-    const h = spawn('flock', [path.join(t, 'debug', lock), 'sleep', '30'], { stdio: 'ignore' }); h.unref(); holders.push(h);
+    // As Cargo does: .cargo-lock is held shared (measured on 2026-10-27), the other two exclusive.
+    const h = spawn('flock', [...(lock === '.cargo-lock' ? ['-s'] : []), path.join(t, 'debug', lock), 'sleep', '30'], { stdio: 'ignore' }); h.unref(); holders.push(h);
     for (let i = 0; i < 100 && spawnSync('flock', ['-n', path.join(t, 'debug', lock), 'true']).status === 0; i++) await new Promise((res) => setTimeout(res, 50));
     const r = sweep(fx, 0, ['--profiles']);
     h.kill('SIGKILL');
@@ -126,11 +130,98 @@ for (const lock of LOCKS) {
   });
 }
 
-test('a target without Cargo\'s CACHEDIR.TAG is left alone', () => {
-  const fx = fixture('untagged', (main) => target(path.join(main, 'target'), { tag: false })); const t = path.join(fx.main, 'target');
+for (const [what, tag] of [['no CACHEDIR.TAG', false], ['another tool\'s CACHEDIR.TAG', PIPX_TAG]]) {
+  test(`a target with ${what} is left alone`, () => {
+    const fx = fixture(`untagged-${tag ? 'pipx' : 'none'}`, (main) => target(path.join(main, 'target'), { tag })); const t = path.join(fx.main, 'target');
+    const r = sweep(fx, 0, ['--profiles']);
+    assert.ok(has(t, 'debug/incremental/s1/x.bin') && has(t, 'debug/deps/libx.rlib'), `a target with ${what} was cut:\n${r.out}`);
+    assert.match(r.out, /left .* alone: it has no Cargo CACHEDIR.TAG/);
+  });
+}
+
+test('a path with a space is one path: nothing outside the target is touched', () => {
+  write(path.join(base, 'sp', 'main', 'target', 'debug', 'precious.txt'), 'the word before the space names this directory');
+  const fx = fixture('sp ace'); const t = path.join(fx.main, 'target');
   const r = sweep(fx, 0, ['--profiles']);
-  assert.ok(has(t, 'debug/incremental/s1/x.bin') && has(t, 'debug/deps/libx.rlib'), `an untagged target was cut:\n${r.out}`);
-  assert.match(r.out, /left .* alone: it has no Cargo CACHEDIR.TAG/);
+  assert.ok(fs.existsSync(path.join(base, 'sp', 'main', 'target', 'debug', 'precious.txt')), `the sweep split a path on its space and deleted outside the target:\n${r.out}`);
+  assert.ok(!has(t, 'debug/deps') && !has(t, 'x86_64-pc-windows-msvc/debug/deps'), `the profiles under a path with a space were not capped:\n${r.out}`);
+});
+
+// Cargo holds no lock while `cargo test` runs a test binary or a bundler packs an AppImage.
+test('a profile a process runs a file from, works in or holds a file open in is not touched', async () => {
+  const fx = fixture('in-use'); const t = path.join(fx.main, 'target');
+  const sleeper = path.join(t, 'debug/deps/sleeper'); fs.copyFileSync(execFileSync('which', ['sleep'], { encoding: 'utf8' }).trim(), sleeper); fs.chmodSync(sleeper, 0o755);
+  const procs = [
+    spawn(sleeper, ['30'], { stdio: 'ignore' }),
+    spawn('sleep', ['30'], { cwd: path.join(t, 'x86_64-pc-windows-msvc/debug/deps'), stdio: 'ignore' }),
+    spawn('bash', ['-c', 'exec 3<"$1"; exec sleep 30', 'holder', path.join(t, 'release/bundle/appimage/old.AppImage')], { stdio: 'ignore' }),
+  ];
+  for (const h of procs) { h.unref(); holders.push(h); }
+  const pids = procs.map((h) => h.pid);
+  for (let i = 0; i < 100; i++) {
+    const ok = [() => fs.readlinkSync(`/proc/${pids[0]}/exe`) === sleeper, () => fs.readlinkSync(`/proc/${pids[1]}/cwd`).endsWith('/deps'),
+      () => fs.readdirSync(`/proc/${pids[2]}/fd`).some((f) => { try { return fs.readlinkSync(`/proc/${pids[2]}/fd/${f}`).endsWith('old.AppImage'); } catch { return false; } })]
+      .every((f) => { try { return f(); } catch { return false; } });
+    if (ok) break;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  const r = sweep(fx, 0, ['--profiles']);
+  for (const h of procs) h.kill('SIGKILL');
+  assert.ok(has(t, 'debug/deps/libx.rlib'), `a profile whose file a process runs was emptied:\n${r.out}`);
+  assert.ok(has(t, 'x86_64-pc-windows-msvc/debug/deps/libz.rlib'), `a profile a process works in was emptied:\n${r.out}`);
+  assert.ok(has(t, 'release/bundle/appimage/old.AppImage'), `an AppImage a process holds open was removed:\n${r.out}`);
+  assert.ok(has(t, 'release/deps/liby.rlib'), `a profile a process holds a file open in was emptied:\n${r.out}`);
+  for (const p of ['debug', 'x86_64-pc-windows-msvc/debug', 'release']) assert.match(r.out, new RegExp(`left ${t}/${p} alone: process \\d+ uses it`));
+  assert.match(r.out, new RegExp(`left ${t}/release/bundle/appimage/old.AppImage alone: process \\d+ uses it`));
+});
+
+test('a removal that fails is said, and what is left is measured, not assumed', () => {
+  const fx = fixture('rm-fails'); const t = path.join(fx.main, 'target');
+  const stuck = path.join(t, 'x86_64-pc-windows-msvc/debug/deps/stuck'); write(path.join(stuck, 'f'), KB(100)); fs.chmodSync(stuck, 0o555);
+  try {
+    const r = sweep(fx, 0, ['--profiles']);
+    assert.match(r.out, new RegExp(`could not remove all of ${t}/x86_64-pc-windows-msvc/debug/deps`), `a failed removal was reported as done:\n${r.out}`);
+    assert.ok(has(t, 'x86_64-pc-windows-msvc/debug/deps/stuck/f'), 'the fixture could not make rm fail');
+  } finally { fs.chmodSync(stuck, 0o755); }
+});
+
+// A hard-linked file frees nothing until its last path goes, so a run that counts what it deletes
+// ends over the cap. The stale profile goes first and holds the only other path of a big file.
+test('a real run measures what is left, so hard links do not leave it over the cap', () => {
+  const fx = fixture('hardlink', (main) => {
+    const t = target(path.join(main, 'target'));
+    write(path.join(t, 'x86_64-pc-windows-msvc/debug/deps/big.bin'), KB(1000));
+    fs.linkSync(path.join(t, 'x86_64-pc-windows-msvc/debug/deps/big.bin'), path.join(t, 'debug/deps/big-link.bin'));
+    at(path.join(t, 'x86_64-pc-windows-msvc/debug/deps/big.bin'), 40);
+  });
+  const t = path.join(fx.main, 'target');
+  const cap = bytes(t) - 1500 * 1024;
+  const r = sweep(fx, cap, ['--profiles']);
+  assert.ok(bytes(t) <= cap, `the run ended at ${bytes(t)} bytes against a cap of ${cap}:\n${r.out}`);
+});
+
+// What a dry run names is what a real run removes, at every cap. A second release profile's old
+// AppImage goes in step 2 and its bundle/ again in step 3, where a dry run used to count it twice.
+test('a dry run names exactly what a real run removes, at every cap', () => {
+  const make = (main) => {
+    const t = target(path.join(main, 'target'));
+    for (const l of LOCKS) write(path.join(t, 'x86_64-unknown-linux-gnu/release', l), '');
+    write(path.join(t, 'x86_64-unknown-linux-gnu/release/deps/libw.rlib'), KB(200));
+    write(path.join(t, 'x86_64-unknown-linux-gnu/release/bundle/appimage/older.AppImage'), KB(300));
+    at(path.join(t, 'x86_64-unknown-linux-gnu/release/deps/libw.rlib'), 20);
+    at(path.join(t, 'x86_64-unknown-linux-gnu/release/bundle/appimage/older.AppImage'), 10);
+  };
+  const dryFx = fixture('dry-vs-real', make); const total = bytes(path.join(dryFx.main, 'target'));
+  const names = (fx, out, verb) => out.split('\n').filter((l) => l.includes(`disk-sweep: ${verb} `)).map((l) => l.replace(fx.root, '<root>').replace(/ \([^)]*\)$/, '').replace(`disk-sweep: ${verb} `, ''));
+  let compared = 0;
+  for (let cap = total; cap >= 0; cap -= 100 * 1024) {
+    const dry = sweep(dryFx, cap, ['--dry-run', '--profiles']);
+    const realFx = fixture(`dry-vs-real-${cap}`, make);
+    const real = sweep(realFx, cap, ['--profiles']);
+    assert.deepEqual(names(dryFx, dry.out, 'would remove'), names(realFx, real.out, 'removed'), `at a cap of ${cap} the dry run and the real run disagree:\n${dry.out}\n---\n${real.out}`);
+    compared++;
+  }
+  assert.ok(compared >= 20, `only ${compared} caps compared`);
 });
 
 test('one target shared by two worktrees is measured once, and a target outside every worktree is capped', () => {
