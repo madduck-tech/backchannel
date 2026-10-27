@@ -20,7 +20,9 @@ const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'disk-sweep-wt-'));
 const sleepers = [];
 process.on('exit', () => { for (const s of sleepers) s.kill('SIGKILL'); fs.rmSync(base, { recursive: true, force: true }); });
-const realWorktrees = execFileSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+// Which worktrees are registered, not where their HEADs are: a commit elsewhere during the run is not the sweep.
+const registeredIn = (r) => execFileSync('git', ['-C', r, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).split('\n').filter((l) => l.startsWith('worktree ')).sort();
+const realWorktrees = registeredIn(repo);
 
 const ID = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
 const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...ID, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -91,13 +93,20 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
     'frontend/src-tauri/gen/schemas/x', 'frontend/tsconfig.tsbuildinfo', 'frontend/next-env.d.ts', 'frontend/src-tauri/scripts/__pycache__/x.pyc']) {
     write(path.join(allowed, f), 'regenerated');
   }
+  const genUntracked = fx.add('gen-untracked'); write(path.join(genUntracked, 'frontend/src-tauri/gen/android/app/build.gradle.kts'), 'what tauri android init writes\n');
+  const corrupt = fx.add('corrupt'); fs.appendFileSync(path.join(corrupt, 'frontend/src/app/page.tsx'), '// edited\n');
+  const unborn = fx.add('unborn'); git(unborn, 'checkout', '-q', '--orphan', 'unborn-branch');
+  const reflogOnly = fx.add('reflog-only'); git(reflogOnly, 'checkout', '-q', '--detach');
+  write(path.join(reflogOnly, 'lost.txt'), 'only the reflog holds this\n'); git(reflogOnly, 'add', 'lost.txt'); git(reflogOnly, 'commit', '-qm', 'held by nothing but the reflog');
+  git(reflogOnly, 'checkout', '-q', '--detach', 'origin/main');
   const unmerged = fx.add('unmerged', { merged: false });
   const touched = fx.add('touched');
   const sleeping = fx.add('sleeping');
   const owned = fx.add('owned');
   const locked = fx.add('locked'); git(fx.main, 'worktree', 'lock', locked);
   const vanished = fx.add('vanished');
-  for (const p of [fx.main, done, tracked, untracked, ignored, linked, allowed, unmerged, touched, sleeping, owned, locked]) age(p);
+  for (const p of [fx.main, done, tracked, untracked, ignored, linked, allowed, genUntracked, corrupt, unborn, reflogOnly, unmerged, touched, sleeping, owned, locked]) age(p);
+  fs.writeFileSync(path.join(fx.main, '.git', 'worktrees', 'corrupt', 'index'), 'not an index');   // git status now fails there
   const t = new Date(Date.now() - 3600 * 1000);
   fs.utimesSync(path.join(touched, 'frontend/src/app/page.tsx'), t, t);   // tracked, content unchanged, an hour ago
   fs.rmSync(vanished, { recursive: true });
@@ -110,13 +119,17 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
   assert.ok(gone(linked), `a worktree holding only build links was kept:\n${r.out}`);
   assert.ok(fs.existsSync(path.join(outside, 'target', 'keep.txt')) && fs.existsSync(path.join(outside, 'nm', 'keep.txt')), 'the removal deleted through a symlink');
   assert.ok(gone(allowed), `a worktree holding only what builds regenerate was kept:\n${r.out}`);
-  for (const [p, why] of [[tracked, 'a tracked file changed'], [untracked, 'notes.md, which no build regenerates'], [ignored, 'frontend/models/x.bin, which no build regenerates'],
+  for (const [p, why] of [[tracked, 'a tracked file changed'], [untracked, '?? notes.md, which nobody has added'], [ignored, '!! frontend/models/x.bin, which no build regenerates'],
+    [genUntracked, '?? frontend/src-tauri/gen/android/app/build.gradle.kts'], [corrupt, 'git status failed in it'], [unborn, 'its HEAD is no commit'],
+    [reflogOnly, 'which no branch, tag or remote holds'],
     [unmerged, 'not in origin/main'], [touched, 'written in the last 24 hours'], [sleeping, 'works in it'], [owned, 'CLAUDE_PROJECT_DIR']]) {
     assert.ok(fs.existsSync(p), `${path.basename(p)} was removed:\n${r.out}`);
     assert.ok(r.out.includes(`kept ${p}:`) && r.out.includes(why), `${path.basename(p)} was kept without its reason (${why}):\n${r.out}`);
   }
   assert.ok(fs.existsSync(locked) && fs.existsSync(fx.main), 'git\'s own refusals were overridden');
-  assert.ok(!r.out.includes(locked) && !r.out.includes(`${fx.main} `) && !r.out.includes('fatal:'), `the locked or main worktree was named, or git refused:\n${r.out}`);
+  const named = (p) => new RegExp(`(kept|removed|would remove|could not remove) ${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[: ]`).test(r.out);
+  assert.ok(!named(locked) && !named(fx.main), `the locked or main worktree was judged:\n${r.out}`);
+  assert.ok(!r.out.includes('fatal:') && !r.out.includes('could not remove'), `git refused, or its errors leaked:\n${r.out}`);
   assert.ok(r.out.includes(`the registration of ${vanished}`) && !registered(fx).includes(vanished), 'a worktree whose directory is gone stayed registered');
 });
 
@@ -129,6 +142,24 @@ test('--dry-run names every candidate and removes nothing', () => {
   assert.ok(fs.existsSync(a) && fs.existsSync(b), `--dry-run removed something:\n${r.out}`);
   for (const p of [a, b]) assert.match(r.out, new RegExp(`would remove ${p} \\(\\S+\\)`), `--dry-run did not name ${p}`);
   assert.match(r.out, new RegExp(`kept ${kept}:`));
+});
+
+// The allow-list is read for ignored paths only, and an untracked path always keeps a worktree. Every
+// entry must therefore be ignored here: an entry git does not ignore is one that names somebody's
+// untracked work, which is how frontend/src-tauri/gen/* came to cover the gen/android a
+// `tauri android init` writes (#257, round 2).
+test('every path the sweep treats as regenerated is one this repository ignores', () => {
+  const src = fs.readFileSync(path.join(repo, 'scripts/disk-sweep.sh'), 'utf8');
+  const body = src.slice(src.indexOf('regenerated() {'), src.indexOf('\n}\n', src.indexOf('regenerated() {')));
+  const patterns = [...body.matchAll(/^[ \t]+(\S[^)\n]*)\) return 0 ;;$/gm)].flatMap((m) => m[1].split('|'));
+  assert.ok(patterns.length >= 14, `only ${patterns.length} patterns read from regenerated()`);
+  const sample = (p) => p.replace(/^\*\//, 'a/').replace(/\/\*$/, '/x');
+  // Asked of an empty repository holding only this one's .gitignore files: in a checkout, target and
+  // frontend/node_modules are often symlinks, and git will not look beyond one.
+  const probe = path.join(base, 'ignore-census'); execFileSync('git', ['init', '-q', probe]);
+  for (const f of execFileSync('git', ['-C', repo, 'ls-files', '.gitignore', '*/.gitignore'], { encoding: 'utf8' }).trim().split('\n')) write(path.join(probe, f), fs.readFileSync(path.join(repo, f)));
+  const notIgnored = patterns.filter((p) => spawnSync('git', ['-C', probe, 'check-ignore', '-q', '--no-index', '--', sample(p)]).status !== 0);
+  assert.deepEqual(notIgnored, [], `allow-list entries this repository does not ignore, so they could name untracked work: ${notIgnored.map(sample).join(', ')}`);
 });
 
 // Stage 2 entries 5-12 share a root through a file in the git directory. Written as `.git/…`, it
@@ -147,5 +178,5 @@ test('the workflow rule says how engineering copies are made and removed', () =>
 });
 
 test('the real repository\'s worktrees are untouched by these tests', () => {
-  assert.equal(execFileSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }), realWorktrees);
+  assert.deepEqual(registeredIn(repo), realWorktrees);
 });
