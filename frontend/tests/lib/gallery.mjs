@@ -75,6 +75,9 @@ export function providersMountedInLayout() {
  */
 export const DRAWN_PIN = [
   'src/app/_components/TranscriptPanel.tsx',
+  'src/app/nudge/page.tsx',
+  'src/app/page.tsx',
+  'src/app/settings/page.tsx',
   'src/components/AISummary/index.tsx',
   'src/components/About.tsx',
   'src/components/AppToaster.tsx',
@@ -326,8 +329,9 @@ export const DRAWN = [
 ];
 // 38 until #162 took `ConfidenceIndicator` off the list above: with no props it now draws nothing,
 // correctly, where it used to draw `NaN%`. Lowered because the set shrank for a reason that is
-// written down, never to make a run pass.
-export const DRAWN_FLOOR = 37;
+// written down, never to make a run pass. 41 since #226 brought `src/app/` in: three of its pages draw,
+// and they are pinned above.
+export const DRAWN_FLOOR = 41;
 
 /** Every stylesheet a `pnpm build` produced. Empty means the page would lie about the product. */
 export function compiledStylesheets() {

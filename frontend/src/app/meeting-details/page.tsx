@@ -9,6 +9,7 @@ import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
 import { RECOMMENDED_SUMMARY_MODEL } from "@/lib/onboarding-summary-model";
+import { summaryEngineChosen } from "@/lib/summary-engine";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -82,9 +83,10 @@ function MeetingDetailsContent() {
       // Check what's currently in database
       const currentConfig = await invoke('api_get_model_config') as any;
 
-      // If DB already has a model, use it (never override!)
-      if (currentConfig && currentConfig.model) {
-        console.log('Using existing model from DB:', currentConfig.model);
+      // If the DB already names a summariser, use it (never override!). An agent CLI is named
+      // with no model, and is as configured as any other (#226).
+      if (currentConfig && summaryEngineChosen(currentConfig.provider, currentConfig.model)) {
+        console.log('Using the summariser from the DB:', currentConfig.provider, currentConfig.model);
         setShouldAutoGenerate(true);
         setHasCheckedAutoGen(true);
         return;

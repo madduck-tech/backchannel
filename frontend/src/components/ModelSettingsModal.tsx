@@ -1,3 +1,4 @@
+import { isAgentCliProvider } from '@/lib/summary-engine';
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
@@ -640,8 +641,14 @@ export function ModelSettingsModal({
       maxTokens: modelConfig.provider === 'custom-openai' && customMaxTokens ? parseInt(customMaxTokens, 10) : null,
       temperature: modelConfig.provider === 'custom-openai' && customTemperature ? parseFloat(customTemperature) : null,
       topP: modelConfig.provider === 'custom-openai' && customTopP ? parseFloat(customTopP) : null,
-      // For custom-openai, use the customOpenAIModel as the model field
-      model: modelConfig.provider === 'custom-openai' ? customOpenAIModel.trim() : modelConfig.model,
+      // For custom-openai, use the customOpenAIModel as the model field. An agent CLI stores none,
+      // whatever the field holds, as its API key above (#226).
+      model:
+        modelConfig.provider === 'custom-openai'
+          ? customOpenAIModel.trim()
+          : isAgentCliProvider(modelConfig.provider)
+            ? ''
+            : modelConfig.model,
     };
     setModelConfig(updatedConfig);
     console.log('ModelSettingsModal - handleSave - Updated ModelConfig:', updatedConfig);

@@ -312,6 +312,15 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
         .map(|line| line.trim_start_matches("# ").trim().to_string())
 }
 
+/// What a summary runs on, as the log names it: an agent CLI alone, since it runs its own default
+/// model and the app passes it none (ADR 0028 decision 7), or the provider and its model (#226).
+fn engine_label(provider: &LLMProvider, model_name: &str) -> String {
+    match provider.agent_cli() {
+        Some(cli) => cli.display_name().to_string(),
+        None => format!("provider: {provider:?}, model: {model_name}"),
+    }
+}
+
 /// Generates a complete meeting summary with conditional chunking strategy
 ///
 /// # Arguments
@@ -364,10 +373,7 @@ pub async fn generate_meeting_summary(
             return Err("Summary generation was cancelled".to_string());
         }
     }
-    info!(
-        "Starting summary generation with provider: {:?}, model: {}",
-        provider, model_name
-    );
+    info!("Starting summary generation with {}", engine_label(provider, model_name));
 
     let total_tokens = rough_token_count(text);
     info!("Transcript length: {} tokens", total_tokens);
@@ -1171,3 +1177,18 @@ mod single_pass_tests {
         assert!(single_pass(&LLMProvider::BuiltInAI, 1_000, 1_748));
     }
 }
+
+#[cfg(test)]
+mod engine_label_tests {
+    use super::*;
+
+    /// An agent CLI is named alone, whatever model a stale config carries; another provider keeps
+    /// its model in the line (#226).
+    #[test]
+    fn an_agent_cli_is_named_alone_in_the_log() {
+        assert_eq!(engine_label(&LLMProvider::Codex, "gemma4:e2b"), "Codex");
+        assert_eq!(engine_label(&LLMProvider::ClaudeCode, ""), "Claude Code");
+        assert_eq!(engine_label(&LLMProvider::BuiltInAI, "gemma4:e2b"), "provider: BuiltInAI, model: gemma4:e2b");
+    }
+}
+

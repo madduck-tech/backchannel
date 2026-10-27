@@ -1,5 +1,6 @@
 'use client';
 
+import { loadedSummaryModel } from '@/lib/summary-engine';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
@@ -289,11 +290,12 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          // For non-custom-openai providers, just set base config
+          // For non-custom-openai providers, just set base config. An agent CLI keeps its empty
+          // model: it runs its own default, and the on-device default must not stand in for it (#226).
           setModelConfig(prev => ({
             ...prev,
             provider: data.provider,
-            model: data.model || prev.model,
+            model: loadedSummaryModel(data.provider, data.model, prev.model),
             whisperModel: data.whisperModel || prev.whisperModel,
             ollamaEndpoint: data.ollamaEndpoint,
           }));

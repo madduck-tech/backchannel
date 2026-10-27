@@ -195,13 +195,14 @@ export function reachableFromEntries(files = sourceFiles()) {
  * then the gallery describes a tree that is not the one under test (#107 condition 1).
  *
  * This is an extraction with a decision in it, not a lift-and-shift. `component-reachability.test.mjs`
- * scopes to `src/components/` over `.ts` *and* `.tsx`; this rule adds `src/app/_components/` and takes
+ * scopes to `src/components/` over `.ts` *and* `.tsx`; this rule adds `src/app/` and takes
  * `.tsx` only. They answer different questions -- "is this module reachable" against "is this a
  * component someone can look at" -- so they are deliberately **not** unified here, and that is stated
  * rather than left as an inconsistency someone finds later.
  *
- * `src/app/_components/` is in scope because three shipped components live there; before #98 a
- * component added there was invisible with zero edits.
+ * `src/app/_components/` came into scope first, because three shipped components live there; before #98
+ * a component added there was invisible with zero edits. The rest of `src/app/` joined in #226: that
+ * change's defect lived in `src/app/meeting-details/page.tsx`, outside every coverage rule.
  *
  * `src/contexts/` joined in #130, and the omission was not theoretical. Seven files, 665 lines and
  * 9 `invoke()` calls in `OnboardingContext.tsx` alone, rendered by zero tests and outside this
@@ -217,7 +218,7 @@ export const VENDORED_COMPONENTS = /^src\/components\/ui\//;
  * renders *it*, and turn `no-invisible-component.test.mjs` red for doing exactly what #124 asks for.
  */
 export const STORY_FILES = /\.stories\.tsx$/;
-export const COMPONENT_ROOTS = ['src/components/', 'src/app/_components/', 'src/contexts/'];
+export const COMPONENT_ROOTS = ['src/components/', 'src/app/', 'src/contexts/'];
 export const isComponentFile = (f) =>
   COMPONENT_ROOTS.some((r) => f.startsWith(r)) &&
   f.endsWith('.tsx') &&

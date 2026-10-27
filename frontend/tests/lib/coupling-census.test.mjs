@@ -38,6 +38,36 @@ const BLOCKED = [
     reason: "Cannot read properties of undefined (reading 'modelSettings')",
   },
   {
+    file: 'src/app/layout.tsx',
+    kind: 'will-not-load',
+    name: null,
+    reason: "Cannot find module './globals.css'",
+  },
+  {
+    file: 'src/app/meeting-details/page-content.tsx',
+    kind: 'will-not-load',
+    name: null,
+    reason: "ne.default.extend is not a function",
+  },
+  {
+    file: 'src/app/meeting-details/page.tsx',
+    kind: 'will-not-load',
+    name: null,
+    reason: "ne.default.extend is not a function",
+  },
+  {
+    file: 'src/app/metadata.tsx',
+    kind: 'no-component-export',
+    name: null,
+    reason: "exports nothing component-shaped: (none)",
+  },
+  {
+    file: 'src/app/notes/[id]/page.tsx',
+    kind: 'failed-on-mount',
+    name: 'default',
+    reason: "An unknown Component is an async Client Component. Only Server Components can be async at the moment. This error is often caused by accidentally adding `'use client'` to a module that was originally written for the server.",
+  },
+  {
     file: 'src/components/AISummary/Block.tsx',
     kind: 'failed-on-mount',
     name: 'BlockComponent',
@@ -155,9 +185,10 @@ const BLOCKED = [
 /**
  * Deleting components must not be a way to shrink the list above. 85 on 2026-09-08, after
  * `AudioPlayer.tsx` -- zero bytes, imported by nothing -- was removed from the tree and from the
- * three allowlists that named it.
+ * three allowlists that named it. 94 when #226 brought `src/app/`'s eight pages in (ADR 0022 decision 1);
+ * the five above that cannot be constructed are written down like any other.
  */
-const COMPONENT_FLOOR = 85;
+const COMPONENT_FLOOR = 94;
 
 const components = componentFiles();
 assert.ok(
