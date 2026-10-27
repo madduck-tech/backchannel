@@ -4,7 +4,10 @@
     "AGENTS.md": [
       "CLAUDE.md",
       ".claude/rules/workflow.md",
-      ".claude/rules/testing.md"
+      ".claude/rules/testing.md",
+      ".claude/rules/design-system.md",
+      ".claude/rules/docs.md",
+      ".claude/rules/platform-code.md"
     ],
     ".agents/skills/gopnik-critic/SKILL.md": ".claude/skills/gopnik-critic/SKILL.md",
     ".agents/skills/gopnik-critic/SKILL.ru.md": ".claude/skills/gopnik-critic/SKILL.ru.md",

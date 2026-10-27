@@ -7,7 +7,7 @@
 // fixture repository, because the cases worth holding -- a CRLF checkout, a file somebody else put
 // under .agents/, an ignored .DS_Store, a link -- must not be made in the real one.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const GEN = path.join(repo, 'scripts', 'gen-agent-files.mjs');
-const { drift, plan, LIST, AGENTS_SOURCES, AGENTS_END } = await import(GEN);
+const { drift, plan, LIST, AGENTS_END, NOT_DELIVERED, scopedRules, unscopedRules, agentsSources } = await import(GEN);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-files-'));
 process.on('exit', () => fs.rmSync(base, { recursive: true, force: true }));
 
@@ -35,7 +35,8 @@ test('the list names the three gopnik skills in .agents/skills/, each from .clau
 
 test('the root AGENTS.md is CLAUDE.md\'s section and the two unscoped rules, and ends with its sentinel', () => {
   const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
-  assert.deepEqual(files['AGENTS.md'], AGENTS_SOURCES);
+  assert.deepEqual(files['AGENTS.md'].slice(0, agentsSources(repo).length), agentsSources(repo));
+  assert.deepEqual(unscopedRules(repo).slice(0, 2), ['.claude/rules/workflow.md', '.claude/rules/testing.md']);
   const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
   for (const rule of ['.claude/rules/workflow.md', '.claude/rules/testing.md']) {
     const last = fs.readFileSync(path.join(repo, rule), 'utf8').trimEnd().split('\n').at(-1);
@@ -50,6 +51,56 @@ test('the root AGENTS.md is CLAUDE.md\'s section and the two unscoped rules, and
   assert.ok(!/Co-Authored-By: Claude [A-Z]\w+ \d/.test(agents), 'AGENTS.md tells every harness to sign as one Claude model');
 });
 
+// What reaches Codex and opencode is judged by what the generated files contain, never by what the
+// generator says it read: a source the generator names but does not carry would pass that (#251's
+// adversary, measured). An unscoped rule is carried when its whole text is in AGENTS.md; a scoped
+// rule when its index row names it and every glob; a skill file when its copy is byte-equal; a
+// command when its skill and its opencode command both carry its description.
+function carried(f) {
+  const read = (p) => (fs.existsSync(path.join(repo, p)) ? fs.readFileSync(path.join(repo, p), 'utf8').replace(/\r\n/g, '\n') : null);
+  const agents = read('AGENTS.md') ?? '';
+  const scoped = Object.fromEntries(scopedRules(repo));
+  if (f in scoped) {
+    const row = agents.split('\n').find((l) => l.startsWith(`| \`${f}\` |`));
+    return !!row && scoped[f].every((g) => row.includes(`\`${g}\``));
+  }
+  if (f.startsWith('.claude/rules/')) return agents.includes(read(f).trimEnd());
+  if (f.startsWith('.claude/skills/')) return read(f.replace(/^\.claude\/skills\//, '.agents/skills/')) === read(f);
+  if (f.startsWith('.claude/commands/')) {
+    const name = path.basename(f, '.md');
+    const description = /^description:\s*(.+)$/m.exec(read(f))?.[1];
+    return !!description && [`.agents/skills/${name}/SKILL.md`, `.opencode/command/${name}.md`].every((p) => (read(p) ?? '').includes(description));
+  }
+  return false;
+}
+
+test('every file under .claude/ reaches Codex and opencode, or the not-delivered table says why, and not both', () => {
+  const table = JSON.parse(fs.readFileSync(path.join(repo, NOT_DELIVERED), 'utf8')).files;
+  const tracked = execFileSync('git', ['-C', repo, 'ls-files', '--', '.claude'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+  const missing = tracked.filter((f) => !carried(f) && !(f in table));
+  assert.deepEqual(missing, [], `files under .claude/ whose content reaches neither Codex nor opencode, with no reason in ${NOT_DELIVERED}`);
+  const stale = Object.keys(table).filter((f) => carried(f) || !tracked.includes(f));
+  assert.deepEqual(stale, [], `${NOT_DELIVERED} lists files that are carried, or that do not exist`);
+  // A rule every Claude Code session loads is never excused: the generator embeds it. Which rules
+  // those are is read from the files here, not asked of the generator, which could be wrong.
+  const unscoped = tracked.filter((f) => /^\.claude\/rules\/[^/]+\.md$/.test(f) && !/^---\r?\npaths:/.test(fs.readFileSync(path.join(repo, f), 'utf8')));
+  const excused = Object.keys(table).filter((f) => unscoped.includes(f));
+  assert.deepEqual(excused, [], 'an unscoped rule is in the not-delivered table; it must be embedded');
+  for (const [f, why] of Object.entries(table)) assert.ok(why.length > 20, `${f}: the table says not delivered, and not why`);
+});
+
+test('the root AGENTS.md indexes every rule scoped to paths, with its globs, and frontend/AGENTS.md', () => {
+  const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+  const rules = scopedRules(repo);
+  assert.ok(rules.length >= 3, `only ${rules.length} scoped rules found`);
+  for (const [f, globs] of rules) {
+    const row = agents.split('\n').find((l) => l.startsWith(`| \`${f}\` |`));
+    assert.ok(row, `${f} is not in the index`);
+    for (const g of globs) assert.ok(row.includes(`\`${g}\``), `${f}'s row does not name ${g}`);
+  }
+  assert.ok(agents.includes('| `frontend/AGENTS.md` | `frontend/**`'), 'the index does not name frontend/AGENTS.md');
+});
+
 test('nothing is generated under frontend/, whose agent files belong to Next.js', () => {
   const { files } = JSON.parse(fs.readFileSync(path.join(repo, LIST), 'utf8'));
   assert.deepEqual(Object.keys(files).filter((f) => f.startsWith('frontend/')), []);
@@ -58,7 +109,7 @@ test('nothing is generated under frontend/, whose agent files belong to Next.js'
 // A repository of its own: the generator, the list, both skill trees and .gitattributes, committed.
 function fixture(name) {
   const r = path.join(base, name);
-  for (const p of ['scripts/gen-agent-files.mjs', LIST, '.claude/skills', '.claude/rules', 'CLAUDE.md', 'AGENTS.md', '.agents', '.gitattributes']) {
+  for (const p of ['scripts/gen-agent-files.mjs', LIST, NOT_DELIVERED, '.claude/skills', '.claude/rules', 'CLAUDE.md', 'AGENTS.md', 'frontend/AGENTS.md', '.agents', '.gitattributes']) {
     fs.cpSync(path.join(repo, p), path.join(r, p), { recursive: true });
   }
   const git = (...a) => spawnSync('git', ['-C', r, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
