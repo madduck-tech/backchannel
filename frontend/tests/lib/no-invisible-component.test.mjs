@@ -186,7 +186,8 @@ assertSetEquals(
   allowed,
   'components with no test that renders them',
   'A component arrived with no test. Give it one -- `loadTsx(\'<its path>\')` in a `*.test.mjs` -- ' +
-    'or add it to EXCEPTIONS with a reason of its own. BACKLOG is closed: entries only leave it.\n' +
+    'or add it to EXCEPTIONS with a reason of its own. BACKLOG, CONTEXTS_ADMITTED and PAGES_ADMITTED are ' +
+    'closed: entries only leave them.\n' +
     '  Raising a number does not help; there is no number here any more.'
 );
 
