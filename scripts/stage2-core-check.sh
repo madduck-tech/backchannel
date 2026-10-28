@@ -10,7 +10,7 @@
 # **It runs on a model that is not the default.** Every other transcribing pass takes
 # `DEFAULT_TRANSCRIBE_MODEL`, and `parakeet` is the one family in this catalogue that reports real
 # token probabilities -- so the defect this pass exists for was invisible to all of them.
-# `.claude/rules/testing.md`: *"a check must not accept the default when the defect is a hardcoded
+# The testing rules in `AGENTS.md`: *"a check must not accept the default when the defect is a hardcoded
 # default"*. The model is picked through the Settings UI, which nothing else drives either.
 #
 # **What it leaves on defaults:** the summariser (`builtin-ai` / `gemma4:e2b`), the window size, the

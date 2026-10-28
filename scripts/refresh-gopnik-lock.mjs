@@ -3,13 +3,13 @@
 //
 // The gopnik skills stay identical to upstream; changes go upstream, not here. The lock records the
 // git blob id of every file under upstream's plugins/gopnik/skills/ at one tag, and
-// frontend/tests/lib/gopnik-stays-upstreams.test.mjs holds .claude/skills/gopnik* and their
-// .agents/ copies to it, reading only the lock, so the suite never needs the network.
+// frontend/tests/lib/gopnik-stays-upstreams.test.mjs holds .agents/skills/gopnik* and their
+// .claude/ copies to it, reading only the lock, so the suite never needs the network.
 //
 // Usage: node scripts/refresh-gopnik-lock.mjs [tag]   (default: the lock's own tag)
 //
-// To take a new upstream release: copy its skills into .claude/skills/, run this with the new tag,
-// then run scripts/gen-agent-files.mjs.
+// To take a new upstream release: copy its skills into .agents/skills/, which is their source since
+// #271 (ADR 0033), run this with the new tag, then run scripts/gen-agent-files.mjs.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

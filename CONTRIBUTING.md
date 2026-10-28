@@ -5,7 +5,7 @@ Backchannel is a meeting copilot that records, transcribes and summarises meetin
 **What is normative lives elsewhere, and wins over this file:**
 - [`docs/development-workflow.md`](docs/development-workflow.md): the cycles, approval gates and definition of done.
 - [`docs/decisions/README.md`](docs/decisions/README.md): every accepted decision (ADR).
-- [`CLAUDE.md`](CLAUDE.md) and the rules in `.claude/rules/`: the hard rules every change follows, for people and agents alike.
+- [`AGENTS.md`](AGENTS.md) and the rules in `.agents/rules/`: the hard rules every change follows, for people and agents alike.
 
 ## Getting started
 
@@ -26,23 +26,27 @@ Backchannel is a meeting copilot that records, transcribes and summarises meetin
 
 ## Working with a coding agent
 
-The repository carries the same instructions for three agents. `.claude/` is the one source; what Codex and opencode read is generated from it.
+The repository carries the same instructions for three agents. `AGENTS.md` and `.agents/` are the sources (ADR 0033); what Claude Code and opencode need beyond them is generated.
 
 | | Claude Code | Codex | opencode |
 | --- | --- | --- | --- |
-| **Instructions it loads** | `CLAUDE.md`, plus `.claude/rules/workflow.md` and `testing.md` | the root `AGENTS.md` | the root `AGENTS.md` |
-| **Rules for specific paths** (design, docs, platform code) | loaded on their own when a matching file is read | listed in `AGENTS.md`'s index: open the rule before you read or edit what it governs | the same |
+| **Instructions it loads** | `CLAUDE.md`, a copy of `AGENTS.md` | the root `AGENTS.md` | the root `AGENTS.md` |
+| **Rules for specific paths** (design, docs, platform code) | its copies in `.claude/rules/`, loaded on their own when a matching file is read | listed in `AGENTS.md`'s index: open the rule in `.agents/rules/` before you read or edit what it governs | the same |
 | **Work an issue through the whole cycle** | `/work 42` | `$work 42` | `/work 42` |
 | **Run the critic on an issue first** | `/critique 42` | `$critique 42` | `/critique 42` |
 | **Turn a discussion into an issue** | `/issue` | `$issue …`, only when named | `/issue …`, after asking you |
 
-**Start an agent at the repository's root.** A session started in `frontend/` misses the root's instructions. Codex reads `frontend/AGENTS.md` too, which is Next.js's own.
+**Start an agent at the repository's root.** That is where every harness is measured ([`docs/agent-harness-matrix.md`](docs/agent-harness-matrix.md)). Started in `frontend/`, Claude Code and Codex also read `frontend/AGENTS.md`, which is Next.js's own.
+
+**Your own instructions** go in `AGENTS.local.md` at the root. It is git-ignored, and `AGENTS.md` tells every agent to read it when it exists. It adds to the shared instructions and never replaces them.
 
 **Changing the instructions:**
-- Edit `CLAUDE.md`'s "read this first" section, the files in `.claude/rules/`, `.claude/skills/` or `.claude/commands/`.
-- Then run `node scripts/gen-agent-files.mjs`. It rewrites `AGENTS.md`, `.agents/skills/`, `.opencode/command/` and `opencode.json`.
-- Never edit those by hand. `pnpm test` fails when they drift from their sources, and the generator refuses to delete a file it did not write.
-- The gopnik skills (`.claude/skills/gopnik*`) stay identical to upstream [madduck-tech/gopnik](https://github.com/madduck-tech/gopnik); changes to them go there.
+- Edit the sources: `AGENTS.md`, the rules in `.agents/rules/`, the skills in `.agents/skills/` and the commands in `.agents/commands/`.
+- Commit. The pre-commit hook regenerates `CLAUDE.md`, `.claude/`, the command skills in `.agents/skills/`, `.opencode/command/` and `opencode.json` from what you staged, and adds them to the commit. To regenerate without committing, run `node scripts/gen-agent-files.mjs`.
+- `pnpm install` installs the hook (`prepare` sets `core.hooksPath` to `.githooks`). A clone whose dependencies are already installed runs `pnpm run prepare` once. It leaves an existing `core.hooksPath` or hooks of your own alone and says so; then run the generator yourself.
+- The hook refuses a commit rather than lose work: a commit that names its paths (`git commit -- <path>`) while a copy needs regenerating, a hand edit to a copy, or unstaged changes to one. It says why, and what to do.
+- Never edit a copy by hand. `pnpm test` fails when anything drifts from its source, and that, not the hook, is the guarantee: a clean merge, `rebase --continue`, `cherry-pick` and `--no-verify` run no hook.
+- The gopnik skills (`.agents/skills/gopnik*`) stay identical to upstream [madduck-tech/gopnik](https://github.com/madduck-tech/gopnik); changes to them go there.
 - What each agent receives, file by file, is in [`docs/agent-harness-matrix.md`](docs/agent-harness-matrix.md).
 
 ## How a change is made
@@ -56,7 +60,7 @@ Every change that executes goes through one cycle. [`docs/development-workflow.m
 5. **The work is done on a branch from `main`.**
    - A bug starts with a test shown red on the unfixed code.
    - A feature ships with controls: break the behaviour on purpose, show the test going red, restore.
-   - The rules are in `.claude/rules/testing.md`.
+   - The rules are the testing rules in `AGENTS.md`.
 6. **The gate is run:** the commands in [`gopnik.json`](gopnik.json), Stage 1 and then Stage 2, with the verdict posted on the issue.
    - Stage 2 drives the built app on Linux, with a display and a PipeWire session.
    - Its last passes play speech through the default output, so keep the machine quiet while it runs.

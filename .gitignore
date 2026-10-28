@@ -84,3 +84,6 @@ __pycache__/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Personal agent instructions, read by every harness when present (AGENTS.md, ADR 0033).
+/AGENTS.local.md

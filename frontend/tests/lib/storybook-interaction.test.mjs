@@ -6,7 +6,7 @@
 //
 // **The click has to be a real pointer.** Measured while writing this: `el.click()` on the trigger
 // returns cleanly, throws nothing, and opens no menu — Radix listens for `pointerdown`. That is
-// exactly the shape `.claude/rules/testing.md` names, one level in: a call that returned success and
+// exactly the shape the testing rules in `AGENTS.md` name, one level in: a call that returned success and
 // did nothing. `browser.mjs` dispatches through CDP's Input domain instead.
 import assert from 'node:assert/strict';
 import { browser } from './browser.mjs';

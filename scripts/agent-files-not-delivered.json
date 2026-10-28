@@ -1,4 +1,4 @@
 {
-  "comment": "Every file under .claude/ that no generated file carries to Codex and opencode, and why. A file that a generated file does carry must not be listed, and a file under .claude/ that is neither carried nor listed is an error: frontend/tests/lib/agent-files-are-generated.test.mjs holds both. (#233, #251)",
+  "comment": "Every source (AGENTS.md and the files under .agents/ that nothing generates) whose content no generated file carries to Claude Code, Codex and opencode, and why. A source that is carried must not be listed, and a source that is neither carried nor listed is an error: frontend/tests/lib/agent-files-are-generated.test.mjs holds both. (#233, #251, #271)",
   "files": {}
 }

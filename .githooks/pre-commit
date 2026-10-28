@@ -1,0 +1,9 @@
+#!/bin/sh
+# Regenerate the agent files from what is staged (#271, ADR 0033): scripts/agent-files-pre-commit.mjs.
+# A convenience, not the guarantee -- the drift test in `pnpm test` is -- so without node it lets the
+# commit through and says so.
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node is not on PATH, so the agent files were not regenerated; pnpm test will report any drift." >&2
+  exit 0
+fi
+exec node "$(git rev-parse --show-toplevel)/scripts/agent-files-pre-commit.mjs"

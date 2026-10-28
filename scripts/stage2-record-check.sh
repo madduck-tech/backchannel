@@ -68,7 +68,7 @@ for line in sys.stdin:
   done
   # The click's own exit status is the return value. It used to be discarded before `say` ran, so a
   # click that failed printed "clicked 'X'" and the run carried on -- the same shape as the "a call
-  # that returns success is not evidence it did anything" rule in .claude/rules/testing.md, one level
+  # that returns success is not evidence it did anything" rule in AGENTS.md's testing rules, one level
   # down: here the call reported nothing at all and success was assumed. (#130)
   if ! orca-ide computer click --app "pid:$(cat "$PIDFILE")" --element-index "$idx" >/dev/null 2>&1; then
     say "the driver refused to click '$want'"

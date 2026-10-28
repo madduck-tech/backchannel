@@ -1,4 +1,5 @@
-# The skills stay byte-identical to upstream gopnik and to their generated copies (#249), so git
-# stores them, and checks them out, with LF line endings on every platform.
-.claude/skills/** text=auto eol=lf
+# The skills stay byte-identical to upstream gopnik, and everything under .claude/ is a byte copy of
+# its source in .agents/ (#249, #271), so git stores them, and checks them out, with LF line endings
+# on every platform.
+.claude/** text=auto eol=lf
 .agents/** text=auto eol=lf

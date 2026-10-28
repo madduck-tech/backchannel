@@ -154,7 +154,7 @@ const assertion = steps.find(
 );
 assert.ok(
   assertion,
-  'no step asserts the AppImage exists after the build. `.claude/rules/testing.md`: a call ' +
+  'no step asserts the AppImage exists after the build. The testing rules in `AGENTS.md`: a call ' +
     'that returns success is not evidence it did anything — assert the state after, never the ' +
     "command's own return value."
 );

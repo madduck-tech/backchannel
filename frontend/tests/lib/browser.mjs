@@ -182,7 +182,7 @@ export async function browser({ startupMs = 60000 } = {}) {
 
     // A real pointer, not `el.click()`. Radix's menu trigger listens for `pointerdown`, so a
     // synthetic click returns cleanly and opens nothing -- the "a call that returns success is not
-    // evidence it did anything" shape .claude/rules/testing.md is about, and measured here: the menu
+    // evidence it did anything" shape the testing rules in AGENTS.md are about, and measured here: the menu
     // stayed empty and the click reported no error (#124).
     if (clickFirst) {
       const box = await evalIn(`(() => {

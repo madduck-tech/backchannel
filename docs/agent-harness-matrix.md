@@ -1,28 +1,32 @@
 # What each agent harness receives
 
-Every instruction file under `.claude/`, and `frontend/AGENTS.md`, against the three harnesses this repository supports (#233, ADR 0032).
+Every source of agent instructions, against the three harnesses this repository supports (#271, ADR 0033). The sources are `AGENTS.md` and `.agents/`; Claude Code reads the copies `scripts/gen-agent-files.mjs` makes of them (`CLAUDE.md`, `.claude/`).
 - **loaded:** the harness puts the text in front of the model.
-- **indexed:** the root `AGENTS.md` names the file and the paths it governs. The agent is told to open it, and no instrument observes it doing so. Only #233's condition 8, a model-driven run, can.
-- **not delivered:** the harness never sees it, for the reason in `scripts/agent-files-not-delivered.json`.
+- **indexed:** the root `AGENTS.md` names the file and the paths it governs. The agent is told to open it, and no instrument observes it doing so.
+- **not delivered:** the harness never sees it, for the reason in `scripts/agent-files-not-delivered.json` (empty today).
 
-Measured on 2026-10-27 at `98d354e`, and at D's head for the commands, with Codex 0.163.0, opencode 1.18.32 and Claude Code 2.1.311.
-- **Codex and opencode, every rule:** the instrument checks, for each of the five rules, that the embedded rule's last line or the scoped rule's index row is in Codex's `prompt-input` and in opencode's request, from the root and from `frontend/`. All 20 cells were present.
-- **Claude Code:** five runs, each loading exactly `CLAUDE.md`, `workflow.md` and `testing.md` at start, and each scoped rule on its own file. The root `AGENTS.md` appears in no event.
-- Every tool ran under `env -i`, with empty `HOME`, `CODEX_HOME` and XDG directories.
-- Claude Code and opencode sent their requests to a local stub that records them, with a dummy key. No model was called.
-- The instrument is the engineering session's `harness250.py`, quoted in #250's and #251's verdicts.
+Measured on 2026-10-28 on #271's branch, macOS (Darwin 25.6.0), with Claude Code 2.1.312, codex-cli 0.163.0 and opencode 2.0.32, in a fixture repository built from the branch's files with a unique sentinel in `AGENTS.md`, `frontend/AGENTS.md`, `.agents/rules/docs.md`, `.agents/commands/work.md`, a fixture skill and `AGENTS.local.md`. Linux and Windows were not measured.
 
-| file | Claude Code | Codex | opencode |
+**The instruments needed no model**, except for `AGENTS.local.md`:
+- Every one ran under `env -i`, with empty `HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and XDG directories, and no credentials.
+- **Claude Code:** `claude -p hi`, sending to a local stub that records each request body (`ANTHROPIC_BASE_URL`, a dummy key). One run sends six bodies, and every count below is per body.
+- **Codex:** `codex debug prompt-input hi`.
+- **opencode:** two instruments, both against an OpenAI-compatible stub provider declared in the profile's config.
+  - `opencode run --standalone`. One of its two attempts on the unmutated fixture hung with no request, and was recorded. The second ran.
+  - For the commands and the configuration, a private `opencode serve` with `POST /api/session/{id}/command` and `GET /api/config`. 2.0.32 has no `debug skill` and no `run --command`, and `run "/work 42"` sends the literal text.
+
+Each row's control is a mutation of the fixture that turned the observation red. One control was rewritten: the first scoped-rule control changed one of `docs.md`'s two globs and stayed green, because `*.md` still matched.
+
+| source | Claude Code | Codex | opencode |
 | --- | --- | --- | --- |
-| `CLAUDE.md` (its Backchannel section) | loaded at `session_start` (`InstructionsLoaded`, 5 of 5 runs) | loaded: embedded in the root `AGENTS.md` (`prompt-input` shows its end sentinel) | loaded: embedded in the root `AGENTS.md` (the request carries its sentinel once, and no `# CLAUDE.md`) |
-| `.claude/rules/workflow.md` | loaded at `session_start`, 5 of 5 | loaded: embedded (`prompt-input` shows its last line) | loaded: embedded (its last line in the request) |
-| `.claude/rules/testing.md` | loaded at `session_start`, 5 of 5; once in the request | loaded: embedded (its last line shown) | loaded: embedded (its last line in the request) |
-| `.claude/rules/design-system.md` | loaded on a matching file (`path_glob_match` on `@frontend/src/app/page.tsx`) | indexed (`prompt-input` shows its index row) | indexed (the request carries its index row) |
-| `.claude/rules/docs.md` | loaded on a matching file (`path_glob_match` on `@docs/development-workflow.md`) | indexed (its row in `prompt-input`) | indexed (its row in the request) |
-| `.claude/rules/platform-code.md` | loaded on a matching file (`path_glob_match` on `@frontend/src-tauri/src/audio/pipeline.rs`) | indexed (its row in `prompt-input`) | indexed (its row in the request) |
-| `frontend/AGENTS.md` | loaded when a file under `frontend/` is read, through `frontend/CLAUDE.md`'s `@AGENTS.md` (`load_reason: include`) | loaded when started in `frontend/` (`prompt-input` shows `<!-- END:nextjs-agent-rules -->`); indexed when started at the root | loaded when started in `frontend/` (the request carries its title); indexed at the root |
-| `.claude/skills/*` | loaded as skills | loaded: copied to `.agents/skills/` (`skills/list`, scope `repo`; #249) | loaded: from `.agents/skills/` or `.claude/skills/`, a race between identical copies (#249) |
-| `.claude/commands/{critique,work}.md` | loaded as `/critique N` and `/work N` | loaded as skills under `.agents/skills/` (#252). `$work N` and `$critique N` inject the body (`codex exec` against the stub). An ordinary request ("work issue N") lists both with their descriptions and carries neither body | loaded as commands under `.opencode/command/` (#252). `--command work 42` sends the text with `**42**` in place, and does not fall back to the skill |
-| `.claude/commands/issue.md` | loaded as `/issue` | loaded as a skill only when named: `$issue …` injects it, and with `allow_implicit_invocation: false` it is absent from `prompt-input` and from an ordinary request | loaded as `/issue`, with the request's text appended. The `issue` skill asks first (`permission.skill`, `opencode debug agent build`) |
+| `AGENTS.md` | loaded through its copy `CLAUDE.md`: the root sentinel once in each of 6 bodies, from the root and from `frontend/`. Control: `@AGENTS.md` appended gives 2; `CLAUDE.md` removed gives 0 from `frontend/` | loaded: the root sentinel once in `prompt-input`. Control: the line doubled gives 2 | loaded: once, with `CLAUDE.md` present and never sent. Control: `"instructions": ["CLAUDE.md"]` gives 2 |
+| `.agents/rules/*.md` | loaded through `.claude/rules/` only for a matching path: 0 at start, 1 after `@docs/notes.md`. Controls: the copy without `paths:` gives 1 at start; both globs missing gives 0 after the `@` | indexed: every row in `prompt-input`, and the rule's own text absent. Controls: a row deleted gives 0; the rule's text pasted into `AGENTS.md` gives 1 | indexed: the rule's text absent from the request. Control: pasted into `AGENTS.md` gives 1 |
+| `frontend/AGENTS.md` | loaded from `frontend/` through Next.js's `frontend/CLAUDE.md` (`@AGENTS.md`), along with the root copy. Control: `frontend/CLAUDE.md` removed gives 0 | loaded from `frontend/`. Negative cell: from the root, 0 | not measured from `frontend/` |
+| `.agents/skills/*` | loaded through `.claude/skills/`: each description in each body. Control: a copy removed gives 0 | loaded: the descriptions in `prompt-input`. `issue` is absent, being implicit-off (#252). Control: a skill removed gives 0 | loaded: the descriptions in the request, once each, though it reads `.claude/skills/` too. Control: removed from both gives 0 |
+| `.agents/commands/*.md` | loaded through `.claude/commands/` as `/work`, `/critique` and `/issue`: their descriptions in each body. Control: `.claude/commands/work.md` removed gives 0 | as skills in `.agents/skills/` (#252), and the command source is not read. `$work N` was not re-measured here | as commands in `.opencode/command/`: `work` with `42` sends its body with `**42**`. Control: the file removed gives `CommandNotFoundError` and no request |
+| `issue` asks first | — | `allow_implicit_invocation: false` (#252), not re-measured | `GET /api/config` shows the rule `skill` / `issue` / `ask` loaded from `opencode.json`. Control: the rule removed, and no rule. That an ask is shown when a model invokes the skill was **not observed** |
+| user-level `CLAUDE.md` | loaded beside the project's (`CLAUDE_CONFIG_DIR/CLAUDE.md`): its sentinel in each body, the root once. Control: without it, 0 | — | — |
 
-**No file is loaded twice by one harness.** Claude Code does not read the root `AGENTS.md`, and `CLAUDE.md` does not import it. The `testing.md` sentinel appears once in Claude Code's request.
+**`AGENTS.local.md`** is read only when a model follows `AGENTS.md`'s instruction. Those runs are in #271's verdict.
+
+**No file is loaded twice by one harness.** Claude Code loads `CLAUDE.md` and not `AGENTS.md`, because a full `CLAUDE.md` turns off its `AGENTS.md` fallback. opencode loads `AGENTS.md` and not `CLAUDE.md`. Codex never reads `CLAUDE.md`.

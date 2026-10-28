@@ -1,6 +1,6 @@
 # Milestone reports
 
-`.claude/rules/docs.md` specifies the shape: *"Milestone reports live in `docs/milestones/<name>.md`
+`.agents/rules/docs.md` specifies the shape: *"Milestone reports live in `docs/milestones/<name>.md`
 and list criteria, p50/p95 numbers, the hardware and models used, and everything skipped or failed."*
 
 The directory did not exist until #65, and neither did any number to put in it. ADR 0008 set latency
@@ -13,7 +13,7 @@ audio device and none of the 1.2 GB of models a decode needs. So a regression is
 *comparing two reports*, by a person, and never by a job going red. #65 says so in place rather than
 letting a printed number look like a gate.
 
-**Every number carries the operation that produced it**, per `.claude/rules/testing.md`. For latency
+**Every number carries the operation that produced it**, per the testing rules in `AGENTS.md`. For latency
 that means at minimum: the machine, the model, the decode path (`transcription/mod.rs:85` branches
 on `Capabilities::supports_streaming`, and the two paths have different segmentation), and whether
 the run was under ADR 0008 decision 5's limit.

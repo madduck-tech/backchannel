@@ -194,8 +194,8 @@ are still announced before they happen.
 
 ## Tooling
 
-- **Gopnik** (`.claude/skills/gopnik*`, config in `gopnik.json`): the critic and the gate.
+- **Gopnik** (`.agents/skills/gopnik*`, copied to `.claude/skills/` by ADR 0033; config in `gopnik.json`): the critic and the gate.
   `/issue` turns a discussion into an issue; `/work N` runs an issue through the cycle.
 - **OpenDesign** (`opendesign start|open|od …`, MCP server `open-design`): prototypes against
   `design/backchannel`. Runs pass `project: "backchannel-prototypes"` explicitly.
-- **Agent session start:** read `CLAUDE.md`, this file, `docs/decisions/README.md`.
+- **Agent session start:** read `AGENTS.md` (Claude Code loads its copy, `CLAUDE.md`), this file, `docs/decisions/README.md` (ADR 0033).

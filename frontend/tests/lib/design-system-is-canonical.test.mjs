@@ -9,7 +9,7 @@
 // unpublished; all three upstream check scripts hardcode
 // `path.join(import.meta.dirname, "..", "design-systems")` and accept no arguments; and `pnpm test`
 // runs on a GitHub runner where `~/.local/opt/open-design` does not exist. A check that only runs on
-// the maintainer's laptop is what `.claude/rules/testing.md` calls "a test nothing runs".
+// the maintainer's laptop is what the testing rules in `AGENTS.md` call "a test nothing runs".
 //
 // **Why the package is deliberately invisible to the upstream guard.** It is registered by symlink,
 // and `discoverManifestBrandRoots` filters on `entry.isDirectory()`, which is false for one. Replacing

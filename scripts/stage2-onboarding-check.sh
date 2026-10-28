@@ -18,7 +18,7 @@
 # purpose.
 #
 # **The oracle is the filesystem, not a return value.** `ls` before and after. A command that answers
-# `ok` has told us nothing about what reached the disk; that rule is in .claude/rules/testing.md and
+# `ok` has told us nothing about what reached the disk; that rule is in AGENTS.md's testing rules and
 # this pass is one of the places it was not being applied.
 #
 #   scripts/stage2-onboarding-check.sh <AppImage> [chooses|keeps|remote|present|narrow|catalogue] [profile-dir]
@@ -47,7 +47,7 @@
 #     agents-absent  the same with the application's PATH cut to the system directories, so the
 #              shell finds neither CLI: both rows must say not found, and the log must say why
 #
-# **What each mode leaves on its default, named rather than implied** (`.claude/rules/testing.md`,
+# **What each mode leaves on its default, named rather than implied** (the testing rules in `AGENTS.md`,
 # "What a pass must vary"). A pass that says "covers onboarding" hides its holes; this one says which:
 #
 #     mode      varies                        leaves on the default

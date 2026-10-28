@@ -1,6 +1,6 @@
 // A click the driver refused must not report success — in every pass, not in one of them.
 //
-// `.claude/rules/testing.md`: *"A call that returns success is not evidence it did anything."* This is
+// The testing rules in `AGENTS.md`: *"A call that returns success is not evidence it did anything."* This is
 // that rule one level down -- `stage2-record-check.sh`'s `click_labelled` discarded the click's exit
 // status entirely (`>/dev/null 2>&1`) and then printed `clicked '<label>'`, so a refused click and a
 // delivered one were the same event to every caller. Measured on 2026-09-08 (#130).

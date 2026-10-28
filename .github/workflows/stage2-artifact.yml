@@ -108,7 +108,7 @@ jobs:
         run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && BUILT=$(ls -t ../target/release/bundle/appimage/*.AppImage | head -1) && [ -n "$BUILT" ] && git rev-parse HEAD > "$BUILT.built-from"
 
       # A bundle step that produces nothing still exits 0 in some tauri failure modes, so
-      # assert the file rather than the command's return value -- `.claude/rules/testing.md`,
+      # assert the file rather than the command's return value -- the testing rules in `AGENTS.md`,
       # "a call that returns success is not evidence it did anything".
       - name: Assert the artifact exists and is executable
         run: |

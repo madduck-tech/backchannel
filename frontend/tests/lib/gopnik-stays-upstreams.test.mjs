@@ -1,8 +1,8 @@
 // The gopnik skills stay identical to upstream, in both places a harness reads them. (#233, #249)
 //
 // The product owner's decision of 2026-10-27: gopnik is not edited here, changes go upstream. The
-// skills live in .claude/skills/ for Claude Code and are copied to .agents/skills/ for Codex and
-// opencode, so an edit to either is a fork nobody decided on. This test reads only
+// skills live in .agents/skills/ for Codex and opencode and are copied to .claude/skills/ for Claude
+// Code (#271, ADR 0033), so an edit to either is a fork nobody decided on. This test reads only
 // scripts/gopnik-upstream.lock.json, the git blob id of every file under upstream's
 // plugins/gopnik/skills/ at one tag, and never the network; scripts/refresh-gopnik-lock.mjs writes it.
 // It holds both what is checked out and what is staged: a CRLF blob committed with core.autocrlf off
@@ -54,7 +54,7 @@ test('a CRLF checkout of the skills folds to upstream\'s blob ids', () => {
   try {
     for (const f of Object.keys(lock.files)) {
       const p = path.join(dir, f.replaceAll('/', '_'));
-      fs.writeFileSync(p, fs.readFileSync(path.join(repo, '.claude', 'skills', f), 'utf8').replace(/\n/g, '\r\n'));
+      fs.writeFileSync(p, fs.readFileSync(path.join(repo, '.agents', 'skills', f), 'utf8').replace(/\n/g, '\r\n'));
       assert.equal(blobId(fs.readFileSync(p)), lock.files[f], `${f} in CRLF does not fold to upstream's blob`);
     }
   } finally {

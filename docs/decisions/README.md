@@ -33,7 +33,8 @@
 | [0029](0029-backchannel-has-its-own-identity.md) | Backchannel has its own identity, and the old name stays only where it is not seen | accepted |
 | [0030](0030-every-model-is-offered-and-shows-its-licence.md) | Every model is offered, and shows its licence | accepted |
 | [0031](0031-every-release-has-one-shape.md) | Every release has one shape: the same files, a written description, published on the product owner's word | accepted |
-| [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted |
+| [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted; decisions 1–2 superseded and decision 6 amended by 0033 |
+| [0033](0033-agent-instructions-come-from-a-neutral-source.md) | Agent instructions come from a harness-neutral source, and Claude Code gets copies | accepted |
 
 ## Deferred questions
 

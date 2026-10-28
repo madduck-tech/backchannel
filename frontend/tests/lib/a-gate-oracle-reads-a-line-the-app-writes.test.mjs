@@ -12,7 +12,7 @@
 // from being reported as a product defect.
 //
 // That is the same shape as every other defect in #160: an oracle that cannot fail to accuse the
-// application. `.claude/rules/testing.md` already requires a positive sentinel for an absence; this
+// application. The testing rules in `AGENTS.md` already require a positive sentinel for an absence; this
 // makes the sentinel's **existence** machine-checked, because a string nothing writes is an absence
 // that can never end.
 //

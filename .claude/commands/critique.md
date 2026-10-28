@@ -5,7 +5,7 @@ arguments: [issue]
 allowed-tools: Bash(gh issue view:*), Bash(gh issue comment:*), Bash(gh issue edit:*), Read, Agent
 ---
 Attack issue **$issue** before anyone works it. Read
-`.claude/skills/gopnik-critic/SKILL.md` first; what follows is the order, not a replacement.
+`.agents/skills/gopnik-critic/SKILL.md` first; what follows is the order, not a replacement.
 
 1. `gh issue view $issue --comments`. The claim under review is the issue itself: its diagnosis
    of what is wrong, its scope, and above all its *what would settle it*.
