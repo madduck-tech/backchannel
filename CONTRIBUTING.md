@@ -59,7 +59,7 @@ Every change that executes goes through one cycle. [`docs/development-workflow.m
    - A feature ships with controls: break the behaviour on purpose, show the test going red, restore.
    - The rules are in `.claude/rules/testing.md`.
 6. **The gate is run:** the commands in [`gopnik.json`](gopnik.json), Stage 1 and then Stage 2, with the verdict posted on the issue.
-   - Stage 2 drives the built app on Linux, with a display and a PipeWire session. On `exp/virtual-audio` it is the experiment's macOS instrument (ADR 0033).
+   - Stage 2 drives the built app on Linux, with a display and a PipeWire session. On `exp/virtual-audio` it is the experiment's macOS instrument (at step 1, before that instrument exists, the precondition run; ADR 0033).
    - Its last passes play speech through the default output, so keep the machine quiet while it runs.
 7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.** Into `exp/virtual-audio` it says `Refs #N` and the issue is closed by hand after the merge (ADR 0033).
 

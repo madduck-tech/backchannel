@@ -275,16 +275,17 @@ present (ADR 0023).
 
 **Selection rule.** Over the specification up to line 275 ("Proposed experimental acceptance
 criteria"), `grep -niE '\b(never|must not|must neither|does? not|no|not|cannot|deferred|exclude[sd]?|reject|insufficient|without|only|alone|is off)\b'` returns 80 lines at this revision. Every line is
-classified: 40 map to rows and 40 are excluded, with no line in both. Sentences found by
+classified: 42 map to rows and 38 are excluded, with no line in both. Sentences found by
 reading that the pattern does not reach are added and marked: lines 199–200. **The pattern is a
 floor, not a boundary**: a forbidding sentence it misses is still owed, and a recount adds it here.
 
 Excluded lines, by reason:
 - **Document status, hypothesis, or decisions about the project rather than the product:** 4, 14–16, 22, 25, 34–37, 39, 41, 43–44, 48–50, 53, 65, 151–152.
-- **Rationale, limits of a claim, or facts, not instructions:** 100, 112, 114, 125, 135, 137, 140, 145–146, 212, 218, 220, 271.
+- **Rationale, limits of a claim, or facts, not instructions:** 100, 112, 114, 125, 135, 137, 145–146, 212, 220, 271.
 - **How the experiment is measured, not what the product does:** 61.
-- **Positive requirements, held by a criterion rather than an absence test:** 190, 205, 241.
-- **Architecture, whose observable consequence is a row:** 127, 233.
+- **Positive requirements, held by a criterion rather than an absence test:** 190 (A12), 205 (A8),
+  241 (its observable consequences are rows 23 and 34).
+- **Architecture, whose observable consequence is a row:** 127 (row 11), 233 (row 22).
 
 | # | Instruction (spec lines at this revision) | Paid by |
 | --- | --- | --- |
@@ -310,7 +311,7 @@ Excluded lines, by reason:
 | 20 | No silent choice of a new microphone or redirect to laptop speakers (194) | 7 (A7) |
 | 21 | Quit never stops routing implicitly; stopping routing is an explicit action (199–200, by reading) | 9 (A8) |
 | 22 | Starting or stopping a recording never creates or tears down the call route (206) | 8 (A9) |
-| 23 | Resume never replays the pause interval (207–208) | 8 (A9) |
+| 23 | Pause excludes new audio from recording and STT; resume never replays the pause interval (207–208) | 8 (A9) |
 | 24 | Recording start rejected if either capture is unavailable (223) | 8 (A12) |
 | 25 | An unused route is not an error: recording starts with no client on it (224) | 8 (A12) |
 | 26 | Silence told from stream loss by stream and clock health, not RMS alone (226) | 8 (A3, A10) |
@@ -324,9 +325,11 @@ Excluded lines, by reason:
 | 34 | Recording-disabled operation retains no conversation history (254) | 8 |
 | 35 | A client's sample-rate change never silently mis-clocks (267) | 7 (A7) |
 | 36 | Output volume never removes incoming speech from the recording tap (268) | 8 |
+| 37 | Setup runs no privileged installer; it shows the commands instead (140–141) | 5, 9 (A11) |
+| 38 | No call-app mute state inferred from an open device or audio levels, or displayed (218–219) | 5, 8 |
 
-36 rows. Each recount after the critic's rounds on #273 found sentences the previous rule
-missed (13, then 23, 31, 36); the line numbers are what a recount is checked against, and
+38 rows. Each recount after the critic's rounds on #273 found sentences the previous rule
+missed (13, then 23, 31, 36, 38); the line numbers are what a recount is checked against, and
 they move with any edit above line 275 of the specification.
 
 ## Linux surfaces on the experiment branch
@@ -356,7 +359,7 @@ A stop or revise decision leaves the branch unmerged; the milestone report and t
 
 ## Documentation review status
 
-The critic's verdicts on #273, all 2026-10-28: round 1 REVISE (F1–F8), round 2 REVISE (N1–N15),
-round 3 REVISE (R3-1–R3-8), round 4 REVISE (F1–F5 of that round). This revision answers all four.
-A gopnik-critic review of an earlier draft was reported in conversation on the same day and has no
+The critic's verdicts on #273, all 2026-10-28: rounds 1–4 REVISE (F1–F8, N1–N15, R3-1–R3-8, and
+round 4's F1–F5), round 5 CONTINUE with four low findings (L1–L4), answered in this revision. A
+gopnik-critic review of an earlier draft was reported in conversation on the same day and has no
 linked verdict. Implementation and runtime verification have not started.
