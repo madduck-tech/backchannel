@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
-import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { recordingService } from '@/services/recordingService';
 import { showRecordingNotification } from '@/lib/recordingNotification';
@@ -56,6 +55,12 @@ const DRAINING_STATUSES: RecordingStatus[] = [
  *   button can disable itself for the whole multi-second start instead of
  *   letting a second click fire a second `start_recording_*` invoke.
  */
+/** `Meeting YYYY-MM-DD_HH-MM-SS` in local time: the form the backend generates when a start carries no name. */
+export function meetingTitleAt(now: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `Meeting ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}_${p(now.getHours())}-${p(now.getMinutes())}-${p(now.getSeconds())}`;
+}
+
 export function useRecordingStart(
   isRecording: boolean,
   setIsRecording: (value: boolean) => void,
@@ -66,7 +71,6 @@ export function useRecordingStart(
 
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
-  const { selectedDevices } = useConfig();
   const { setStatus, status } = useRecordingState();
 
   // Re-entrancy guard. This has to be a ref, not the `isStarting` state: two
@@ -143,17 +147,10 @@ export function useRecordingStart(
     };
   }, []);
 
-  // Generate meeting title with timestamp
-  const generateMeetingTitle = useCallback(() => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = String(now.getFullYear()).slice(-2);
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-  }, []);
+  // The meeting's title, in the form the backend has always used for the folder and the saved title
+  // (`Meeting YYYY-MM-DD_HH-MM-SS`, local time). Until #242 this title never reached the backend,
+  // which made its own; now it does, and keeping the form keeps every saved title looking as before.
+  const generateMeetingTitle = useCallback(() => meetingTitleAt(new Date()), []);
 
   // The model this recording would use, and its state, asked of the backend's own resolver -- the
   // one recording's pre-flight refuses with (#182). This used to ask whether *any* model was on disk
@@ -215,11 +212,7 @@ export function useRecordingStart(
 
       // Start the actual backend recording
       console.log('Starting backend recording with meeting:', randomTitle);
-      await recordingService.startRecordingWithDevices(
-        selectedDevices?.micDevice || null,
-        selectedDevices?.systemDevice || null,
-        randomTitle
-      );
+      await recordingService.startRecording(randomTitle);
       console.log('Backend recording started successfully');
 
       // Update state after successful backend start
@@ -242,7 +235,7 @@ export function useRecordingStart(
       // has to land here, or the record button stays disabled forever.
       endStart();
     }
-  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkRecordingModel, reportModelNotReady, selectedDevices, setStatus, beginStart, endStart]);
+  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkRecordingModel, reportModelNotReady, setStatus, beginStart, endStart]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -274,11 +267,7 @@ export function useRecordingStart(
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
         console.log('Auto-starting backend recording with meeting:', generatedMeetingTitle);
-        const result = await recordingService.startRecordingWithDevices(
-          selectedDevices?.micDevice || null,
-          selectedDevices?.systemDevice || null,
-          generatedMeetingTitle
-        );
+        const result = await recordingService.startRecording(generatedMeetingTitle);
         console.log('Auto-start backend recording result:', result);
 
         // Update UI state after successful backend start
@@ -302,7 +291,6 @@ export function useRecordingStart(
     checkAutoStartRecording();
   }, [
     isRecording,
-    selectedDevices,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
@@ -345,11 +333,7 @@ export function useRecordingStart(
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
         console.log('Starting backend recording with meeting:', generatedMeetingTitle);
-        const result = await recordingService.startRecordingWithDevices(
-          selectedDevices?.micDevice || null,
-          selectedDevices?.systemDevice || null,
-          generatedMeetingTitle
-        );
+        const result = await recordingService.startRecording(generatedMeetingTitle);
         console.log('Backend recording result:', result);
 
         // Update UI state after successful backend start
@@ -377,7 +361,6 @@ export function useRecordingStart(
     };
   }, [
     isRecording,
-    selectedDevices,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,

@@ -218,6 +218,9 @@ click "$B" "the Back control on the settings screen"
 await "document.querySelectorAll('[role=tab]').length === 0 && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the settings screen to close and the main screen to offer Start recording'
 R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording button"
+LOG=$(ls -t "$PROFILE"/home/.local/share/tech.madduck.backchannel/logs/*.log 2>/dev/null | head -1 || true)
+[ -n "$LOG" ] || die "the application wrote no log under $PROFILE/home/.local/share/tech.madduck.backchannel/logs"
+BEFORE=$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)
 click "$R" "Start recording"
 # A click that landed is a Stop control on screen. Everything below this line reads the application's
 # own log, and without this assertion every way of failing to press the button arrives at the same
@@ -245,11 +248,17 @@ LOG=$(ls -t "$PROFILE"/home/.local/share/tech.madduck.backchannel/logs/*.log 2>/
 # An empty LOG is a wrong path, not an absent line: without this the device check below is skipped
 # without a word (#228).
 [ -n "$LOG" ] || die "the application wrote no log under $PROFILE/home/.local/share/tech.madduck.backchannel/logs"
-if [ -n "$LOG" ] && grep -q "Using preferred system audio" "$LOG"; then
-  say "the app opened: $(grep -o "Using preferred system audio: '[^']*'" "$LOG" | tail -1)"
-  grep -q "Using preferred system audio: '$PICK'" "$LOG" \
-    || die "the app opened a different device than the one clicked; see $LOG"
-fi
+# Read after this start's own CALLED line, and asserted unconditionally (#242). This used to sit
+# behind `if grep -q "Using preferred system audio"`, a line only one of two start paths wrote, so on
+# the other it checked nothing; and a grep over the whole log reads lines written before the start.
+[ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "${BEFORE:-0}" ] \
+  || die "the app logged no CALLED line for this start; see $LOG"
+N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+OPENED=$(tail -n +"$N" "$LOG" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
+say "after its CALLED line the app opened system audio '${OPENED:-<none>}'"
+[ "$OPENED" = "$PICK" ] || die "the app opened '${OPENED:-<none>}' for system audio, not the device clicked, '$PICK'; see $LOG"
+tail -n +"$N" "$LOG" | sed -n '/Creating system audio stream: /,$p' | grep -q 'System audio stream created' \
+  || die "'$PICK' was named and then not opened; see $LOG"
 
 # Stop the recording before looking for audio: the file is assembled from checkpoints when
 # the recording stops, so asserting while it is still running finds nothing and reads as the

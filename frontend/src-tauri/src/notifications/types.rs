@@ -107,10 +107,14 @@ impl Notification {
 
 // Helper functions for creating common notifications
 impl Notification {
+    /// The consent sentence is in every start notice. It used to go when the start carried a meeting
+    /// name, which no start did until #242 made the name arrive; so making it arrive would have
+    /// dropped the one line that asks the person to tell the others they are being recorded.
     pub fn recording_started(meeting_name: Option<String>) -> Self {
+        const CONSENT: &str = "Please inform others in the meeting that you are recording.";
         let body = match meeting_name {
-            Some(name) => format!("Recording started for meeting: {}", name),
-            None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
+            Some(name) => format!("Recording started for meeting: {name}. {CONSENT}"),
+            None => format!("Recording has started. {CONSENT}"),
         };
 
         Notification::new("Backchannel", body, NotificationType::RecordingStarted)
@@ -189,5 +193,22 @@ impl Notification {
         )
         .with_priority(NotificationPriority::Normal)
         .with_timeout(NotificationTimeout::Seconds(5))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #242: with the meeting's name arriving at last, the notice still asks the person to tell the
+    /// others they are recording.
+    #[test]
+    fn every_start_notice_asks_the_person_to_tell_the_others() {
+        for name in [None, Some("Meeting 2026-10-28_10-31-30".to_string())] {
+            let n = Notification::recording_started(name.clone());
+            assert!(n.body.contains("Please inform others in the meeting that you are recording."), "{name:?}: {}", n.body);
+            if let Some(name) = name {
+                assert!(n.body.contains(&name), "the notice does not name the meeting: {}", n.body);
+            }
+        }
     }
 }

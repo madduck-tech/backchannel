@@ -52,30 +52,13 @@ export class RecordingService {
   }
 
   /**
-   * Start recording (no device configuration)
-   * @returns Promise<void>
-   */
-  async startRecording(): Promise<void> {
-    return invoke('start_recording');
-  }
-
-  /**
-   * Start recording with device configuration and meeting name
-   * @param micDeviceName - Microphone device name (null for default)
-   * @param systemDeviceName - System audio device name (null for none)
+   * Start recording. The devices are the ones stored at the moment of the start: the backend reads
+   * them itself, on every route, so none are sent (#242).
    * @param meetingName - Meeting name/title
    * @returns Promise<void>
    */
-  async startRecordingWithDevices(
-    micDeviceName: string | null,
-    systemDeviceName: string | null,
-    meetingName: string
-  ): Promise<void> {
-    return invoke('start_recording_with_devices_and_meeting', {
-      mic_device_name: micDeviceName,
-      system_device_name: systemDeviceName,
-      meeting_name: meetingName
-    });
+  async startRecording(meetingName: string): Promise<void> {
+    return invoke('start_recording_with_devices_and_meeting', { meetingName });
   }
 
   /**

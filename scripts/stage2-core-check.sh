@@ -414,9 +414,20 @@ say "stored as '$STORED'"
 await "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the Start recording control' 30
 R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording control"
+BEFORE=$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)
 click "$R" "Start recording"
 await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
       'the recording to start' 30
+# The microphone the start opened, read only after the start's own CALLED line (#242). First run's audio
+# check opens the harness microphone by name before any start, and under the harness the default input
+# has the same name, so a grep over the whole log could not go red.
+for _ in $(seq 1 40); do [ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] && break; sleep 0.5; done
+[ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] || die "the app logged no CALLED line for this start; see $LOG"
+N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep -q 'Creating microphone stream: ' && break; sleep 0.5; done
+STARTED_MIC=$(tail -n +"$N" "$LOG" | grep -o "Creating microphone stream: [^(]*" | head -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
+say "after its CALLED line the start opened microphone '${STARTED_MIC:-<none>}'"
+[ "$STARTED_MIC" = "$HARNESS_DESC" ] || die "the start opened microphone '${STARTED_MIC:-<none>}', not the harness's '$HARNESS_DESC'; see $LOG"
 RECORD_S="${BC_CORE_SECONDS:-$([ "$MODE" = long ] && echo 150 || echo 70)}"
 say "recording for ${RECORD_S}s"
 sleep "$RECORD_S"
