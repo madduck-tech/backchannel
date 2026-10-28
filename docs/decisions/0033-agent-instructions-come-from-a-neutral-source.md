@@ -37,7 +37,7 @@ What explains each row, and the other findings:
    | Shared instructions and the rules every session loads | `AGENTS.md`, which holds what were `CLAUDE.md`'s section, `.claude/rules/workflow.md` and `testing.md`, plus the index of scoped rules | `CLAUDE.md`: `AGENTS.md` whole, under a "generated" header |
    | Rules scoped to paths | `.agents/rules/*.md`, each with `paths:` | `.claude/rules/*.md`, byte for byte |
    | Skills | every skill directory under `.agents/skills/` that no command generates | `.claude/skills/`, byte for byte |
-   | Commands | `.agents/commands/*.md` | `.claude/commands/*.md` byte for byte; `.agents/skills/<command>/`, `.opencode/command/` and `opencode.json` as under #252 |
+   | Commands | `.agents/commands/*.md` | `.claude/commands/*.md` byte for byte; one skill directory per command under `.agents/skills/`, `.opencode/command/` and `opencode.json` as under #252 |
 2. **A copy, never an import.**
    - No `@path` token (an `@` at the start of a line or after whitespace, outside code spans and fences) may appear in `AGENTS.md` or in a rule.
    - Every rule in `.agents/rules/` has `paths:`. A rule every session needs goes into `AGENTS.md`; otherwise Claude Code would load it twice.
