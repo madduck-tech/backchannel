@@ -18,8 +18,9 @@ The product owner decided on 2026-10-28 (specification, "Scope and platform boun
 
 These override ADR 0005 decision 5, `.claude/rules/platform-code.md` ("Development happens
 on Linux only") and "`main` is the only long-lived branch" for this experiment only.
-[ADR 0033](decisions/0033-the-virtual-audio-experiment-is-built-on-macos.md) records them, and
-`platform-code.md` carries the exception in the same commit.
+[ADR 0033](decisions/0033-the-virtual-audio-experiment-is-built-on-macos.md) records them, also
+sets aside ADR 0008 decision 5 for the experiment's own latency numbers, and the always-loaded
+rules, `platform-code.md` and `docs/development-workflow.md` carry the exception.
 
 ### Branches and worktree
 
@@ -30,6 +31,10 @@ on Linux only") and "`main` is the only long-lived branch" for this experiment o
   it, with the full cycle: issue → critic → approved design → Stage 0 matrix →
   implementation → gopnik → READY → merge by engineering. `test.yml` runs on every pull
   request, so Linux Stage 1 holds on the experiment branch as it does on `main`.
+- GitHub's closing keywords act only on merges into the default branch (its documentation;
+  not tested here). A pull request into `exp/virtual-audio` therefore says `Refs #N`, and
+  engineering closes the step issue by hand after the merge, with a comment linking the merge
+  commit and the verdict.
 - Merge `main` into `exp/virtual-audio` at least at every work-item merge, so the final
   merge does not become a rewrite. Do not rebase the experiment branch once pull requests
   have merged into it.
@@ -51,30 +56,55 @@ the issues until tests exist. Do not edit generated `AGENTS.md` files; edit thei
 
 | Step | Work item and dependencies | Deliverable and exit observation |
 | --- | --- | --- |
-| 0 | Umbrella issue, ADR and worktree; no dependency | Umbrella issue with macOS-only scope, deferred Linux/Windows, thresholds A1–A14, owed assertions and critic verdict. ADR 0033 and the `platform-code.md` exception merged to `main`. Experiment branch and worktree created from that `main` and recorded in the issue. |
-| 1 | macOS verification instrument; after step 0 | The Stage 2 that every later step needs (see "macOS verification instrument"). Exit: one recorded run on the development Mac in which each oracle is shown red by a deliberate fault and green without it. No product code. |
-| 2 | Loopback usefulness check; after step 1 | Two existing third-party loopback devices installed locally, a minimal forwarding process, and the current application recording them as microphone and system audio. The product owner runs real calls with it. **Go/no-go**: stop here if the explicit route is not found useful. Uninstall verified. No code merged into product paths. |
-| 3 | HAL plug-in and helper feasibility spike; after step 2 go | Two public devices plus private bridge from a locally built plug-in; a launchd helper forwarding real bidirectional PCM; distinct markers recovered at an independent peer. First observations: whether `coreaudiod` loads the ad-hoc or self-signed plug-in, whether TCC keeps the helper's microphone grant across rebuilds, and on-demand opening from `StartIO`/`StopIO`. Install, restart and removal recorded. A1/A2/A14 preliminary. |
-| 4 | Backend decision and test protocol; after step 3 | New ADR: plug-in source (owned versus reused, licence), bridge transport, helper launch mechanism and code identity, clock/rate-conversion strategy, shared-state ownership. Baseline latency/alignment instruments demonstrably detect added delay, lost blocks, wrong routes and drift. |
+| 0 | Umbrella issue, ADR and worktree; no dependency | Umbrella issue #273 with macOS-only scope, deferred Linux/Windows, thresholds A1–A14 inlined, owed assertions and an accepted critic verdict. ADR 0033 and the rule exceptions merged to `main`. Experiment branch and worktree created from that `main` and recorded in #273. |
+| 1 | Loopback usefulness check; after step 0 | See "Step 1: loopback usefulness check". Precondition run first; then the product owner's calls; **go/no-go** recorded on #273. Third-party devices removed and the removal shown by census. No code merged anywhere. |
+| 2 | macOS verification instrument and protocol freeze; after step 1 go | The Stage 2 that every later step needs, and the frozen protocol (see "macOS verification instrument"). Exit: one recorded run on the development Mac in which each oracle is shown red by a deliberate fault and green without it, and #273 carries the control table with its count, the rig and the matching rules. No product code. |
+| 3 | HAL plug-in and helper feasibility spike; after step 2 | Two public devices plus private bridge from a locally built plug-in; a launchd helper forwarding real bidirectional PCM; distinct markers recovered at an independent peer. First observations: whether `coreaudiod` loads the ad-hoc or self-signed plug-in, whether TCC keeps the helper's microphone grant across rebuilds, and on-demand opening from `StartIO`/`StopIO`. Install, restart and removal recorded. A1/A2/A14 preliminary, against the frozen protocol. |
+| 4 | Backend decision; after step 3 | New ADR: plug-in source (owned versus reused, licence), bridge transport, helper launch mechanism and code identity, clock/rate-conversion strategy, shared-state ownership. |
 | 5 | Setup/settings/tray design; after step 0, using step 3 constraints | Approved committed prototypes for setup (including the administrator install step and its audio interruption), physical selectors, health, mute, recording and repair; failure/missing-device/quit states included. A12 requirement debts linked. Can overlap step 4. |
 | 6 | Routing helper and endpoint lifecycle; after step 4 | Idempotent install detection and reconciliation, exclusive ownership, stable identities, physical selection, on-demand device opening, mute, client-independent forwarding, teardown. Locally built bundle runs without STT. A1/A4/A5/A8/A11/A14. |
 | 7 | Device switching and recovery; after step 6 | Transactional replacement, loop prevention, hotplug state, sample-rate changes by clients, sleep/wake and `coreaudiod` restart recovery, truthful failure state. A7/A8/A10; validate both directions independently. |
 | 8 | Recording integration; after steps 6/7 | Proxy capture adapter, process tap disabled in proxy mode, split durable tracks/shared timestamps, mixed playback compatibility, segmented models only, explicit completeness/gaps and labelled transcript output. A3/A6/A9/A10/A12/A13. |
 | 9 | Setup, settings and tray controls; after steps 5/7, recording controls after step 8 | First-run enablement, install/permission detection, actual signal tests, route selectors, persistent preferences, mute, recording, status, quit/repair/removal instructions. State agrees across surfaces. A1/A7/A9/A11/A12. |
-| 10 | Experiment qualification; after steps 8/9 | Locally built bundle on a fresh macOS user account with the plug-in not yet installed, native/browser compatibility matrix, one-hour duplex test, all controls and failure injections, milestone report with pass/fail and explicit gaps for A1–A14. |
-| 11 | Product experiment decision; after step 10 | Continue/revise/stop on measured results and setup feedback. On continue: one pull request from `exp/virtual-audio` into `main` with its own gopnik verdict (see "Merging into main"). No release without the product owner's authorization. |
+| 10 | Experiment qualification; after steps 8/9 | Locally built bundle on a fresh macOS user account, with no Backchannel component installed machine-wide (census of `/Library/Audio/Plug-Ins/HAL/` and `launchctl` before the run; third-party plug-ins listed as sentinels). Native/browser compatibility matrix, one-hour duplex test, all controls and failure injections, milestone report with pass/fail and explicit gaps for A1–A14. |
+| 11 | Product experiment decision; after step 10 | Continue/revise/stop on measured results and setup feedback, recorded on #273 (see "Outcomes"). On continue: one pull request from `exp/virtual-audio` into `main` with its own gopnik verdict (see "Merging into main"). No release without the product owner's authorization. |
 
 Steps are work packages, not necessarily one PR each. Keep PRs independently reviewable;
 do not present intermediate incomplete flows as supported functionality. An output-only
 spike does not settle the full-duplex umbrella issue. No calendar estimate is asserted
 before the spike establishes the plug-in, helper and installation work.
 
+## Step 1: loopback usefulness check
+
+The question is the hypothesis's first half only: does an explicit route — choosing a
+Backchannel-like microphone and speaker in the calling app — make setup and recording boundaries
+easier to understand than passive capture? It cannot say anything about latency, reliability or
+the final setup flow, and a borrowed setup is clumsier than the product would be, so a no-go is
+weighed with that in mind and its reasons recorded.
+
+- **Precondition run.** The current application on macOS records a *selected* loopback input as
+  the microphone and a *selected* loopback device as system audio. The default macOS backend
+  (`CoreAudio`) sends system audio to the global tap whatever device is chosen
+  (`audio/stream.rs:41`), so this needs the non-default backend setting and the cpal path, which
+  has never run on macOS. Record the setting, the devices and a short recording in which a known
+  phrase on each side lands in the right channel. If the path fails, that is reported as an
+  application defect with its own issue, not as a no-go.
+- **Calls.** At least three real calls by the product owner: at least one native client and one
+  browser client, each also recorded with passive capture on the same Mac for comparison.
+- **The question asked**, answered on #273 with reasons: is the explicit route worth its setup
+  cost compared with passive capture, yes or no.
+- **The forwarder** is a throwaway tool built in the experiment worktree under `experiments/`,
+  never merged and outside the cycle because nothing ships from it. Its source is attached to the
+  step 1 issue so the result can be reproduced.
+- **Cleanup.** Third-party loopback devices are removed afterwards and the HAL directory census
+  shown, so step 3 starts with only the sentinel plug-ins present.
+
 ## macOS verification instrument
 
 The existing Stage 2 cannot run on macOS: it locates an AppImage, drives the UI through
 `tauri-driver` (which does not support WKWebView), reads the accessibility tree through
 `orca-ide` over AT-SPI, feeds audio through a PipeWire harness, and emulates the minimum
-machine with `systemd-run`. Step 1 provides the macOS counterparts, through `gopnik-setup`
+machine with `systemd-run`. Step 2 provides the macOS counterparts, through `gopnik-setup`
 so they are recorded in `gopnik.json` and not guessed:
 
 - **Artifact.** A locally built `.app` whose revision is bound the way `stage2-locate-app.sh`
@@ -85,21 +115,35 @@ so they are recorded in `gopnik.json` and not guessed:
 - **Environment record.** `scripts/environment-record.sh` gains macOS keys: OS version and
   build, architecture, plug-in and helper versions and signing identity, microphone TCC state
   for the helper, and the physical devices in use (ADR 0019).
-- **Test rig.** Named and frozen in the umbrella issue: which device is the independent peer
-  (a second machine or phone, or a local WebRTC loopback), the physical loop from an output to
-  an input used for the latency baseline, and the headphones, microphone, speakers and
-  Bluetooth headset used.
-- **Marker detector.** Generated timed PCM markers with a codec-tolerant detector, calibrated
-  for timing error and false matches before qualification.
-- **Latency budget.** ADR 0008's `systemd-run` emulation has no macOS equivalent. The
-  instrument records the machine and states that numbers are not from the minimum machine.
+- **Test rig.** Frozen on #273 at the end of step 2: which device is the independent peer (a
+  second machine or phone, or a local WebRTC loopback), the physical loop from an output to an
+  input used for the latency baseline, where outgoing markers enter for A3 (a cabled loop into
+  the physical microphone input, or a separate virtual input standing in for it, stated as
+  such), and the headphones, microphone, speakers and Bluetooth headset used.
+- **Marker detector.** Generated timed PCM markers with a codec-tolerant detector. Before any
+  threshold is judged, its timing error is measured against a known inserted delay and must
+  have p95 at most 5 ms; its false-match and miss rate on a marker-free and a marker-only
+  recording are stated.
+- **Sample counts.** Every p95 states its N. The one-hour runs carry at least 300 markers per
+  direction; switching and mute p95s carry at least 30 trials each.
+- **Shared reference for A5.** One generator emits paired markers into both directions with a
+  logged host-time offset; alignment is the recorded offset minus the emitted offset. The
+  mechanism is fixed at step 2 and its own error stated.
+- **Control table.** Every condition in the table under "Verification protocol and negative
+  controls" expanded to one control, numbered, with the total, posted to #273.
+- **Protocol freeze.** Metrics, thresholds, matching rules and the rig are frozen on #273 at the
+  end of step 2. Step 3's spike reports against them; changing them later is a scope change.
+- **Latency budget.** ADR 0008's `systemd-run` emulation has no macOS equivalent and ADR 0033
+  decision 7 sets it aside for these numbers. The record names the machine and every report says
+  the numbers are not from the minimum machine.
 
 ## Platform investigations
 
 **macOS, required for the experiment.** Compare a plug-in built from Apple's NullAudio sample
 or libASPL with an existing component, under the licence constraint in the specification.
 Prove both endpoint roles, private bridge access, stable UIDs, physical routing, on-demand
-opening and installation on the development Mac. Resolve without a Developer ID: plug-in
+opening and installation on the development Mac. The plug-in is built universal, but only arm64
+can be run here; x86_64 is named as unverified. Resolve without a Developer ID: plug-in
 loading, helper launch (`SMAppService` versus a plain `~/Library/LaunchAgents` job), TCC
 identity across rebuilds, `coreaudiod` restart policy, upgrade/removal and multiple clients.
 A Core Audio process tap alone does not implement the public duplex endpoint contract. Do not
@@ -191,6 +235,38 @@ OS/hardware/app versions and every unverified platform. The milestone report fol
 `docs/milestones/` rules: criteria, p50/p95, hardware/models, failures, skipped work and
 accepted gaps. No generic green verdict substitutes for A1–A14.
 
+## Outcomes
+
+| Outcome | Action on #273 |
+| --- | --- |
+| No-go at step 1 | Decision and reasons commented; closed as a negative result. No driver work starts. The branch carries no product code and is deleted; the step 1 report goes to `main` as documentation. |
+| Plug-in or helper refused at step 3 (`coreaudiod` or TCC without a Developer ID) | Observation commented; the product owner decides stop (closed as negative) or revise (a new product decision, for example a Developer ID, recorded in a new ADR before work resumes). |
+| A criterion fails at step 10 | Report linked; the product owner decides revise (named criteria reopened as step issues, #273 stays open) or stop (closed as negative, branch not merged). |
+| Continue at step 11 | The merge pull request into `main` says `Closes #273` and links the qualification report and its verdict. |
+
+## Owed assertions
+
+Instructions that remove, forbid or hide something ship with a test that fails while the thing is
+present (ADR 0023). Owed, with the step that pays each:
+
+| Instruction | Paid by |
+| --- | --- |
+| Process tap not started in proxy mode | 8 (Stage 1) |
+| No streaming model offered in proxy mode | 8, 9 (A12) |
+| Physical microphone closed while no client reads Backchannel Microphone | 6 (A14) |
+| OS and communication defaults unchanged by setup | 6, 9 (A1) |
+| Private bridge side absent from client device pickers | 3, 6 (A1) |
+| OTHERS never routed into the virtual microphone | 6 (A6) |
+| Local microphone monitoring off | 6 |
+| Directions never combined before the split-transcription boundary | 8 (A13) |
+| No silent fallback to passive capture or another microphone | 7, 8 (A7, A12) |
+| No silent redirect of playback to laptop speakers | 7 (A7) |
+| Backchannel endpoints excluded from physical selectors | 6, 9 |
+| Removal never touches third-party devices or recordings | 6 (A11) |
+| `coreaudiod` never restarted while an endpoint is in use | 6, 9 (A11) |
+
+Thirteen in total, counted by hand from the specification.
+
 ## Merging into main
 
 On a continue decision, one pull request merges `exp/virtual-audio` into `main`. Its verdict:
@@ -208,10 +284,6 @@ A stop or revise decision leaves the branch unmerged; the milestone report and t
 
 ## Documentation review status
 
-A `gopnik-critic` review of an earlier draft was reported on 2026-10-28, covering the healthy
-baseline's treatment of reported gaps, A13's labelled transcription from both directions, and
-mute applying only to owned buffers. No verdict is linked from this repository; it is posted
-to the umbrella issue in step 0 or the review is rerun there. The revision of 2026-10-28
-(macOS-only, no Developer ID, experiment branch, loopback check, on-demand microphone, A14,
-split A3 oracle, segmented models only, macOS verification instrument) has not been reviewed.
-Implementation and runtime verification have not started.
+The critic's round-1 verdict on #273 (2026-10-28) was REVISE, with findings F1–F8; this revision
+answers them. A gopnik-critic review of an earlier draft was reported in conversation on the same
+day and has no linked verdict. Implementation and runtime verification have not started.

@@ -199,4 +199,5 @@ Named here so their absence is a decision rather than a silence:
   tabs and the device pickers against the bundled AppImage in about ten seconds (measured 2026-09-04).
   Putting that in the gate is #20; until it lands, anything behind a tab is undriven **by the gate**.
 - macOS and Windows are verified by CI builds only (ADR 0005). A verdict names them as not proven and
-  never implies them.
+  never implies them. One exception, ADR 0033: on `exp/virtual-audio` the experiment's macOS code is
+  runtime-verified on the development Mac, and there Linux and Windows are the unproven ones.

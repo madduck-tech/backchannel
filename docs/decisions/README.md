@@ -34,7 +34,7 @@
 | [0030](0030-every-model-is-offered-and-shows-its-licence.md) | Every model is offered, and shows its licence | accepted |
 | [0031](0031-every-release-has-one-shape.md) | Every release has one shape: the same files, a written description, published on the product owner's word | accepted |
 | [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted |
-| [0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) | The virtual audio experiment is built on macOS, signed locally, on a branch of its own | accepted; overrides 0005 decision 5 for that experiment only |
+| [0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) | The virtual audio experiment is built on macOS, signed locally, on a branch of its own | accepted; overrides 0005 decision 5 and 0008 decision 5 for that experiment only |
 
 ## Deferred questions
 

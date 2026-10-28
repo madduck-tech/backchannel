@@ -45,3 +45,7 @@ Facts (2026-09-01):
      on them is postponed until machines are available (a Windows VM, a borrowed Mac, or a self-contained
      smoke test in CI later).
    - Platform-specific code for macOS/Windows is written blind and marked as unverified.
+
+   > **Overridden for the virtual audio experiment only by
+   > [ADR 0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) (2026-10-28).** That
+   > experiment is developed and verified on macOS. Everything else still follows this decision.

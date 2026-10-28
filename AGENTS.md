@@ -45,7 +45,7 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
   for executable changes. Documentation-only changes go straight to `main`.
 - Everything in the repository, issues and pull requests is in English (ADR 0010). Conversation
   with the maintainer may be in any language.
-- `main` is the only long-lived branch. Commits are conventional
+- `main` is the only long-lived branch, except `exp/virtual-audio` (ADR 0033). Commits are conventional
   (`feat|fix|docs|design|refactor|test|chore|ci(scope): subject`); agent commits carry the
   `Co-Authored-By` trailer.
 - Roles (ADR 0014): the maintainer is the product owner — direction, concepts and design variants,
@@ -269,7 +269,8 @@ Named here so their absence is a decision rather than a silence:
   tabs and the device pickers against the bundled AppImage in about ten seconds (measured 2026-09-04).
   Putting that in the gate is #20; until it lands, anything behind a tab is undriven **by the gate**.
 - macOS and Windows are verified by CI builds only (ADR 0005). A verdict names them as not proven and
-  never implies them.
+  never implies them. One exception, ADR 0033: on `exp/virtual-audio` the experiment's macOS code is
+  runtime-verified on the development Mac, and there Linux and Windows are the unproven ones.
 
 ## Rules scoped to paths: open the file before you read or edit what it governs
 

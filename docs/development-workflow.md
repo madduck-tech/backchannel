@@ -42,7 +42,8 @@ record and `main` never disagrees with it.
    **The pixel baseline that would make a prototype enforceable does not exist yet.** #132 is where
    it is designed; until it lands, "matches the approved design" is held by a person looking, and a
    verdict may not claim otherwise.
-4. **Implementation** on a branch from `main`. The Stage 0 matrix from the `gopnik` skill is
+4. **Implementation** on a branch from `main` (from `exp/virtual-audio` for that experiment's work
+   items, ADR 0033). The Stage 0 matrix from the `gopnik` skill is
    posted to the issue before the first commit.
 5. **Gate.** `gopnik` attacks the finished change: Stage 1 against the repository, Stage 2 across
    the delivery boundary, with proof that a load-bearing check can fail. The verdict and its
@@ -166,13 +167,16 @@ An ADR is not a step of the cycle; it is written when the cycle produces such a 
 - **Language.** Everything in the repository, the issues and the pull requests is in English
   (ADR 0010).
 - **Branches.** `main` is the only long-lived branch and must always build. Work happens on
-  short-lived branches; upstream's `devtest` convention is retired.
+  short-lived branches; upstream's `devtest` convention is retired. One exception, ADR 0033: the
+  virtual audio experiment lives on `exp/virtual-audio`, its work items branch from it and merge into
+  it, and it reaches `main` only on a continue decision.
 - **Commits.** `feat|fix|docs|design|refactor|test|chore|ci(scope): subject`, imperative subject,
   body says why. Agent commits carry the `Co-Authored-By` trailer.
 - **Platform code.** macOS and Windows paths are written blind on Linux (ADR 0005); they are
   marked unverified in code and in the pull request, and the gate's verdict names them as not
   proven. The release criterion accepts this explicitly: Linux proven end to end, macOS and
-  Windows built in CI and documented as unverified.
+  Windows built in CI and documented as unverified. On `exp/virtual-audio` the roles invert for the
+  experiment's code (ADR 0033): macOS is verified on the development Mac, Linux and Windows are not.
 - **What the cycle does not measure.** The critic and the gate prove that a change works, not
   that the copilot is useful. Hint quality needs its own evaluation harness (a transcript set
   and a scoring pass); it is a future issue, not a step of this cycle.

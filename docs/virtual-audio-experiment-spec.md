@@ -20,7 +20,7 @@ continues while Backchannel records and transcribes it, and the failure and late
 below hold. Failure of these criteria is a valid experimental result.
 
 The usefulness half of the hypothesis is tested first and cheaply, with existing third-party
-loopback devices and no Backchannel driver (plan step 2). The dependability half needs the
+loopback devices and no Backchannel driver (plan step 1). The dependability half needs the
 owned driver and is tested after that check returns go.
 
 ## Scope and platform boundary
@@ -119,8 +119,8 @@ follows the same rule for Backchannel Speakers.
 
 Proposed, to be confirmed by the feasibility spike (plan step 3) and recorded in an ADR.
 
-- **HAL plug-in** (AudioServer plug-in, `/Library/Audio/Plug-Ins/HAL/`), a universal binary,
-  loaded by `coreaudiod` in its sandbox. It publishes the two public devices and their
+- **HAL plug-in** (AudioServer plug-in, `/Library/Audio/Plug-Ins/HAL/`), built as a universal
+  binary (only arm64 can be run on the development Mac; x86_64 is unverified), loaded by `coreaudiod` in its sandbox. It publishes the two public devices and their
   private bridge side, owns their clock (`GetZeroTimeStamp`), and reports client I/O state.
   It holds no routing logic. If the helper is absent, Backchannel Microphone supplies
   silence and Backchannel Speakers discards; the devices do not disappear.
@@ -272,25 +272,26 @@ speaker result is measured separately.
 
 ## Proposed experimental acceptance criteria
 
-These are targets, not measured results. Freeze the protocol and thresholds in the issue
-before implementation; changing them later requires an explicit scope decision.
+These are targets, not measured results. The thresholds are inlined in #273; metrics, sample
+counts, matching rules and the rig are frozen there at the end of plan step 2, before the spike.
+Changing them later requires an explicit scope decision.
 
 | ID | Observation that settles the requirement |
 | --- | --- |
 | A1 | Fresh supported session exposes exactly the two owned public endpoint roles; repeat launch/repair produces no duplicates and does not change OS defaults. |
 | A2 | A real calling application enumerates and uses both endpoints; a second physical or independently isolated peer sends and receives distinct speech markers. |
-| A3 | A healthy 60-minute wired-headphone baseline includes silence, alternation and simultaneous speech. **Bridge oracle:** independent references at the endpoint boundary (a local test client on both virtual endpoints, and the physical devices) find zero missing or duplicated expected marker blocks in both recorded tracks and in both forwarded directions. Any unexpected gap fails this baseline even when reported. **Peer oracle:** delivery to a network peer is reported with its loss rate, not held to zero, because codec concealment and packet loss are outside the bridge. Exclude explicitly scheduled pause/mute intervals from the corresponding oracle. Switching and fault-injection runs are separate. |
+| A3 | A healthy 60-minute wired-headphone baseline includes silence, alternation and simultaneous speech. **Bridge oracle:** independent references at the endpoint boundary (a local test client on both virtual endpoints, and the physical devices) find zero missing or duplicated expected marker blocks in both recorded tracks and in both forwarded directions. Any unexpected gap fails this baseline even when reported. **Peer oracle:** delivery to a network peer is reported with its loss rate, not held to zero, because codec concealment and packet loss are outside the bridge. Exclude explicitly scheduled pause/mute intervals from the corresponding oracle, and count outgoing markers from A14's first physical sample, not from the client's start. Switching and fault-injection runs are separate. |
 | A4 | Incremental local routing latency against a direct-device baseline has p95 at most 30 ms per direction; end-to-end peer latency is reported separately, not attributed entirely to the bridge. |
 | A5 | Recorded markers in YOU/OTHERS have p95 alignment error at most 50 ms after one hour, measured against a shared reference; no cumulative unreported drift. |
 | A6 | An unrelated app sent to a different output is absent from OTHERS while a call marker is present in the same run. Routing that app to Backchannel Speakers makes it present (positive control). |
 | A7 | Physical-device switching succeeds with the same public identities and at most 1 s interruption; failed switching retains the old route where still available. Unplugging never silently selects another mic or speakers. A client changing the virtual device's sample rate is followed or refused visibly. |
 | A8 | UI termination and STT crash/load do not interrupt forwarding; deliberately killing the routing helper leaves both public devices present and silent, and produces a measured, visible failure/recovery result. No automatic bypass is promised. |
-| A9 | Start/stop/pause recording preserves forwarding; paused/stopped intervals appear in neither audio artifacts nor resumed STT. Backchannel mute meets the 100 ms p95 request-to-applied target and emits zeros from the next owned buffer, using applied sample timestamps; measure residual OS/client/peer buffering separately. Call-app mute behavior matches the documented boundary. |
+| A9 | Start/stop/pause recording preserves forwarding; paused/stopped intervals appear in neither audio artifacts nor resumed STT. Backchannel mute meets the 100 ms p95 request-to-applied target and emits zeros from the next owned buffer, using applied sample timestamps; independently, the first all-zero buffer read by a test client on Backchannel Microphone follows the request by at most 150 ms p95, so the product's own timestamp is not the only evidence. Residual client/peer buffering is measured separately. Call-app mute behavior matches the documented boundary. |
 | A10 | Denied permission, suspend/resume, `coreaudiod` restart, writer failure and capture-queue exhaustion are detected, with route/recording states and gap boundaries matching independent evidence. |
 | A11 | Normal disable, interrupted setup, repeated repair, upgrade and removal preserve unrelated audio state and leave no duplicate/orphaned owned devices, launchd jobs or processes. |
 | A12 | A non-default microphone and non-default output work; proxy mode offers no model that would sum the split transcript. Tray/settings agree after success, error and restart. |
 | A13 | With a named compatible model and fixed distinct speech fixtures, both directions produce the expected phrases with correct YOU/OTHERS labels, including overlapping speech. Scheduled stopped/paused markers are absent. Freeze phrase-matching rules before the run; PCM fidelity is still established independently by A3. Suppressing decoder output or swapping labels must fail this check. |
-| A14 | With no client on Backchannel Microphone the physical microphone is closed (the OS microphone-in-use state agrees). A client starting I/O opens it, with start-to-first-physical-sample p95 reported; the last client stopping closes it. Same for the physical output and Backchannel Speakers. |
+| A14 | With no client on Backchannel Microphone the physical microphone is closed (the OS microphone-in-use state agrees). A client starting I/O opens it, with start-to-first-physical-sample p95 at most 500 ms on a wired microphone (Bluetooth reported, not held); the last client stopping closes it. Same for the physical output and Backchannel Speakers. |
 
 Application compatibility is a measured matrix, not a universal claim. Record exact OS,
 audio server, app/browser version, device/transport, permission state and endpoint behavior.
@@ -309,7 +310,7 @@ directly.
 
 Two decision points:
 
-- **After the loopback check (plan step 2):** go if the maintainer finds the explicit-route
+- **After the loopback check (plan step 1):** go if the maintainer finds the explicit-route
   setup useful with borrowed devices; stop otherwise, before any driver work.
 - **After qualification:** continue — merge the experiment branch into `main` — only if
   macOS meets A1–A14 and the maintainer finds setup and switching useful. Revise if benefits

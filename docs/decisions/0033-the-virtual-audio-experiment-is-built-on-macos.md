@@ -2,8 +2,9 @@
 
 Date: 2026-10-28
 Status: accepted. Overrides, for the virtual audio experiment only, decision 5 of
-[ADR 0005](0005-platform-support-tiers.md) and the "`main` is the only long-lived branch" convention of
-`docs/development-workflow.md`. Neither is changed for any other work.
+[ADR 0005](0005-platform-support-tiers.md), decision 5 of [ADR 0008](0008-latency-targets.md) and the
+"`main` is the only long-lived branch" convention of `docs/development-workflow.md`. None of them is
+changed for any other work.
 
 ## Context
 
@@ -23,6 +24,8 @@ calling application selects, and records both directions through them. On 2026-1
   (`ParrotAudioPlugin.driver`, `SteamStreamingMicrophone.driver`, `SteamStreamingSpeakers.driver`).
 - **The repository has no signing identity.** ADR 0020 records zero secrets; macOS bundles are signed
   ad hoc (`bundle.macOS.signingIdentity` is `"-"`).
+- **ADR 0008 decision 5 accepts no latency number measured without the `systemd-run` limit**, and
+  `docs/milestones/README.md` repeats it; `systemd-run` does not exist on macOS.
 - **The existing Stage 2 cannot run on macOS** (`gopnik.json` stage 2, read from source): it locates an
   AppImage, drives the UI through `tauri-driver`, reads AT-SPI through `orca-ide`, feeds audio through
   PipeWire and emulates the minimum machine with `systemd-run`.
@@ -55,8 +58,15 @@ The product owner decided on 2026-10-28, in conversation, reviewing the two docu
 5. **The experiment's Stage 2 is a macOS instrument built first** (plan step 1), recorded in
    `gopnik.json` through `gopnik-setup`, with `scripts/environment-record.sh` extended by the macOS keys
    that ADR 0019 requires a verdict to carry.
-6. **`.claude/rules/platform-code.md` says so**, in the same commit as this ADR, so an agent that loads
-   it under `audio/**` on the experiment branch is not told to treat macOS as blind.
+6. **The rules say so**, in the same commit as this ADR: `.claude/rules/platform-code.md`,
+   `.claude/rules/testing.md` (macOS verified by CI builds only), `.claude/rules/workflow.md` (the
+   long-lived branch), `docs/development-workflow.md` (Branches, Platform code, step 4), with
+   `AGENTS.md` regenerated and a pointer left in ADR 0005. An agent on the experiment branch is not
+   told to treat macOS as blind or the branch as forbidden.
+7. **ADR 0008 decision 5 does not apply to the experiment's numbers** (A4, A5, A7, A9, A14). They are
+   bridge and control latencies on the development Mac, not the copilot's end-to-end latency, and the
+   minimum machine cannot be emulated there. Every report of them names the machine and says they are
+   not from the minimum machine; none is cited as evidence for an ADR 0008 criterion.
 
 ## Consequences
 
