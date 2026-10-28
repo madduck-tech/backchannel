@@ -12,6 +12,9 @@ Decisions that govern this code: ADR 0002 (STT for Russian), 0003 (two STT strea
 0005 (platform tiers), 0006 (proactive mode), 0008 (latency).
 
 - Changes here always go through a pull request; they are never pushed straight to `main`.
+- **Exception — the virtual audio experiment (ADR 0033).** On `exp/virtual-audio` and branches
+  into it, macOS is the development and verified platform, and Linux and Windows paths are the
+  ones marked unverified. Everywhere else the line below holds.
 - Development happens on Linux only. macOS and Windows paths are written blind: mark them
   `// UNVERIFIED on <platform>` and say so in the PR. Do not claim they work.
 - Microphone and system audio are separate streams (YOU / OTHERS) from capture to STT. Never mix
