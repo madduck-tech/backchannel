@@ -69,6 +69,21 @@ test('each face names its own file, and the families keep their names and fallba
   assert.match(fs.readFileSync(path.join(frontend, 'src', 'app', 'globals.css'), 'utf8'), /^@import "\.\/fonts\.css";$/m, 'globals.css does not bring fonts.css');
 });
 
+// The product owner's choice of 2026-10-28 (#264): IBM's files bring the slashed zero, the arrows,
+// the maths and the kerning, and the symbols stay the system's, so a colour emoji keeps its colour.
+test('every face leaves the symbol and emoji blocks to the system, and keeps text, arrows and maths', () => {
+  const blocks = css.split('@font-face').filter((b) => /font-family: 'IBM Plex (Sans|Serif|Mono)';/.test(b));
+  assert.equal(blocks.length, 10);
+  const parse = (r) => r.split(',').map((s) => s.trim().replace(/^U\+/, '').split('-').map((h) => parseInt(h, 16))).map(([a, b = a]) => [a, b]);
+  for (const b of blocks) {
+    const m = b.match(/unicode-range: ([^;]+);/);
+    assert.ok(m, `a face with no unicode-range draws every symbol IBM's file has:\n${b.slice(0, 120)}`);
+    const has = (cp) => parse(m[1]).some(([lo, hi]) => cp >= lo && cp <= hi);
+    for (const ch of '✓✕❌✅⚠★▶●☀⌛①⭐😀') assert.ok(!has(ch.codePointAt(0)), `${ch} (U+${ch.codePointAt(0).toString(16).toUpperCase()}) would be drawn by Plex`);
+    for (const ch of '0Øaжё→≈≤½²₂‰—€№') assert.ok(has(ch.codePointAt(0)), `${ch} (U+${ch.codePointAt(0).toString(16).toUpperCase()}) is left out of Plex`);
+  }
+});
+
 test('git stores the files as they are, so a fresh clone carries IBM\'s bytes', () => {
   const files = [...fs.readdirSync(dir).map((f) => path.join('src', 'app', 'fonts', f)), path.join('public', 'IBM-Plex-LICENSE.txt')];
   const attrs = execFileSync('git', ['check-attr', 'text', '--', ...files], { cwd: frontend, encoding: 'utf8' }).trim().split('\n');

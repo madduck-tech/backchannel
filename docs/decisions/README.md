@@ -36,6 +36,7 @@
 | [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted |
 | [0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) | The virtual audio experiment is built on macOS, signed locally, on a branch of its own | accepted; supersedes 0005 decision 5, 0008 decision 5 and 0012 decision 1 for that experiment only |
 | [0034](0034-the-pulseaudio-cookie-is-computed-in-memory.md) | The PulseAudio cookie is computed in memory, by a fork of the `pulseaudio` crate patched at the workspace root | accepted |
+| [0035](0035-ibm-plex-ships-as-ibms-own-files.md) | IBM Plex ships as IBM's own files, loaded by plain `@font-face`, with the symbols left to the system | accepted |
 
 ## Deferred questions
 
