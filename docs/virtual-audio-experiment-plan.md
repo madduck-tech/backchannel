@@ -301,7 +301,8 @@ previous count; the rule above, not a reading, is what this count answers to.
 
 ## Linux surfaces on the experiment branch
 
-Steps that touch shared paths (`recording_manager`, `pipeline`, `transcription`, settings) cannot
+Steps that touch shared paths (`audio/devices/`, `recording_manager`, `pipeline`, `transcription`,
+settings; from step 6 on) cannot
 be reached by Linux Stage 2 on the development Mac, and ADR 0022 makes that a named gap that blocks
 until the product owner or an issue accepts it. Whether the product owner accepts "Linux Stage 1
 only for merges into `exp/virtual-audio`; Linux Stage 2 owed at the merge into `main`" is an open
