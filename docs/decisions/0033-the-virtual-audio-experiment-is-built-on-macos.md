@@ -61,13 +61,15 @@ The product owner decided on 2026-10-28, in conversation, reviewing the two docu
 6. **The rules say so**, in the same change as this ADR: `.claude/rules/platform-code.md` (Linux
    only, and latency under `systemd-run`), `.claude/rules/testing.md` (macOS verified by CI builds
    only), `.claude/rules/workflow.md` (the long-lived branch), `docs/development-workflow.md`
-   (Branches, Platform code, step 4) and `docs/milestones/README.md` (ADR 0008 decision 5), with
-   `CONTRIBUTING.md` (the long-lived branch) and the `/work` command (branch base, platform reach,
-   `Refs #N` with a manual close), with `AGENTS.md` and the generated commands regenerated and a
-   pointer left in ADRs 0005, 0008 and 0012. The `gopnik.json` notes, which say every verification
-   run happens on Linux, are rewritten by plan step 2 through `gopnik-setup`, since that step is what
-   gives the experiment a macOS stage. An agent on the experiment branch is not
-   told to treat macOS as blind or the branch as forbidden.
+   (Branches, Platform code, steps 4, 5 and 6), `docs/milestones/README.md` (ADR 0008 decision 5),
+   `CONTRIBUTING.md` (branch, Stage 2, closing keyword), `.github/pull_request_template.md` (closing
+   keyword) and the `/work` command (branch base, platform reach, `Refs #N` with a manual close),
+   with `AGENTS.md` and the generated commands regenerated and a pointer left in ADRs 0005, 0008 and
+   0012. **One surface lags:** the `gopnik.json` notes, which say every verification run happens on
+   Linux, are rewritten by plan step 2 through `gopnik-setup`, since that step is what gives the
+   experiment a macOS stage. Until then an agent on the experiment branch reads them; a step-1
+   precondition fix's verdict states that they do not apply and that its Stage 2 is the
+   precondition run on the development Mac.
 7. **ADR 0008 decision 5 does not apply to the experiment's numbers** (A4, A5, A7, A9, A14). They are
    bridge and control latencies on the development Mac, not the copilot's end-to-end latency, and the
    minimum machine cannot be emulated there. Every report of them names the machine and says they are

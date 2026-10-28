@@ -57,7 +57,8 @@ record and `main` never disagrees with it.
    verified but run by hand, because each application run costs about ten minutes. The audio pass
    needs a live PipeWire session and so does not run in CI. Audio verdicts are no longer narrowed
    by default; where a verdict still cannot reach something — both channels at once, transcription
-   quality, macOS and Windows — it names what is not proven.
+   quality, macOS and Windows — it names what is not proven. On `exp/virtual-audio` the experiment's
+   Stage 2 is its own macOS instrument instead, and Linux and Windows are the unproven ones (ADR 0033).
 6. **Pull request** with `Closes #N` and a link to the verdict (into `exp/virtual-audio`: `Refs #N`,
    and the issue closed by hand after the merge; ADR 0033). On a `READY` verdict engineering
    merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by

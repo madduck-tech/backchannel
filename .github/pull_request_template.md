@@ -1,4 +1,5 @@
 Closes #
+<!-- Into exp/virtual-audio: Refs # instead, and close the issue by hand after the merge (ADR 0033). -->
 
 ## Verdict
 

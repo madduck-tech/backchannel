@@ -92,7 +92,10 @@ weighed with that in mind and its reasons recorded.
   setting, the devices and a short recording in which a known phrase on each side lands in the
   right channel. A failure is an application defect, not a no-go: it gets its own issue, and its
   fix goes through the cycle as a pull request into `exp/virtual-audio`, the one exception to
-  "no code" in step 1, before the calls start.
+  "no code" in step 1, before the calls start. That fix's Stage 2 is the precondition run itself,
+  shown failing on the unfixed build and passing on the fix on the development Mac, with the
+  recording attached; the `gopnik.json` notes' Linux-only sentence, rewritten only at step 2, does
+  not apply to it (ADR 0033), and its verdict says so.
 - **Calls.** At least three real calls by the product owner: at least one native client and one
   browser client, each also recorded with passive capture on the same Mac for comparison.
 - **The question asked**, answered on #273 with reasons: is the explicit route worth its setup
@@ -270,61 +273,61 @@ accepted gaps. No generic green verdict substitutes for A1–A14.
 Instructions that remove, forbid or hide something ship with a test that fails while the thing is
 present (ADR 0023).
 
-**Selection rule.** Over the specification up to "Proposed experimental acceptance criteria",
-`grep -nE '\b([Nn]ever|must not|must neither|[Dd]o(es)? not|[Nn]o|not offered|[Ee]xclude[sd]?|[Rr]eject|insufficient|without|only|is off)\b'`
-returns 58 lines at this revision. Every line is classified below: a forbidding instruction about
-the product's behaviour becomes a row; anything else is excluded with its reason.
+**Selection rule.** Over the specification up to line 275 ("Proposed experimental acceptance
+criteria"), `grep -niE '\b(never|must not|must neither|does? not|no|not|cannot|deferred|exclude[sd]?|reject|insufficient|without|only|alone|is off)\b'` returns 80 lines at this revision. Every line is
+classified: 40 map to rows and 40 are excluded, with no line in both. Sentences found by
+reading that the pattern does not reach are added and marked: lines 199–200. **The pattern is a
+floor, not a boundary**: a forbidding sentence it misses is still owed, and a recount adds it here.
 
 Excluded lines, by reason:
-- **Document status, hypothesis, or decisions about the project rather than the product:** 4, 14,
-  15, 22, 25, 34, 35, 36, 37, 41, 44, 65.
-- **Scope exclusions — features not built, so there is nothing to be present:** 58 except
-  "automatic recording" (call detection, platform APIs, new AEC, voice effects, per-participant
-  separation).
-- **Rationale or facts, not instructions:** 112, 114, 125, 137, 140, 145, 146, 220, 271.
-- **Positive requirements, held by a criterion rather than an absence test:** 190 (settings
-  without a tray, A12), 205 (routing without STT, A8), 241 (capture adapter attaches only during
-  recording; its observable consequences are rows 20 and 29), 260 (same instruction as row 3).
-- **Architecture, whose observable consequence is a row:** 127 (the plug-in holds no routing
-  logic → row 10), 233 (recording manager not the owner of forwarding → row 19).
+- **Document status, hypothesis, or decisions about the project rather than the product:** 4, 14–16, 22, 25, 34–37, 39, 41, 43–44, 48–50, 53, 65, 151–152.
+- **Rationale, limits of a claim, or facts, not instructions:** 100, 112, 114, 125, 135, 137, 140, 145–146, 212, 218, 220, 271.
+- **How the experiment is measured, not what the product does:** 61.
+- **Positive requirements, held by a criterion rather than an absence test:** 190, 205, 241.
+- **Architecture, whose observable consequence is a row:** 127, 233.
 
-| # | Instruction (spec line at this revision) | Paid by |
+| # | Instruction (spec lines at this revision) | Paid by |
 | --- | --- | --- |
 | 1 | No silent fallback of a proxy recording to passive capture or another microphone (56) | 7, 8 (A7, A12) |
-| 2 | No automatic recording (58) | 9 (A9) |
+| 2 | No automatic recording (the rest of line 58 is scope: features not built) (58) | 9 (A9) |
 | 3 | Streaming models not offered in proxy mode (63, 260) | 8, 9 (A12) |
 | 4 | Private bridge side absent from client device pickers (76) | 3, 6 (A1) |
 | 5 | OTHERS never routed into the virtual microphone (96) | 6 (A6) |
 | 6 | Local microphone monitoring off (96) | 6 |
 | 7 | Directions never combined before the split-transcription boundary (97) | 8 (A13) |
-| 8 | Process tap not combined with proxy capture (101) | 8 (Stage 1) |
-| 9 | Physical devices open only while a client uses the endpoint (107) | 6 (A14) |
-| 10 | Public devices do not disappear when the helper is absent (128) | 6 (A8) |
-| 11 | Install, upgrade and removal commands never run silently (142) | 9 |
-| 12 | `coreaudiod` never restarted while an endpoint is in use (143) | 6, 9 (A11) |
-| 13 | Enabling routing does not start recording (160) | 9 |
-| 14 | Setup never described as silent first-run registration (165) | 9 |
-| 15 | Backchannel endpoints and known self-referential routes excluded from physical selection (169) | 6, 9 (A7) |
-| 16 | OS defaults, communication defaults and other applications' settings unchanged (171) | 6, 9 (A1) |
-| 17 | Removal never removes third-party devices or recordings (180) | 6 (A11) |
-| 18 | No silent choice of a new microphone or redirect to laptop speakers (194) | 7 (A7) |
-| 19 | Starting or stopping a recording never creates or tears down the call route (206) | 8 (A9) |
-| 20 | Resume never replays the pause interval (207–208) | 8 (A9) |
-| 21 | Recording start rejected if either capture is unavailable (223) | 8 (A12) |
-| 22 | Complete capture never reported after loss (227) | 8 (A10) |
-| 23 | No network listener on the routing service (239) | 6 (Stage 1) |
-| 24 | A successful request alone never marks installation, switching or delivery complete (244) | 6, 9 (A7, A12) |
-| 25 | Existing storage keys not renamed (247) | 6 (Stage 1) |
-| 26 | A matching display name alone never resolves a stored identity (248) | 7 (A7) |
-| 27 | Forwarding callbacks never wait for STT, disk, IPC or UI (250) | 6, 8 (A8) |
-| 28 | Slow STT neither stalls the call nor silently trims history (251) | 8 (A8, A10) |
-| 29 | Recording-disabled operation retains no conversation history (254) | 8 |
-| 30 | A client's sample-rate change never silently mis-clocks (267) | 7 (A7) |
-| 31 | Output volume never removes incoming speech from the recording tap (268) | 8 |
+| 8 | Only streams sent to Backchannel Speakers are in OTHERS (99) | 8 (A6) |
+| 9 | Process tap not combined with proxy capture (101, 103) | 8 (Stage 1) |
+| 10 | Physical devices open only while a client uses the endpoint (107) | 6 (A14) |
+| 11 | Public devices do not disappear when the helper is absent; they carry silence (128, 181) | 6 (A8) |
+| 12 | Install, upgrade and removal commands never run silently (142) | 9 |
+| 13 | `coreaudiod` never restarted while an endpoint is in use (143) | 6, 9 (A11) |
+| 14 | Enabling routing does not start recording (160) | 9 |
+| 15 | Setup never described as silent first-run registration (165) | 9 |
+| 16 | Backchannel endpoints and self-referential routes excluded from physical selection, by cycle checks and not name filters alone (169, 196) | 6, 7, 9 (A7) |
+| 17 | OS defaults, communication defaults and other applications' settings unchanged (171) | 6, 9 (A1) |
+| 18 | No plug-in or helper upgrade or removal while an endpoint is in use (179) | 6, 9 (A11) |
+| 19 | Removal never removes third-party devices or recordings (180) | 6 (A11) |
+| 20 | No silent choice of a new microphone or redirect to laptop speakers (194) | 7 (A7) |
+| 21 | Quit never stops routing implicitly; stopping routing is an explicit action (199–200, by reading) | 9 (A8) |
+| 22 | Starting or stopping a recording never creates or tears down the call route (206) | 8 (A9) |
+| 23 | Resume never replays the pause interval (207–208) | 8 (A9) |
+| 24 | Recording start rejected if either capture is unavailable (223) | 8 (A12) |
+| 25 | An unused route is not an error: recording starts with no client on it (224) | 8 (A12) |
+| 26 | Silence told from stream loss by stream and clock health, not RMS alone (226) | 8 (A3, A10) |
+| 27 | Complete capture never reported after loss (227) | 8 (A10) |
+| 28 | No network listener on the routing service (239) | 6 (Stage 1) |
+| 29 | A successful request alone never marks installation, switching or delivery complete (243–244) | 6, 9 (A7, A12) |
+| 30 | Existing storage keys not renamed (247) | 6 (Stage 1) |
+| 31 | A matching display name alone never resolves a stored identity (248) | 7 (A7) |
+| 32 | Forwarding callbacks never wait for STT, disk, IPC or UI (250) | 6, 8 (A8) |
+| 33 | Slow STT neither stalls the call nor silently trims history (251) | 8 (A8, A10) |
+| 34 | Recording-disabled operation retains no conversation history (254) | 8 |
+| 35 | A client's sample-rate change never silently mis-clocks (267) | 7 (A7) |
+| 36 | Output volume never removes incoming speech from the recording tap (268) | 8 |
 
-Thirty-one rows from 58 classified lines; a script comparing the two sets found none unclassified. Rows 15 and 1's mapping were lost between the first and
-second counts and restored after the critic's round 3; the line numbers above are what a recount is
-checked against, and they move with any edit above line 275 of the specification.
+36 rows. Each recount after the critic's rounds on #273 found sentences the previous rule
+missed (13, then 23, 31, 36); the line numbers are what a recount is checked against, and
+they move with any edit above line 275 of the specification.
 
 ## Linux surfaces on the experiment branch
 
@@ -353,7 +356,7 @@ A stop or revise decision leaves the branch unmerged; the milestone report and t
 
 ## Documentation review status
 
-The critic's verdicts on #273, both 2026-10-28: round 1 REVISE (F1–F8), round 2 REVISE (N1–N15).
-This revision answers both. A gopnik-critic review of an earlier draft was reported in
-conversation on the same day and has no linked verdict. Implementation and runtime verification
-have not started.
+The critic's verdicts on #273, all 2026-10-28: round 1 REVISE (F1–F8), round 2 REVISE (N1–N15),
+round 3 REVISE (R3-1–R3-8), round 4 REVISE (F1–F5 of that round). This revision answers all four.
+A gopnik-critic review of an earlier draft was reported in conversation on the same day and has no
+linked verdict. Implementation and runtime verification have not started.
