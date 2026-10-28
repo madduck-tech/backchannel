@@ -169,6 +169,7 @@ test('below the floor until a worktree goes: it is swept, named in a systemMessa
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
   assert.ok(!exists(fx.done[0]), 'the removable worktree survived a sweep below the floor');
   assert.ok(r.message?.includes(fx.done[0]), `the systemMessage does not name what was removed: ${r.stdout}`);
+  assert.ok(exists(fx.log), `the removal was not logged to ${fx.log}`);
   assert.match(fs.readFileSync(fx.log, 'utf8'), new RegExp(`removed ${fx.done[0]} \\(`));
 });
 
