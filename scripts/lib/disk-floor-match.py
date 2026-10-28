@@ -3,6 +3,7 @@
 
     disk-floor-match.py '<command>'     exits 0 when it compiles, 1 when it does not, 2 on misuse
     disk-floor-match.py --many           a JSON list of commands on stdin, a JSON list of answers out
+    disk-floor-match.py --hook           a PreToolUse payload on stdin: compiles<TAB>cwd, skip, or error<TAB>why
 
 A guard against accidents, not a boundary: it reads the command as written, so a command assembled at
 run time passes it. What it matches is the table in disk-floor-hook-table.json, held both ways by
@@ -211,6 +212,17 @@ def compiles(text):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--hook']:      # a PreToolUse payload on stdin: "compiles<TAB>cwd", "skip", or "error<TAB>why"
+        try:
+            d = json.load(sys.stdin)
+            command, cwd = (d.get('tool_input') or {}).get('command'), d.get('cwd')
+            if not isinstance(command, str) or not isinstance(cwd, str):
+                raise ValueError('no command or cwd')
+        except Exception as e:  # noqa: BLE001 - any unreadable payload is reported, never raised
+            print('error\t' + str(e).replace('\n', ' '))
+            sys.exit(0)
+        print('compiles\t' + cwd if compiles(command) else 'skip')
+        sys.exit(0)
     if sys.argv[1:] == ['--many']:      # a JSON list of commands on stdin; a JSON list of answers out
         print(json.dumps([compiles(c) for c in json.load(sys.stdin)]))
         sys.exit(0)

@@ -52,6 +52,20 @@ test('the matcher leaves alone every must-not-trigger cell, every package.json s
   assert.deepEqual(cells.filter((c, i) => answers[i]), [], 'commands that do not compile and were caught');
 });
 
+// The hook leaves without starting Python when the payload names none of these words, so every command
+// the matcher can catch must name one.
+test('every command the matcher catches passes the hook\'s prefilter', () => {
+  const src = fs.readFileSync(path.join(repo, 'scripts/disk-floor-hook.sh'), 'utf8');
+  const m = src.match(/^PREFILTER='([^']+)'$/m);
+  assert.ok(m, 'no PREFILTER line in the hook');
+  const re = new RegExp(m[1]);
+  const { stage1, stage2 } = JSON.parse(fs.readFileSync(path.join(repo, 'gopnik.json'), 'utf8')).verification;
+  const cells = [...table.must_trigger, ...Object.entries(table.heredoc).filter(([, v]) => v).map(([c]) => c),
+    ...[...stage1, ...stage2].filter((c) => c.includes('cargo ') || c.includes('tauri ')),
+    ...table.package_scripts.map((n) => `pnpm ${n}`), ...table.shell_scripts.map((p) => path.basename(p))];
+  assert.deepEqual(cells.filter((c) => !re.test(c)), [], 'commands the matcher would catch that the prefilter lets through unread');
+});
+
 test('census: the table\'s scripts are exactly the package.json scripts that run tauri', () => {
   const scripts = JSON.parse(fs.readFileSync(path.join(repo, 'frontend/package.json'), 'utf8')).scripts;
   const tauri = Object.entries(scripts).filter(([k, v]) => !k.startsWith('_comment') && /\btauri\b|tauri-auto\.js/.test(v)).map(([k]) => k).sort();
@@ -251,7 +265,9 @@ test('25 removals: the systemMessage stays within 20 lines and 4000 characters, 
 
 test('input that is not JSON, and a checkout with no disk-floor.sh, both let the command run', () => {
   const fx = fixture('junk', { n: 0 });
-  const junk = hook(fx, { input: 'not json', env: RAISED });
+  const quiet = hook(fx, { input: 'not json', env: RAISED });
+  assert.equal(quiet.status, 0, quiet.stderr);
+  const junk = hook(fx, { input: 'not json, but it says cargo build', env: RAISED });
   assert.notEqual(junk.status, 2, junk.stderr);
   assert.match(junk.message ?? '', /could not read its input/);
   const bare = fixture('no-floor', { n: 0, omit: ['scripts/disk-floor.sh'] });

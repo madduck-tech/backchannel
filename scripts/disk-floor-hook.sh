@@ -41,25 +41,18 @@ pass_with() { message "$1"; exit 0; }
 [ "$(uname -s)" = Linux ] || exit 0
 
 input=$(cat)
-fields=$(printf '%s' "$input" | python3 -I -c 'import json,sys
-try:
-    d = json.load(sys.stdin)
-    c, w = (d.get("tool_input") or {}).get("command"), d.get("cwd")
-    if not isinstance(c, str) or not isinstance(w, str): raise ValueError("no command or cwd")
-    sys.stdout.write(json.dumps([c, w]))
-except Exception as e:
-    sys.stdout.write("ERROR " + str(e))' 2>/dev/null)
-case "$fields" in
-  ERROR*|"") pass_with "The disk-floor hook could not read its input (${fields#ERROR }), so this command runs unguarded." ;;
-esac
-COMMAND=$(printf '%s' "$fields" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[0])')
-CWD=$(printf '%s' "$fields" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[1])')
+# Every command the matcher can catch names one of these words; the table's test holds that. Most Bash
+# calls name none, and leave here without starting Python (measured: 158 ms a call with it, on 2.1.312).
+PREFILTER='cargo|tauri|clean_run|clean_build|build-gpu|dev-gpu|stage2-core-check'
+printf '%s' "$input" | grep -qE "$PREFILTER" || exit 0
 
-python3 -I "$here/lib/disk-floor-match.py" "$COMMAND"
-case $? in
-  0) ;;
-  1) exit 0 ;;
-  *) pass_with "The disk-floor hook's matcher failed, so this command runs unguarded." ;;
+verdict=$(printf '%s' "$input" | python3 -I "$here/lib/disk-floor-match.py" --hook 2>/dev/null) \
+  || pass_with "The disk-floor hook's matcher failed, so this command runs unguarded."
+case "$verdict" in
+  skip) exit 0 ;;
+  compiles$'\t'*) CWD=${verdict#compiles$'\t'} ;;
+  error$'\t'*) pass_with "The disk-floor hook could not read its input (${verdict#error$'\t'}), so this command runs unguarded." ;;
+  *) pass_with "The disk-floor hook's matcher answered '$verdict', so this command runs unguarded." ;;
 esac
 
 [ -x "$here/disk-floor.sh" ] || pass_with "The disk-floor hook found no scripts/disk-floor.sh beside it, so this command runs unguarded."
