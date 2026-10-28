@@ -42,6 +42,8 @@ pub mod transcription;
 // product surface, so it ships. Until #167 it sat between the attribute below and the module that
 // attribute was written for (`bfa8d3a` inserted it there), and every release build lacked it.
 pub mod device_check;
+// Which devices a recording start opens, from the store at the moment of the start (#242).
+pub mod start_devices;
 // Capture-start measurement for the dictation question. Debug builds only — it
 // opens a microphone from a command and must never reach a release binary.
 // `command-reachability.test.mjs` holds the set of commands no shipped build registers.
@@ -90,7 +92,7 @@ pub use pipeline::{AudioPipelineManager};
 pub use stream::{AudioStreamManager};
 pub use recording_manager::{RecordingManager};
 pub use recording_commands::{
-    start_recording, start_recording_with_devices, stop_recording,
+    start_recording, stop_recording,
     is_recording, get_transcription_status, RecordingArgs, TranscriptionStatus, TranscriptUpdate
 };
 pub use recording_preferences::{

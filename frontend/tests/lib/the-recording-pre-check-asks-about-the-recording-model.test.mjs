@@ -75,11 +75,7 @@ async function drive(condition, path) {
     '@tauri-apps/api/event': { listen: async () => () => {} },
     '@/contexts/TranscriptContext': { useTranscripts: () => ({ clearTranscripts: () => {}, setMeetingTitle: () => {} }) },
     '@/components/Sidebar/SidebarProvider': { useSidebar: () => ({ setIsMeetingActive: () => {} }) },
-    '@/contexts/ConfigContext': { useConfig: () => ({ selectedDevices: { micDevice: null, systemDevice: null } }) },
     '@/contexts/RecordingStateContext': { useRecordingState: () => ({ setStatus: () => {}, status: 'idle' }), RecordingStatus },
-    '@/services/recordingService': {
-      recordingService: { startRecordingWithDevices: (mic, sys, title) => invoke('start_recording_with_devices_and_meeting', { mic, sys, title }) },
-    },
     '@/lib/recordingNotification': { showRecordingNotification: () => {} },
   });
 
