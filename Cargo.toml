@@ -4,6 +4,9 @@ members = [
     "frontend/src-tauri",
     "llama-helper"
 ]
+# vendor/pulseaudio is patched in below and is not a member: its tests, examples
+# and dev-dependencies are the upstream crate's, and nothing here runs them.
+exclude = ["vendor/pulseaudio"]
 
 # Shared workspace settings
 [workspace.package]
@@ -20,15 +23,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.32.0", features = ["full"] }
 
-# No [patch.crates-io] here on purpose. frontend/src-tauri/Cargo.toml carried
-# git patches for cpal and esaxx-rs, but cargo only reads [patch] from the
-# workspace root, so it warned and used the registry versions instead. Every
-# release to date therefore shipped registry cpal 0.15.3 and esaxx-rs 0.1.10.
-# They were not moved here when that was noticed: the esaxx-rs fork
-# (thewh1teagle/esaxx-rs, the dynamic-MSVC-link branch) has since been deleted
-# and 404s, so activating it breaks the build outright, and switching cpal to a
-# pinned git rev would swap the audio capture backend for one no shipped build
-# has ever run. Both patches are dropped rather than revived.
+# One patch, and only this one (ADR 0033, #243): the PulseAudio client cpal uses
+# sent an empty cookie when the home held none, PipeWire refused it, and the
+# CI-built AppImage recorded no system audio. vendor/pulseaudio is the published
+# 0.3.1, the version Cargo.lock pinned, with the cookie computed in memory;
+# vendor/pulseaudio/BACKCHANNEL.md has the crate's sha256 and the diff. It is a
+# path in this repository, not a git fork that can vanish, and it is not a
+# workspace member, so its own tests and dev-dependencies stay out.
+#
+# What this replaced: frontend/src-tauri/Cargo.toml carried git patches for cpal
+# and esaxx-rs, which cargo never read there (only [patch] at the root counts).
+# They were not revived: the esaxx-rs fork has since been deleted and 404s, and
+# a pinned cpal git rev would swap the capture backend for one no build had run.
+[patch.crates-io]
+pulseaudio = { path = "vendor/pulseaudio" }
 
 # Cargo.lock pins windows-core to 0.61.2 on purpose — do not `cargo update` it
 # away. cpal 0.18.1 declares `windows` and `windows-core` as two independent

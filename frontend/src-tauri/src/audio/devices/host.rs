@@ -1081,4 +1081,139 @@ pub(crate) mod tests {
         }
         assert_eq!(audio_host().id(), cpal::HostId::PulseAudio);
     }
+
+    /// #243, ADR 0033: built the way the application builds it, with no cookie anywhere the client
+    /// looks, the PulseAudio host authenticates, and nothing is written to the home it was given.
+    /// Until the vendored client computed the cookie in memory it sent an empty one, PipeWire
+    /// refused it (`server error: Invalid`), and the CI-built AppImage recorded no system audio.
+    /// `cargo test` installs no logger and `build_host` reports a refusal only through `log::warn!`,
+    /// so the test captures that line itself. Run by name, alone in its process.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a running PulseAudio or PipeWire server, and rewrites HOME; selected by name in gopnik.json stage 1"]
+    fn the_audio_host_authenticates_with_no_cookie_on_disk() {
+        struct Capture(std::sync::Mutex<Vec<String>>);
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                self.0.lock().unwrap().push(format!("{}: {}", record.level(), record.args()));
+            }
+            fn flush(&self) {}
+        }
+        static CAPTURE: Capture = Capture(std::sync::Mutex::new(Vec::new()));
+        let captured = log::set_logger(&CAPTURE).is_ok();
+        log::set_max_level(log::LevelFilter::Info);
+
+        let home = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        std::env::remove_var("PULSE_COOKIE");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("XDG_CONFIG_HOME", config.path());
+
+        use_the_real_sound_server();
+        let built = build_host(true);
+        let lines = CAPTURE.0.lock().unwrap().clone();
+        let said = if captured { lines.join("\n") } else { "(another logger was installed first; nothing captured)".into() };
+        assert_eq!(built.kind, Kind::Preferred, "the host fell back; build_host said:\n{said}");
+        assert_eq!(built.value.id(), cpal::HostId::PulseAudio, "build_host said:\n{said}");
+        for (name, dir) in [("HOME", home.path()), ("XDG_CONFIG_HOME", config.path())] {
+            let left: Vec<_> = walk(dir);
+            assert!(left.is_empty(), "the audio host wrote under {name}: {left:?}");
+        }
+    }
+
+    /// Every file under a directory, at any depth.
+    #[cfg(target_os = "linux")]
+    fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .flat_map(|e| if e.path().is_dir() { let mut v = walk(&e.path()); v.push(e.path()); v } else { vec![e.path()] })
+            .collect()
+    }
+
+    /// #243, ADR 0033: the cookie the PulseAudio client sends is always 256 bytes, computed in memory
+    /// by the vendored `pulseaudio` crate. PipeWire refuses any other length. The lookup takes the
+    /// variables' values, so these tests set no environment variable; the files are real.
+    #[cfg(target_os = "linux")]
+    mod pulse_cookie {
+        use pulseaudio::{cookie_from, COOKIE_LENGTH};
+        use std::ffi::OsStr;
+        use std::path::{Path, PathBuf};
+
+        fn file(dir: &Path, rel: &str, len: usize, byte: u8) -> PathBuf {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, (0..len).map(|i| byte.wrapping_add(i as u8)).collect::<Vec<u8>>()).unwrap();
+            p
+        }
+        fn zeros() -> Vec<u8> {
+            vec![0; COOKIE_LENGTH]
+        }
+        fn first(path: &Path) -> Vec<u8> {
+            std::fs::read(path).unwrap()[..COOKIE_LENGTH].to_vec()
+        }
+
+        #[test]
+        fn no_file_gives_256_zero_bytes() {
+            let home = tempfile::tempdir().unwrap();
+            let cookie = cookie_from(None, None, Some(home.path()));
+            assert_eq!(cookie.len(), 256);
+            assert_eq!(cookie, zeros());
+        }
+
+        #[test]
+        fn an_empty_file_gives_256_zero_bytes() {
+            let home = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 0, 7);
+            assert_eq!(cookie_from(None, None, Some(home.path())), zeros());
+        }
+
+        #[test]
+        fn a_255_byte_file_gives_256_zero_bytes() {
+            let home = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 255, 7);
+            assert_eq!(cookie_from(None, None, Some(home.path())), zeros());
+        }
+
+        #[test]
+        fn a_longer_file_gives_its_first_256_bytes() {
+            let home = tempfile::tempdir().unwrap();
+            let p = file(home.path(), ".config/pulse/cookie", 300, 7);
+            assert_eq!(cookie_from(None, None, Some(home.path())), first(&p));
+        }
+
+        #[test]
+        fn pulse_cookie_is_read_before_the_config_file() {
+            let home = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 256, 1);
+            let env = file(home.path(), "elsewhere/cookie", 256, 2);
+            assert_eq!(cookie_from(Some(env.as_os_str()), None, Some(home.path())), first(&env));
+        }
+
+        #[test]
+        fn xdg_config_home_replaces_the_home_config_file() {
+            let home = tempfile::tempdir().unwrap();
+            let config = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 256, 1);
+            let xdg = file(config.path(), "pulse/cookie", 256, 2);
+            assert_eq!(cookie_from(None, Some(config.path().as_os_str()), Some(home.path())), first(&xdg));
+        }
+
+        #[test]
+        fn an_empty_xdg_config_home_gives_the_home_config_file() {
+            let home = tempfile::tempdir().unwrap();
+            let p = file(home.path(), ".config/pulse/cookie", 256, 1);
+            assert_eq!(cookie_from(None, Some(OsStr::new("")), Some(home.path())), first(&p));
+        }
+
+        #[test]
+        fn the_home_pulse_cookie_is_read_last() {
+            let home = tempfile::tempdir().unwrap();
+            let p = file(home.path(), ".pulse-cookie", 256, 3);
+            assert_eq!(cookie_from(None, None, Some(home.path())), first(&p));
+        }
+    }
 }

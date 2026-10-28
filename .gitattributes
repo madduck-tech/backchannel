@@ -2,3 +2,7 @@
 # stores them, and checks them out, with LF line endings on every platform.
 .claude/skills/** text=auto eol=lf
 .agents/** text=auto eol=lf
+
+# The vendored crate is held to the published crate's sha256 (#243, ADR 0033), so git stores and checks
+# out its bytes as they are, whatever core.autocrlf says.
+vendor/** -text
