@@ -338,9 +338,11 @@ Steps that touch shared paths (`audio/devices/`, `recording_manager`, `pipeline`
 settings; from step 6 on, and possibly a step-1 precondition fix, since `devices/speakers.rs` is not
 cfg-gated) cannot
 be reached by Linux Stage 2 on the development Mac, and ADR 0022 makes that a named gap that blocks
-until the product owner or an issue accepts it. Whether the product owner accepts "Linux Stage 1
-only for merges into `exp/virtual-audio`; Linux Stage 2 owed at the merge into `main`" is an open
-question on #273. Until it is answered, every such pull request into the branch blocks.
+until the product owner or an issue accepts it. **The product owner accepted it on 2026-10-28**, in
+conversation, recorded on #273: Linux Stage 2 will be reworked separately, so pull requests into
+`exp/virtual-audio` run Linux Stage 1 only, and Linux Stage 2 is owed at the merge into `main`. Each
+such verdict still names the Linux surfaces it touched and cites this acceptance rather than implying
+a pass. The acceptance does not extend to the merge into `main`, whose gap is decided there.
 
 ## Merging into main
 
