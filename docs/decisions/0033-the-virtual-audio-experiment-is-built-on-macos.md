@@ -62,7 +62,11 @@ The product owner decided on 2026-10-28, in conversation, reviewing the two docu
    only, and latency under `systemd-run`), `.claude/rules/testing.md` (macOS verified by CI builds
    only), `.claude/rules/workflow.md` (the long-lived branch), `docs/development-workflow.md`
    (Branches, Platform code, step 4) and `docs/milestones/README.md` (ADR 0008 decision 5), with
-   `AGENTS.md` regenerated and a pointer left in ADRs 0005, 0008 and 0012. An agent on the experiment branch is not
+   `CONTRIBUTING.md` (the long-lived branch) and the `/work` command (branch base, platform reach,
+   `Refs #N` with a manual close), with `AGENTS.md` and the generated commands regenerated and a
+   pointer left in ADRs 0005, 0008 and 0012. The `gopnik.json` notes, which say every verification
+   run happens on Linux, are rewritten by plan step 2 through `gopnik-setup`, since that step is what
+   gives the experiment a macOS stage. An agent on the experiment branch is not
    told to treat macOS as blind or the branch as forbidden.
 7. **ADR 0008 decision 5 does not apply to the experiment's numbers** (A4, A5, A7, A9, A14). They are
    bridge and control latencies on the development Mac, not the copilot's end-to-end latency, and the

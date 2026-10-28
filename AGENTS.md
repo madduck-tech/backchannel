@@ -41,7 +41,7 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
 - One cycle for every change: issue with "what would settle it" → `gopnik-critic` on the issue →
   OpenDesign prototype variants approved by the maintainer when the UI is touched → implementation
   on a branch with the Stage 0 matrix posted first → `gopnik` gate with the verdict posted to the
-  issue → pull request `Closes #N` linking the verdict, merged by engineering on READY. No exceptions
+  issue → pull request `Closes #N` (`Refs #N`, closed by hand, into `exp/virtual-audio`; ADR 0033) linking the verdict, merged by engineering on READY. No exceptions
   for executable changes. Documentation-only changes go straight to `main`.
 - Everything in the repository, issues and pull requests is in English (ADR 0010). Conversation
   with the maintainer may be in any language.

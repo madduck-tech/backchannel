@@ -9,7 +9,8 @@ Backchannel is a meeting copilot that records, transcribes and summarises meetin
 
 ## Getting started
 
-1. Clone the repository. `main` is the only long-lived branch, and it always builds.
+1. Clone the repository. `main` is the only long-lived branch, and it always builds. The one
+   exception is `exp/virtual-audio`, the virtual audio experiment (ADR 0033).
    ```bash
    git clone https://github.com/madduck-tech/backchannel.git
    cd backchannel

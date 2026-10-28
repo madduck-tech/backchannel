@@ -58,7 +58,8 @@ record and `main` never disagrees with it.
    needs a live PipeWire session and so does not run in CI. Audio verdicts are no longer narrowed
    by default; where a verdict still cannot reach something — both channels at once, transcription
    quality, macOS and Windows — it names what is not proven.
-6. **Pull request** with `Closes #N` and a link to the verdict. On a `READY` verdict engineering
+6. **Pull request** with `Closes #N` and a link to the verdict (into `exp/virtual-audio`: `Refs #N`,
+   and the issue closed by hand after the merge; ADR 0033). On a `READY` verdict engineering
    merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by
    a later fix is not merged on.
 

@@ -57,7 +57,7 @@ the issues until tests exist. Do not edit generated `AGENTS.md` files; edit thei
 | Step | Work item and dependencies | Deliverable and exit observation |
 | --- | --- | --- |
 | 0 | Umbrella issue, ADR and worktree; no dependency | Umbrella issue #273 with macOS-only scope, deferred Linux/Windows, thresholds A1–A14 inlined, owed assertions and an accepted critic verdict. ADR 0033 and the rule exceptions merged to `main`. Experiment branch and worktree created from that `main` and recorded in #273. |
-| 1 | Loopback usefulness check; after step 0 | See "Step 1: loopback usefulness check". Precondition run first; then the product owner's calls; **go/no-go** recorded on #273. Third-party devices removed and the removal shown by census. No code merged anywhere. |
+| 1 | Loopback usefulness check; after step 0 | See "Step 1: loopback usefulness check". Precondition run first; then the product owner's calls; **go/no-go** recorded on #273. Third-party devices removed and the removal shown by census. No code merged except a precondition fix (see "Step 1"). |
 | 2 | macOS verification instrument and protocol freeze; after step 1 go | The Stage 2 that every later step needs, and the frozen protocol (see "macOS verification instrument"). Exit: one recorded run on the development Mac in which each oracle is shown red by a deliberate fault and green without it, and #273 carries the control table with its count, the rig and the matching rules. No product code. |
 | 3 | HAL plug-in and helper feasibility spike; after step 2 | Two public devices plus private bridge from a locally built plug-in; a launchd helper forwarding real bidirectional PCM; distinct markers recovered at an independent peer. First observations: whether `coreaudiod` loads the ad-hoc or self-signed plug-in, whether TCC keeps the helper's microphone grant across rebuilds, and on-demand opening from `StartIO`/`StopIO`. Install, restart and removal recorded. A1/A2/A14 preliminary, against the frozen protocol. |
 | 4 | Backend decision; after step 3 | New ADR: plug-in source (owned versus reused, licence), bridge transport, helper launch mechanism and code identity, clock/rate-conversion strategy, shared-state ownership. |
@@ -124,9 +124,12 @@ so they are recorded in `gopnik.json` and not guessed:
   input used for the latency baseline, where outgoing markers enter for A3 (a cabled loop into
   the physical microphone input, or a separate virtual input standing in for it, stated as
   such), and the headphones, microphone, speakers and Bluetooth headset used.
-- **Block stream for A3.** A continuous, sequence-numbered block stream covering the whole run
-  in both directions, matched exactly at the endpoint boundary (no codec there). Its N is the
-  number of blocks. Markers do not decide loss.
+- **Block stream for A3.** A continuous block stream covering the whole run in both directions,
+  each block carrying its sequence number in an encoding that survives rate conversion and an
+  analog loop. Matching is exact on sequence numbers, not on PCM. Its N is the number of blocks.
+  Markers do not decide loss. The block decoder is calibrated like the marker detector: zero
+  misses and zero false matches over recordings at least as long as the A3 run, or A3 is not
+  judged.
 - **Marker detector.** Generated timed PCM markers with a codec-tolerant detector, for timing.
   Before any threshold is judged, its timing error against a known inserted delay must have p95
   at most 5 ms, and it must show zero misses on a marker-only recording and zero false matches
@@ -139,6 +142,9 @@ so they are recorded in `gopnik.json` and not guessed:
 - **Shared reference for A5.** One generator emits paired markers into both directions with a
   logged host-time offset; alignment is the recorded offset minus the emitted offset. Its own
   error must have p95 at most 5 ms, shown against a known offset.
+- **A14 on the output side.** There is no OS indicator for an output in use, and the client writes
+  rather than reads; step 2 defines the oracle (for example a physical loop from the output) and
+  posts it with the rest.
 - **Positive sentinels.** Every absence-based check (A9 mute, A14 closed microphone, A6
   isolation) runs with a signal shown present in the same run before the absence is read.
 - **Control table.** Every condition in the table under "Verification protocol and negative
@@ -219,7 +225,7 @@ endpoint boundary; network-peer delivery is reported separately.
 | Requirement family | Required challenge to the oracle |
 | --- | --- |
 | A1/A11 lifecycle | Seed an owned stale/duplicate device or launchd job and interrupt setup; ensure census/repair detects it without touching an unrelated sentinel device or OS defaults. |
-| A2/A3 duplex | Disconnect each direction independently and omit/duplicate a known marker; verify the test identifies which direction and interval failed. |
+| A2/A3 duplex | Disconnect each direction independently. Drop one block and, separately, duplicate one block, in each direction and in each recorded track; the oracle names the direction, the track and the sequence number. |
 | A4/A5 timing | Add known delay and clock-rate skew independently; show each corresponding threshold goes red. |
 | A6 isolation | Send a distinct unrelated marker to another output, then intentionally send it into the proxy. Keep the call sentinel present in both runs. |
 | A7 switching | Remove old and new devices in separate runs, fail the proposed switch, change the virtual device's sample rate from a client, and attempt a self/derived route; assert applied selection, peer audio and lack of silent fallback. |
@@ -254,7 +260,7 @@ accepted gaps. No generic green verdict substitutes for A1–A14.
 
 | Outcome | Action on #273 |
 | --- | --- |
-| No-go at step 1 | Decision and reasons commented; closed as a negative result. No driver work starts. The branch carries no product code and is deleted; the step 1 report goes to `main` as documentation. |
+| No-go at step 1 | Decision and reasons commented; closed as a negative result. No driver work starts. A precondition fix merged into the branch is first proposed to `main` as its own pull request, or its abandonment is stated on #273; then the branch is deleted and the step 1 report goes to `main` as documentation. |
 | Plug-in or helper refused at step 3 (`coreaudiod` or TCC without a Developer ID) | Observation commented; the product owner decides stop (closed as negative) or revise (a new product decision, for example a Developer ID, recorded in a new ADR before work resumes). |
 | A criterion fails at step 10 | Report linked; the product owner decides revise (named criteria reopened as step issues, #273 stays open) or stop (closed as negative, branch not merged). |
 | Continue at step 11 | The merge pull request into `main` says `Closes #273` and links the qualification report and its verdict. |
@@ -262,47 +268,69 @@ accepted gaps. No generic green verdict substitutes for A1–A14.
 ## Owed assertions
 
 Instructions that remove, forbid or hide something ship with a test that fails while the thing is
-present (ADR 0023). **Selection rule:** every sentence in the specification above "Proposed
-experimental acceptance criteria" matching `\b([Nn]ever|must not|[Dd]o not|not offered)\b`
-(`grep -nE` on the specification at this revision), plus the forbidding sentences in that range
-that the pattern misses, found by reading: "is off", "does not start recording", "retains no
-conversation history", "opens … only while". Test-method sentences ("do not quietly change system
-defaults to pass") are excluded; so is "do not use the existing recording manager as the owner",
-an architecture instruction whose observable consequence is row 15.
+present (ADR 0023).
 
-| # | Instruction (specification section) | Paid by |
+**Selection rule.** Over the specification up to "Proposed experimental acceptance criteria",
+`grep -nE '\b([Nn]ever|must not|must neither|[Dd]o(es)? not|[Nn]o|not offered|[Ee]xclude[sd]?|[Rr]eject|insufficient|without|only|is off)\b'`
+returns 58 lines at this revision. Every line is classified below: a forbidding instruction about
+the product's behaviour becomes a row; anything else is excluded with its reason.
+
+Excluded lines, by reason:
+- **Document status, hypothesis, or decisions about the project rather than the product:** 4, 14,
+  15, 22, 25, 34, 35, 36, 37, 41, 44, 65.
+- **Scope exclusions — features not built, so there is nothing to be present:** 58 except
+  "automatic recording" (call detection, platform APIs, new AEC, voice effects, per-participant
+  separation).
+- **Rationale or facts, not instructions:** 112, 114, 125, 137, 140, 145, 146, 220, 271.
+- **Positive requirements, held by a criterion rather than an absence test:** 190 (settings
+  without a tray, A12), 205 (routing without STT, A8), 241 (capture adapter attaches only during
+  recording; its observable consequences are rows 20 and 29), 260 (same instruction as row 3).
+- **Architecture, whose observable consequence is a row:** 127 (the plug-in holds no routing
+  logic → row 10), 233 (recording manager not the owner of forwarding → row 19).
+
+| # | Instruction (spec line at this revision) | Paid by |
 | --- | --- | --- |
-| 1 | No silent fallback of a proxy recording to passive capture or another microphone (Scope) | 8 (A12) |
-| 2 | Streaming models not offered in proxy mode (Scope; data contracts) | 8, 9 (A12) |
-| 3 | Private bridge side absent from client device pickers (Devices and routes) | 3, 6 (A1) |
-| 4 | OTHERS never routed into the virtual microphone (Devices and routes) | 6 (A6) |
-| 5 | Local microphone monitoring off (Devices and routes) | 6 |
-| 6 | Directions never combined before the split-transcription boundary (Devices and routes) | 8 (A13) |
-| 7 | Process tap not started in proxy mode (Devices and routes) | 8 (Stage 1) |
-| 8 | Physical microphone and output closed while no client uses the endpoint (on demand) | 6 (A14) |
-| 9 | Public devices do not disappear when the helper is absent (Platform architecture) | 6 (A8) |
-| 10 | Install, upgrade and removal commands never run silently (Platform architecture) | 9 |
-| 11 | `coreaudiod` never restarted while an endpoint is in use (Platform architecture) | 6, 9 (A11) |
-| 12 | Setup never described as silent first-run registration (First run) | 9 |
-| 13 | Enabling routing does not start recording (First run) | 9 |
-| 14 | OS defaults, communication defaults and other applications' settings unchanged (First run) | 6, 9 (A1) |
-| 15 | Removal never removes third-party devices or recordings (First run) | 6 (A11) |
-| 16 | No silent choice of a new microphone or redirect to laptop speakers (Daily use) | 7 (A7) |
-| 17 | Starting or stopping a recording never creates or tears down the call route (Routing, recording) | 8 (A9) |
-| 18 | Complete capture never reported after loss (Routing, recording) | 8 (A10) |
-| 19 | Existing storage keys not renamed (Data contracts) | 6 (Stage 1) |
-| 20 | Forwarding callbacks never wait for STT, disk, IPC or UI (Data contracts) | 6, 8 (A8) |
-| 21 | Recording-disabled operation retains no conversation history (Data contracts) | 8 |
-| 22 | A client's sample-rate change never silently mis-clocks (Data contracts) | 7 (A7) |
-| 23 | Output volume never removes incoming speech from the recording tap (Data contracts) | 8 |
+| 1 | No silent fallback of a proxy recording to passive capture or another microphone (56) | 7, 8 (A7, A12) |
+| 2 | No automatic recording (58) | 9 (A9) |
+| 3 | Streaming models not offered in proxy mode (63, 260) | 8, 9 (A12) |
+| 4 | Private bridge side absent from client device pickers (76) | 3, 6 (A1) |
+| 5 | OTHERS never routed into the virtual microphone (96) | 6 (A6) |
+| 6 | Local microphone monitoring off (96) | 6 |
+| 7 | Directions never combined before the split-transcription boundary (97) | 8 (A13) |
+| 8 | Process tap not combined with proxy capture (101) | 8 (Stage 1) |
+| 9 | Physical devices open only while a client uses the endpoint (107) | 6 (A14) |
+| 10 | Public devices do not disappear when the helper is absent (128) | 6 (A8) |
+| 11 | Install, upgrade and removal commands never run silently (142) | 9 |
+| 12 | `coreaudiod` never restarted while an endpoint is in use (143) | 6, 9 (A11) |
+| 13 | Enabling routing does not start recording (160) | 9 |
+| 14 | Setup never described as silent first-run registration (165) | 9 |
+| 15 | Backchannel endpoints and known self-referential routes excluded from physical selection (169) | 6, 9 (A7) |
+| 16 | OS defaults, communication defaults and other applications' settings unchanged (171) | 6, 9 (A1) |
+| 17 | Removal never removes third-party devices or recordings (180) | 6 (A11) |
+| 18 | No silent choice of a new microphone or redirect to laptop speakers (194) | 7 (A7) |
+| 19 | Starting or stopping a recording never creates or tears down the call route (206) | 8 (A9) |
+| 20 | Resume never replays the pause interval (207–208) | 8 (A9) |
+| 21 | Recording start rejected if either capture is unavailable (223) | 8 (A12) |
+| 22 | Complete capture never reported after loss (227) | 8 (A10) |
+| 23 | No network listener on the routing service (239) | 6 (Stage 1) |
+| 24 | A successful request alone never marks installation, switching or delivery complete (244) | 6, 9 (A7, A12) |
+| 25 | Existing storage keys not renamed (247) | 6 (Stage 1) |
+| 26 | A matching display name alone never resolves a stored identity (248) | 7 (A7) |
+| 27 | Forwarding callbacks never wait for STT, disk, IPC or UI (250) | 6, 8 (A8) |
+| 28 | Slow STT neither stalls the call nor silently trims history (251) | 8 (A8, A10) |
+| 29 | Recording-disabled operation retains no conversation history (254) | 8 |
+| 30 | A client's sample-rate change never silently mis-clocks (267) | 7 (A7) |
+| 31 | Output volume never removes incoming speech from the recording tap (268) | 8 |
 
-Twenty-three by that rule. Round 2 of the critic on #273 found nine beyond the thirteen of the
-previous count; the rule above, not a reading, is what this count answers to.
+Thirty-one rows from 58 classified lines; a script comparing the two sets found none unclassified. Rows 15 and 1's mapping were lost between the first and
+second counts and restored after the critic's round 3; the line numbers above are what a recount is
+checked against, and they move with any edit above line 275 of the specification.
 
 ## Linux surfaces on the experiment branch
 
 Steps that touch shared paths (`audio/devices/`, `recording_manager`, `pipeline`, `transcription`,
-settings; from step 6 on) cannot
+settings; from step 6 on, and possibly a step-1 precondition fix, since `devices/speakers.rs` is not
+cfg-gated) cannot
 be reached by Linux Stage 2 on the development Mac, and ADR 0022 makes that a named gap that blocks
 until the product owner or an issue accepts it. Whether the product owner accepts "Linux Stage 1
 only for merges into `exp/virtual-audio`; Linux Stage 2 owed at the merge into `main`" is an open
