@@ -41,3 +41,6 @@ Decisions that govern this code: ADR 0002 (STT for Russian), 0003 (two STT strea
   repository — 1.96 reported 0 findings where CI's 1.98 reported 35, on the same tree.
 - Latency work is measured on the emulated minimum machine
   (`systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`) with the six timestamps from ADR 0008.
+  Exception, ADR 0033 decision 7: the virtual audio experiment's bridge and control latencies are
+  taken on the development Mac without the limit, name the machine, and are never cited for an
+  ADR 0008 criterion.

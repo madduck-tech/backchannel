@@ -33,3 +33,7 @@ from end of phrase to overlay:
    first token, overlay painted. Event log; Milestone 0 report with p50/p95.
 5. **Emulating the minimum machine** on the development machine (16 cores, 30 GB):
    `systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`. Numbers without the limit are not accepted.
+
+   > **Set aside for the virtual audio experiment only by
+   > [ADR 0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) (2026-10-28).** Its bridge and control latencies are taken on the
+   > development Mac without the limit, say so, and are never cited for a criterion of this ADR.

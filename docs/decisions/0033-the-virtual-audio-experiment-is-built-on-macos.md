@@ -1,10 +1,10 @@
 # 0033 — The virtual audio experiment is built on macOS, signed locally, on a branch of its own
 
 Date: 2026-10-28
-Status: accepted. Overrides, for the virtual audio experiment only, decision 5 of
-[ADR 0005](0005-platform-support-tiers.md), decision 5 of [ADR 0008](0008-latency-targets.md) and the
-"`main` is the only long-lived branch" convention of `docs/development-workflow.md`. None of them is
-changed for any other work.
+Status: accepted. Supersedes, for the virtual audio experiment only, decision 5 of
+[ADR 0005](0005-platform-support-tiers.md), decision 5 of [ADR 0008](0008-latency-targets.md) and
+decision 1 of [ADR 0012](0012-development-workflow.md) ("`main` is the only long-lived branch", as
+`docs/development-workflow.md` repeats it). None of them is changed for any other work.
 
 ## Context
 
@@ -55,13 +55,14 @@ The product owner decided on 2026-10-28, in conversation, reviewing the two docu
    reached them; an unreached surface is a named gap that blocks under ADR 0022 until the product owner
    or an issue accepts it. On stop or revise, the branch is not merged and its milestone report and
    ADRs go to `main` as documentation.
-5. **The experiment's Stage 2 is a macOS instrument built first** (plan step 1), recorded in
+5. **The experiment's Stage 2 is a macOS instrument built first** (plan step 2), recorded in
    `gopnik.json` through `gopnik-setup`, with `scripts/environment-record.sh` extended by the macOS keys
    that ADR 0019 requires a verdict to carry.
-6. **The rules say so**, in the same commit as this ADR: `.claude/rules/platform-code.md`,
-   `.claude/rules/testing.md` (macOS verified by CI builds only), `.claude/rules/workflow.md` (the
-   long-lived branch), `docs/development-workflow.md` (Branches, Platform code, step 4), with
-   `AGENTS.md` regenerated and a pointer left in ADR 0005. An agent on the experiment branch is not
+6. **The rules say so**, in the same change as this ADR: `.claude/rules/platform-code.md` (Linux
+   only, and latency under `systemd-run`), `.claude/rules/testing.md` (macOS verified by CI builds
+   only), `.claude/rules/workflow.md` (the long-lived branch), `docs/development-workflow.md`
+   (Branches, Platform code, step 4) and `docs/milestones/README.md` (ADR 0008 decision 5), with
+   `AGENTS.md` regenerated and a pointer left in ADRs 0005, 0008 and 0012. An agent on the experiment branch is not
    told to treat macOS as blind or the branch as forbidden.
 7. **ADR 0008 decision 5 does not apply to the experiment's numbers** (A4, A5, A7, A9, A14). They are
    bridge and control latencies on the development Mac, not the copilot's end-to-end latency, and the

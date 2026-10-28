@@ -19,8 +19,10 @@ Success means a supported calling application can use both endpoints, a real con
 continues while Backchannel records and transcribes it, and the failure and latency criteria
 below hold. Failure of these criteria is a valid experimental result.
 
-The usefulness half of the hypothesis is tested first and cheaply, with existing third-party
-loopback devices and no Backchannel driver (plan step 1). The dependability half needs the
+A first, cheap check uses existing third-party loopback devices and no Backchannel driver
+(plan step 1). It asks the product owner one question — *is the explicit route worth its setup
+cost compared with passive capture?* — and its answer gates the driver work. It is one person's
+judgment and does not establish usefulness for anyone else. The dependability half needs the
 owned driver and is tested after that check returns go.
 
 ## Scope and platform boundary
@@ -280,18 +282,18 @@ Changing them later requires an explicit scope decision.
 | --- | --- |
 | A1 | Fresh supported session exposes exactly the two owned public endpoint roles; repeat launch/repair produces no duplicates and does not change OS defaults. |
 | A2 | A real calling application enumerates and uses both endpoints; a second physical or independently isolated peer sends and receives distinct speech markers. |
-| A3 | A healthy 60-minute wired-headphone baseline includes silence, alternation and simultaneous speech. **Bridge oracle:** independent references at the endpoint boundary (a local test client on both virtual endpoints, and the physical devices) find zero missing or duplicated expected marker blocks in both recorded tracks and in both forwarded directions. Any unexpected gap fails this baseline even when reported. **Peer oracle:** delivery to a network peer is reported with its loss rate, not held to zero, because codec concealment and packet loss are outside the bridge. Exclude explicitly scheduled pause/mute intervals from the corresponding oracle, and count outgoing markers from A14's first physical sample, not from the client's start. Switching and fault-injection runs are separate. |
+| A3 | A healthy 60-minute wired-headphone baseline includes silence, alternation and simultaneous speech. **Bridge oracle:** a separate 60-minute run in which test clients take the calling application's place on both virtual endpoints and a continuous, sequence-numbered block stream covers 100% of the run in both directions; exact matching at the endpoint boundary and at the physical devices finds zero missing or duplicated blocks in both forwarded directions and both recorded tracks. Any unexpected gap fails this baseline even when reported. Timed markers in the real-call run serve A4/A5 timing, not loss. **Peer oracle:** delivery to a network peer is reported with its loss rate, not held to zero, because codec concealment and packet loss are outside the bridge. Exclude explicitly scheduled pause/mute intervals from the corresponding oracle, and start the outgoing window at the first block the independent test client detects, not at a time the product reports. Switching and fault-injection runs are separate. |
 | A4 | Incremental local routing latency against a direct-device baseline has p95 at most 30 ms per direction; end-to-end peer latency is reported separately, not attributed entirely to the bridge. |
-| A5 | Recorded markers in YOU/OTHERS have p95 alignment error at most 50 ms after one hour, measured against a shared reference; no cumulative unreported drift. |
+| A5 | Over a one-hour run, recorded markers in YOU/OTHERS have alignment error p95 at most 50 ms over the hour **and** at most 50 ms maximum over the final 5 minutes, against a shared reference whose own error is p95 at most 5 ms; no cumulative unreported drift. |
 | A6 | An unrelated app sent to a different output is absent from OTHERS while a call marker is present in the same run. Routing that app to Backchannel Speakers makes it present (positive control). |
 | A7 | Physical-device switching succeeds with the same public identities and at most 1 s interruption; failed switching retains the old route where still available. Unplugging never silently selects another mic or speakers. A client changing the virtual device's sample rate is followed or refused visibly. |
 | A8 | UI termination and STT crash/load do not interrupt forwarding; deliberately killing the routing helper leaves both public devices present and silent, and produces a measured, visible failure/recovery result. No automatic bypass is promised. |
-| A9 | Start/stop/pause recording preserves forwarding; paused/stopped intervals appear in neither audio artifacts nor resumed STT. Backchannel mute meets the 100 ms p95 request-to-applied target and emits zeros from the next owned buffer, using applied sample timestamps; independently, the first all-zero buffer read by a test client on Backchannel Microphone follows the request by at most 150 ms p95, so the product's own timestamp is not the only evidence. Residual client/peer buffering is measured separately. Call-app mute behavior matches the documented boundary. |
+| A9 | Start/stop/pause recording preserves forwarding; paused/stopped intervals appear in neither audio artifacts nor resumed STT. Backchannel mute meets the 100 ms p95 request-to-applied target and emits zeros from the next owned buffer, using applied sample timestamps; independently, with a continuous tone injected into the physical microphone path and shown present at a test client on Backchannel Microphone before each request, the first all-zero buffer that client reads follows the request by at most 150 ms p95, so neither the product's own timestamp nor a silent microphone can pass it. Residual client/peer buffering is measured separately. Call-app mute behavior matches the documented boundary. |
 | A10 | Denied permission, suspend/resume, `coreaudiod` restart, writer failure and capture-queue exhaustion are detected, with route/recording states and gap boundaries matching independent evidence. |
 | A11 | Normal disable, interrupted setup, repeated repair, upgrade and removal preserve unrelated audio state and leave no duplicate/orphaned owned devices, launchd jobs or processes. |
 | A12 | A non-default microphone and non-default output work; proxy mode offers no model that would sum the split transcript. Tray/settings agree after success, error and restart. |
 | A13 | With a named compatible model and fixed distinct speech fixtures, both directions produce the expected phrases with correct YOU/OTHERS labels, including overlapping speech. Scheduled stopped/paused markers are absent. Freeze phrase-matching rules before the run; PCM fidelity is still established independently by A3. Suppressing decoder output or swapping labels must fail this check. |
-| A14 | With no client on Backchannel Microphone the physical microphone is closed (the OS microphone-in-use state agrees). A client starting I/O opens it, with start-to-first-physical-sample p95 at most 500 ms on a wired microphone (Bluetooth reported, not held); the last client stopping closes it. Same for the physical output and Backchannel Speakers. |
+| A14 | With no client on Backchannel Microphone the physical microphone is closed (the OS microphone-in-use state agrees). A client starting I/O opens it: with a tone in the physical microphone path, the time from the client's start to the first tone sample that client reads is p95 at most 500 ms over at least 30 starts on a wired microphone (Bluetooth reported, not held); the last client stopping closes it. Same for the physical output and Backchannel Speakers. |
 
 Application compatibility is a measured matrix, not a universal claim. Record exact OS,
 audio server, app/browser version, device/transport, permission state and endpoint behavior.
@@ -310,8 +312,9 @@ directly.
 
 Two decision points:
 
-- **After the loopback check (plan step 1):** go if the maintainer finds the explicit-route
-  setup useful with borrowed devices; stop otherwise, before any driver work.
+- **After the loopback check (plan step 1):** go if the product owner answers yes to *is the
+  explicit route worth its setup cost compared with passive capture?*; stop otherwise, before
+  any driver work.
 - **After qualification:** continue — merge the experiment branch into `main` — only if
   macOS meets A1–A14 and the maintainer finds setup and switching useful. Revise if benefits
   hold but measured reliability/latency fails. Stop or narrow the approach if compatible
@@ -348,4 +351,5 @@ check, not as a source to copy into this repository without a licence decision).
 Before a backend is chosen, resolve reuse versus implementation, dependency licences,
 bridge transport, helper launch mechanism, TCC identity, ownership across multiple app
 instances, crash recovery and runtime-test access. Document lasting choices in a new ADR;
-this draft does not supersede the accepted AEC, transcription or workflow decisions.
+this draft does not supersede the accepted AEC, transcription or workflow decisions, except as
+ADR 0033 records.

@@ -20,6 +20,10 @@ the run was under ADR 0008 decision 5's limit.
 
 ## ADR 0008 decision 5 is not optional
 
+One exception, ADR 0033 decision 7: the virtual audio experiment's report takes its bridge and
+control latencies on the development Mac without the limit, names the machine, and cites none of
+them for an ADR 0008 criterion.
+
 > *"Emulating the minimum machine on the development machine (16 cores, 30 GB):
 > `systemd-run --user -p CPUQuota=400% -p MemoryMax=8G`. **Numbers without the limit are not
 > accepted.**"*
