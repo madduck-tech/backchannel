@@ -1,4 +1,6 @@
 {
   "comment": "Every file under .claude/ that no generated file carries to Codex and opencode, and why. A file that a generated file does carry must not be listed, and a file under .claude/ that is neither carried nor listed is an error: frontend/tests/lib/agent-files-are-generated.test.mjs holds both. (#233, #251)",
-  "files": {}
+  "files": {
+    ".claude/settings.json": "Claude Code's own settings: the disk-floor PreToolUse hook on Bash (#259). Codex and opencode read no such file and have no hook that does the same, so a build run in either outside the gate meets the floor only in the gate."
+  }
 }
