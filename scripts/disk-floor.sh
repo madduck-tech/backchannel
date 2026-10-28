@@ -11,6 +11,9 @@
 #   disk-floor.sh [--profiles]   sweep (scripts/disk-sweep.sh), then check: on failure, what is taking the space
 #   disk-floor.sh --brief    one line, for the prefix in front of a cargo entry
 #
+# Exits 0 above the floor, 1 below it, and 3 when a free space cannot be read (#259), so that a
+# caller can tell "no room" from "cannot tell".
+#
 # Inputs, so tests can point it at fixtures: BC_DISK_FLOOR_GB (the floor, in decimal GB; default in
 # scripts/lib/disk-floor-default.sh) and
 # BC_DISK_FLOOR_LIST (the directory whose largest entries a failure names; default /tmp). It is not
@@ -50,7 +53,10 @@ TOP=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 # cap. --profiles adds the whole-profile step, which only Stage 1 entry 2 passes, before any build.
 # --brief never sweeps: it is the prefix of the cargo entries, in the middle of a gate run.
 if [ -z "$BRIEF" ]; then
-  "$(dirname -- "${BASH_SOURCE[0]}")/disk-sweep.sh" ${PROFILES:+--profiles} || say "the sweep failed (exit $?); measuring anyway"
+  # Exit 4 is the sweep finding another sweep running, waiting for it, and not sweeping again.
+  "$(dirname -- "${BASH_SOURCE[0]}")/disk-sweep.sh" ${PROFILES:+--profiles}
+  sweep=$?
+  case "$sweep" in 0|4) ;; *) say "the sweep failed (exit $sweep); measuring anyway" ;; esac
 fi
 PATHS=("/tmp" "$TOP/target" "$(recording_folder)")
 # Every seed cache, or ~/.cache itself while there is none.
@@ -63,7 +69,7 @@ for p in "${PATHS[@]}"; do
   # Fail closed: a free space that cannot be read is not enough.
   if ! [ "$avail" -eq "$avail" ] 2>/dev/null; then
     say "cannot read the free space of $p (checked at $e); refusing rather than assuming"
-    exit 1
+    exit 3
   fi
   if [ "$avail" -lt "$FLOOR" ]; then short="$short $p"; worst="$p has $((avail / 1000000000)) GB free"; fi
 done

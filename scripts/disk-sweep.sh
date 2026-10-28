@@ -6,7 +6,7 @@
 # (13 of 18 registered, removed by hand) and Cargo's target/ directories (29 GiB and 19 GiB), which
 # Cargo never prunes.
 #
-#   disk-sweep.sh [--dry-run] [--profiles]
+#   disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>]
 #
 # 1. A registered worktree of this repository is removed when it is done: not the main worktree, not
 #    locked, not holding $CLAUDE_PROJECT_DIR, its HEAD a commit reachable from the local origin/main,
@@ -22,15 +22,26 @@
 #    works in or holds open: a test binary `cargo test` runs, or a bundler, holds no Cargo lock.
 #
 # Every removal is printed with its size. --dry-run prints and removes nothing.
+#
+# --keep <path> keeps the worktree holding <path>, as $CLAUDE_PROJECT_DIR's is kept; --repo <dir>
+# acts on the repository holding <dir> rather than the working directory's (the disk-floor hook,
+# #259, runs in a session's cwd). A real run holds an exclusive lock on
+# ${XDG_STATE_HOME:-$HOME/.local/state}/backchannel/disk-sweep.lock, so the gate's sweep and a hook's
+# in another session never run at once. One that finds it held waits, then exits 4 without sweeping:
+# the other run has just swept, and the caller measures again.
 set -uo pipefail
 
-DRY=""; PROFILES=""
-for a in "$@"; do
-  case "$a" in
+DRY=""; PROFILES=""; KEEP=""; REPO=${BC_SWEEP_REPO:-.}
+usage() { echo "usage: disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>]" >&2; exit 2; }
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY=1 ;;
     --profiles) PROFILES=1 ;;
-    *) echo "usage: disk-sweep.sh [--dry-run] [--profiles]" >&2; exit 2 ;;
+    --keep) [ $# -ge 2 ] || usage; KEEP=$2; shift ;;
+    --repo) [ $# -ge 2 ] || usage; REPO=$2; shift ;;
+    *) usage ;;
   esac
+  shift
 done
 say() { printf 'disk-sweep: %s\n' "$*" >&2; }
 here=$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -44,11 +55,22 @@ LOCKS=(.cargo-lock .cargo-build-lock .cargo-artifact-lock)
 verb=$([ -n "$DRY" ] && echo "would remove" || echo "removed")
 size_of() { du -sxh -- "$1" 2>/dev/null | cut -f1; }
 
-# The repository to act on: the one holding the working directory, or BC_SWEEP_REPO. Every repository-
-# level command goes through it, so the sweep can run from outside every worktree.
-REPO=${BC_SWEEP_REPO:-.}
+# The repository to act on: the one holding the working directory, or --repo / BC_SWEEP_REPO. Every
+# repository-level command goes through it, so the sweep can run from outside every worktree.
 g() { git -C "$REPO" "$@"; }
 g rev-parse --git-dir >/dev/null 2>&1 || { say "not inside a checkout of this repository"; exit 1; }
+
+if [ -z "$DRY" ]; then
+  LOCKDIR=${XDG_STATE_HOME:-$HOME/.local/state}/backchannel
+  mkdir -p "$LOCKDIR" || { say "cannot create $LOCKDIR for the sweep's lock"; exit 1; }
+  exec {SWEEP_LOCK}>"$LOCKDIR/disk-sweep.lock" || { say "cannot open the sweep's lock"; exit 1; }
+  if ! flock -n "$SWEEP_LOCK"; then
+    say "another sweep is running; waiting for it"
+    flock "$SWEEP_LOCK"
+    say "it has finished; not sweeping again, so measure again"
+    exit 4
+  fi
+fi
 
 # ---- 1. worktrees that are done --------------------------------------------------------------------
 
@@ -71,6 +93,9 @@ why_kept() {
   local w=$1 line path pid cwd head lost st
   if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     case "$(readlink -f -- "$CLAUDE_PROJECT_DIR")/" in "$w"/*) echo "it holds \$CLAUDE_PROJECT_DIR"; return ;; esac
+  fi
+  if [ -n "$KEEP" ]; then
+    case "$(readlink -f -- "$KEEP")/" in "$w"/*) echo "it holds $KEEP, which the caller keeps"; return ;; esac
   fi
   g rev-parse -q --verify refs/remotes/origin/main >/dev/null || { echo "there is no local origin/main to judge it by"; return; }
   head=$(git -C "$w" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || { echo "its HEAD is no commit"; return; }

@@ -78,7 +78,7 @@ test('the floor at 0 passes, and lists nothing', () => {
 test('above the free space it fails, and says what is taking the space and what is safe to delete', () => {
   const fx = checkout('raised');
   const r = floor(fx, RAISED);
-  assert.notEqual(r.status, 0, `a floor above the free space passed:\n${r.out}`);
+  assert.equal(r.status, 1, `a floor above the free space did not exit 1:\n${r.out}`);
   assert.match(r.out, /the-largest-leftover/, 'the failure does not name the largest entry under the listed directory');
   assert.match(r.out, new RegExp(`\\d+\\.\\d GB  ${fs.realpathSync(path.join(fx.work, 'target'))}\\n`), "the failure does not size the checkout's target/");
   assert.match(r.out, /safe to delete, at the cost of a slower next build: target\/\*\/incremental, target\/release, and a shared worktree target\//);
@@ -86,7 +86,7 @@ test('above the free space it fails, and says what is taking the space and what 
 
 test('--brief fails in one line, with no listing', () => {
   const r = floor(checkout('brief'), RAISED, ['--brief']);
-  assert.notEqual(r.status, 0, `--brief passed above the free space:\n${r.out}`);
+  assert.equal(r.status, 1, `--brief above the free space did not exit 1:\n${r.out}`);
   assert.equal(r.out.trimEnd().split('\n').length, 1, r.out);
   assert.doesNotMatch(r.out, /largest|safe to delete/);
 });
@@ -100,7 +100,7 @@ test('the recording folder is a filesystem of its own', () => {
 
 test('a free space it cannot read is not enough', () => {
   const r = floor(checkout('blind'), { PATH: `${shimmed(['df'])}:${process.env.PATH}`, SHIM_DF: 'none' });
-  assert.notEqual(r.status, 0, `df printed nothing and the floor passed:\n${r.out}`);
+  assert.equal(r.status, 3, `df printed nothing and the floor did not exit 3:\n${r.out}`);
   assert.match(r.out, /cannot read the free space/);
 });
 
