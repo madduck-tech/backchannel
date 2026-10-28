@@ -9,14 +9,20 @@
 // clone runs `pnpm run prepare` once (CONTRIBUTING.md).
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const say = (m) => console.log(`install-git-hooks: ${m}`);
 const git = (...a) => spawnSync('git', a, { encoding: 'utf8' });
+// This repository's root: the work tree must be this one, not one this tree was unpacked into.
+const mine = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
 
 try {
   const inside = git('rev-parse', '--is-inside-work-tree');
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') {
     say('not in a git work tree; nothing to install');
+  } else if (fs.realpathSync(git('rev-parse', '--show-toplevel').stdout.trim()) !== mine) {
+    say(`not this repository's work tree (git's is ${git('rev-parse', '--show-toplevel').stdout.trim()}); nothing to install`);
   } else {
     const current = git('config', '--get', 'core.hooksPath').stdout.trim();
     // `--git-path hooks` is right in a linked worktree, where .git is a file.

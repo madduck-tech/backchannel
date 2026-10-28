@@ -9,7 +9,7 @@ Measured on 2026-10-28 on #271's branch, macOS (Darwin 25.6.0), with Claude Code
 
 **The instruments needed no model**, except for `AGENTS.local.md`:
 - Every one ran under `env -i`, with empty `HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and XDG directories, and no credentials.
-- **Claude Code:** `claude -p hi`, sending to a local stub that records each request body (`ANTHROPIC_BASE_URL`, a dummy key). One run sends six bodies, and every count below is per body.
+- **Claude Code:** `claude -p hi`, sending to a local stub that records each request body (`ANTHROPIC_BASE_URL`, a dummy key). Against this stub, which answers every request with an error, one run sent six bodies, and every count below is per body; a stub that answers differently sees fewer.
 - **Codex:** `codex debug prompt-input hi`.
 - **opencode:** two instruments, both against an OpenAI-compatible stub provider declared in the profile's config.
   - `opencode run --standalone`. One of its two attempts on the unmutated fixture hung with no request, and was recorded. The second ran.

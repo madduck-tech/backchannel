@@ -26,8 +26,11 @@ const SOURCES = ['AGENTS.md', '.agents', GENERATOR, LIST];
 const say = (m) => console.error(`pre-commit: ${m}`);
 const git = (args, opts = {}) => execFileSync('git', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...opts });
 const tryGit = (args) => { try { return git(args); } catch { return null; } };
+// A git blob id of the bytes as git would store them: CRLF folded only for text, as text=auto does.
+// Hashing a UTF-8 decoding instead never matched a binary file's real id (#271's gate adversary).
 const blob = (buf) => {
-  const body = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+  const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf, 'utf8');
+  const body = raw.includes(0) ? raw : Buffer.from(raw.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
   return crypto.createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
 };
 // path -> blob id, from `git ls-files -s -z` or `git ls-tree -r -z`.
@@ -44,7 +47,13 @@ function refuse(lines) {
 const top = git(['rev-parse', '--show-toplevel']).trim();
 process.chdir(top);
 const staged = blobs(git(['ls-files', '-s', '-z']), 1);
-if (!staged.has(GENERATOR) || !staged.has('AGENTS.md')) process.exit(0);
+// `git add -N` puts an empty entry in the index for a file nobody staged; it is not part of the commit,
+// and its copy must not be either (#271's gate adversary). Status v2 marks it `.A`.
+for (const e of git(['--no-optional-locks', 'status', '--porcelain=v2', '-z', '--untracked-files=no']).split('\0')) {
+  if (e.startsWith('1 .A ')) staged.delete(e.split(' ').slice(8).join(' '));
+}
+// Without the generator there is nothing to run. Without AGENTS.md there is, and it fails, loudly.
+if (!staged.has(GENERATOR)) process.exit(0);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-files-hook-'));
 // process.exit skips `finally`, and every way out of here is one.
@@ -52,7 +61,8 @@ process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
 try {
   const ours = [...staged.keys()].filter((f) => SOURCES.some((s) => f === s || f.startsWith(`${s}/`)));
   git(['checkout-index', `--prefix=${tmp}/`, '-z', '--stdin'], { input: ours.join('\0') });
-  const gen = await import(pathToFileURL(path.join(tmp, GENERATOR)).href);
+  let gen;
+  try { gen = await import(pathToFileURL(path.join(tmp, GENERATOR)).href); } catch (e) { refuse([`the staged ${GENERATOR} does not load: ${e.message}`]); }
   const index = [...staged.keys()].sort();
   const list = (dir) => index.filter((f) => f === dir || f.startsWith(`${dir}/`));
   const headList = tryGit(['show', `HEAD:${LIST}`]);
@@ -106,6 +116,8 @@ try {
   for (const { t } of changes.filter((c) => !c.content)) {
     fs.rmSync(t, { force: true });
     git(['rm', '-q', '--cached', '--ignore-unmatch', '--', t]);
+    // git does not track directories; a removed copy should not leave one behind, empty.
+    for (let d = path.dirname(t); d !== '.' && fs.existsSync(d) && !fs.readdirSync(d).length; d = path.dirname(d)) fs.rmdirSync(d);
   }
   say(`regenerated from what is staged: ${changes.map((c) => `${c.content ? '' : 'removed '}${c.t}`).join(', ')}`);
 } catch (e) {

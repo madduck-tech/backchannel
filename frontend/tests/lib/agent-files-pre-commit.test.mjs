@@ -222,6 +222,58 @@ test('(n) a path an older list generated, that is now a source, is kept', () => 
   assert.ok(f.show('HEAD', 'CLAUDE.md').includes('RULE-N'));
 });
 
+test('(o) a binary file in a source skill commits through the documented flow', () => {
+  const f = fixture('o');
+  fs.writeFileSync(path.join(f.r, '.agents/skills/gopnik-setup/logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80]));
+  assert.equal(f.gen().status, 0);
+  f.git('add', '-A');
+  const c = f.git('commit', '-qm', 'o');
+  assert.equal(c.status, 0, c.stderr);
+  f.edit('README.md', (t) => `${t}o\n`); f.git('add', 'README.md');
+  const again = f.git('commit', '-qm', 'o2');
+  assert.equal(again.status, 0, again.stderr);
+  assert.ok(!/regenerated/.test(again.stderr), `an unrelated commit regenerated the binary copy:\n${again.stderr}`);
+});
+
+test('(p) a file only marked intent-to-add does not reach a commit through its copy', () => {
+  const f = fixture('p');
+  fs.mkdirSync(path.join(f.r, '.agents/skills/wip'));
+  fs.writeFileSync(path.join(f.r, '.agents/skills/wip/SKILL.md'), '---\nname: wip\ndescription: not ready\n---\nwork in progress\n');
+  f.git('add', '-N', '.agents/skills/wip/SKILL.md');
+  f.edit('README.md', (t) => `${t}p\n`); f.git('add', 'README.md');
+  const c = f.git('commit', '-qm', 'p');
+  assert.equal(c.status, 0, c.stderr);
+  assert.equal(f.show('HEAD', '.claude/skills/wip/SKILL.md'), null, 'a copy of an intent-to-add file was committed');
+  assert.ok(f.read('.agents/skills/wip/SKILL.md').includes('work in progress'));
+});
+
+test('(q) AGENTS.md removed is refused with the generator\'s message', () => {
+  const f = fixture('q');
+  f.git('rm', '-q', 'AGENTS.md');
+  const c = f.git('commit', '-qm', 'q');
+  assert.notEqual(c.status, 0, 'a commit without AGENTS.md went through');
+  assert.match(c.stderr, /AGENTS\.md is missing/);
+});
+
+test('(r) prepare inside another repository, not this one, leaves that repository alone', () => {
+  const parent = path.join(base, 'r-parent');
+  fs.mkdirSync(parent);
+  spawnSync('git', ['init', '-q'], { cwd: parent, env });
+  const vendored = path.join(parent, 'vendor', 'bc');
+  for (const p of ['scripts', '.githooks', 'frontend/package.json']) fs.cpSync(path.join(repo, p), path.join(vendored, p), { recursive: true });
+  const p = spawnSync('node', ['../scripts/install-git-hooks.mjs'], { cwd: path.join(vendored, 'frontend'), encoding: 'utf8', env });
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, /not this repository's work tree/);
+  assert.equal(spawnSync('git', ['config', '--get', 'core.hooksPath'], { cwd: parent, env }).status, 1, 'the enclosing repository got core.hooksPath');
+});
+
+test('(s) a removed command leaves no empty directory behind', () => {
+  const f = fixture('s');
+  f.git('rm', '-q', '.agents/commands/work.md');
+  assert.equal(f.git('commit', '-qm', 's').status, 0);
+  assert.ok(!fs.existsSync(path.join(f.r, '.agents/skills/work')), '.agents/skills/work/ is left empty');
+});
+
 test('the hook is installed by prepare, and is executable', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(repo, 'frontend', 'package.json'), 'utf8'));
   assert.equal(pkg.scripts.prepare, 'node ../scripts/install-git-hooks.mjs');

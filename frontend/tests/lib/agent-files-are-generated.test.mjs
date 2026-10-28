@@ -62,6 +62,12 @@ test('an @path token is what Claude Code would import, and nothing else', () => 
   assert.deepEqual(atTokens('read the notes, see @x.md for details'), ['@x.md']);
   assert.deepEqual(atTokens('mail noreply@anthropic.com, or `@x.md` in a span, or `actions/checkout@v5`'), []);
   assert.deepEqual(atTokens('```\n@x.md\n```\nafter'), []);
+  // Three shapes the gate's adversary measured Claude Code 2.1.312 importing, which a fence toggled by
+  // any line starting with ``` missed: a longer fence holding a shorter one, a line that only starts
+  // with backticks, and a ~~~ fence holding ```.
+  assert.deepEqual(atTokens('````md\n```\n````\nSee @evil.md for details.'), ['@evil.md']);
+  assert.deepEqual(atTokens('```x``` is inline; see @evil.md'), ['@evil.md']);
+  assert.deepEqual(atTokens('~~~\n```\n~~~\nsee @evil.md'), ['@evil.md']);
   for (const f of ['AGENTS.md', 'CLAUDE.md', ...fs.readdirSync(path.join(repo, '.agents/rules')).map((n) => `.agents/rules/${n}`), ...fs.readdirSync(path.join(repo, '.claude/rules')).map((n) => `.claude/rules/${n}`)]) {
     assert.deepEqual(atTokens(read(repo, f)), [], `${f} has an @path Claude Code would import`);
   }
@@ -302,6 +308,20 @@ test('write() refuses, writing nothing, when the sources themselves are wrong', 
   assert.equal(w.ok, false);
   assert.ok(w.lines.some((l) => /@notes\.md/.test(l)), w.lines.join('\n'));
   assert.equal(read(r, 'CLAUDE.md'), before, 'write() changed CLAUDE.md although it refused');
+});
+
+// A skill may carry a binary file. Comparing it as UTF-8 text folds invalid bytes together, so a
+// corrupted copy read as equal (the gate's adversary, #271).
+test('a binary file in a source skill is copied byte for byte, and a corrupted copy is drift', () => {
+  const { r, gen } = fixture('binary');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80, 0x61]);
+  fs.writeFileSync(path.join(r, '.agents/skills/gopnik-setup/logo.png'), png);
+  assert.equal(gen().status, 0);
+  assert.ok(fs.readFileSync(path.join(r, '.claude/skills/gopnik-setup/logo.png')).equals(png), 'the copy is not the bytes of its source');
+  assert.deepEqual(drift(r), []);
+  const bad = Buffer.from(png); bad[9] = 0xfe; bad[10] = 0xff;
+  fs.writeFileSync(path.join(r, '.claude/skills/gopnik-setup/logo.png'), bad);
+  assert.ok(has(drift(r), /^\.claude\/skills\/gopnik-setup\/logo\.png differs/), `a corrupted binary copy is not drift:\n${drift(r).join('\n')}`);
 });
 
 test('.gitattributes stores the sources and the copies with LF', () => {

@@ -50,8 +50,15 @@ function gitFiles(repo, dir) {
 const isLink = (repo, f) => { try { return fs.lstatSync(path.join(repo, f)).isSymbolicLink(); } catch { return false; } };
 const isFile = (repo, f) => { try { return fs.lstatSync(path.join(repo, f)).isFile(); } catch { return false; } };
 const readLf = (repo, f) => fs.readFileSync(path.join(repo, f), 'utf8').replace(/\r\n/g, '\n');
-// Line endings are normalized, so a Windows checkout with core.autocrlf compares equal.
-export const lf = (b) => b.toString('utf8').replace(/\r\n/g, '\n');
+// Line endings are normalized, so a Windows checkout with core.autocrlf compares equal -- in bytes,
+// and only for text: a file holding a NUL is binary, as git's text=auto decides, and is compared as
+// it is. Decoding as UTF-8 first folded invalid bytes together, so a corrupted binary copy read as
+// equal (#271's gate adversary).
+export const normalize = (b) => {
+  const buf = Buffer.isBuffer(b) ? b : Buffer.from(b, 'utf8');
+  return buf.includes(0) ? buf : Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+};
+const same = (a, b) => normalize(a).equals(normalize(b));
 
 // How a run lists files: through git in a checkout, from the index in the pre-commit hook. `previous`
 // is every target a list has named -- the committed one and the one on disk or staged -- which is what
@@ -89,12 +96,19 @@ export function scopedRules(repo = REPO, opts) {
 
 // The `@path` tokens Claude Code would import: an `@` at the start of a line or after whitespace,
 // followed by a non-space, outside code spans and fenced blocks (neither imports, measured on #271).
+// Fences as CommonMark has them: three or more backticks or tildes, closed only by the same character
+// at least as many times; a backtick fence's info string holds no backtick. A fence toggled by any
+// line starting with ``` let three shapes through that Claude Code 2.1.312 imports (#271's adversary).
 export function atTokens(text) {
   const found = [];
-  let fenced = false;
+  let fence = null;
   for (const line of text.replace(/\r\n/g, '\n').split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
-    if (fenced) continue;
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) fence = null;
+      continue;
+    }
+    if (m && !(m[1][0] === '`' && m[2].includes('`'))) { fence = m[1]; continue; }
     const prose = line.replace(/(`+)[\s\S]*?\1/g, ' ');
     for (const m of prose.matchAll(/(?:^|\s)(@[^\s`]+)/g)) found.push(m[1]);
   }
@@ -247,11 +261,11 @@ export function drift(repo = REPO, opts) {
   try { files = plan(repo, opts); } catch (e) { return [...problems, e.message]; }
   const listPath = path.join(repo, LIST);
   if (!fs.existsSync(listPath)) problems.push(`${LIST} is missing`);
-  else if (lf(fs.readFileSync(listPath)) !== listOf(files)) problems.push(`${LIST} does not name what the sources generate`);
+  else if (!same(fs.readFileSync(listPath), listOf(files))) problems.push(`${LIST} does not name what the sources generate`);
   for (const [target, { source, content }] of files) {
     if (isLink(repo, target)) problems.push(`${target} is a link; a generated file is a copy`);
     else if (!isFile(repo, target)) problems.push(`${target} is missing (from ${[source].flat().join(', ')})`);
-    else if (lf(fs.readFileSync(path.join(repo, target))) !== lf(content)) problems.push(`${target} differs from ${[source].flat().join(', ')}`);
+    else if (!same(fs.readFileSync(path.join(repo, target)), content)) problems.push(`${target} differs from ${[source].flat().join(', ')}`);
   }
   for (const f of strays(ctx, files)) problems.push(`${f} is not generated from anything; remove it or give it a source in .agents/`);
   return problems;
