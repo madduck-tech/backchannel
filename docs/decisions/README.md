@@ -35,6 +35,7 @@
 | [0031](0031-every-release-has-one-shape.md) | Every release has one shape: the same files, a written description, published on the product owner's word | accepted |
 | [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted |
 | [0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) | The virtual audio experiment is built on macOS, signed locally, on a branch of its own | accepted; supersedes 0005 decision 5, 0008 decision 5 and 0012 decision 1 for that experiment only |
+| [0034](0034-a-control-channel-drives-recordings-for-the-experiments-verification.md) | A control channel in the binary drives recordings for the experiment's verification | accepted; on `exp/virtual-audio` only; amends the experiment plan's step 2 |
 
 ## Deferred questions
 

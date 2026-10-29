@@ -63,6 +63,7 @@ pub mod summary;
 pub mod transcribe_engine;
 pub mod tray;
 pub mod utils;
+mod control;
 #[cfg(test)]
 mod measure;
 
@@ -402,6 +403,9 @@ pub fn run() {
     // logged by a later plugin's setup would be lost if this came after them.
     let mut builder = tauri::Builder::default().plugin(log_plugin());
 
+    // Read once, from this process's own launch; forwarded arguments never enable it (#281).
+    control::init(&std::env::args().collect::<Vec<_>>());
+
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
@@ -411,7 +415,11 @@ pub fn run() {
                 cwd
             );
 
-            tray::focus_main_window(app);
+            // A control request is answered in control-results.jsonl, not by raising the
+            // window (#281); anything else is a person opening the app again.
+            if !control::handle(app, &args) {
+                tray::focus_main_window(app);
+            }
         }));
     }
 
