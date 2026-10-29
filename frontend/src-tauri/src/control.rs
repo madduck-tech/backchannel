@@ -42,6 +42,16 @@ pub enum Command {
 }
 
 impl Command {
+    /// The phase a state-changing command holds while it runs; `status` holds none.
+    fn phase(&self) -> Option<&'static str> {
+        match self {
+            Command::Start { .. } => Some("starting"),
+            Command::Stop => Some("stopping"),
+            Command::SetBackend(_) => Some("setting-backend"),
+            Command::Status => None,
+        }
+    }
+
     fn name(&self) -> &'static str {
         match self {
             Command::Start { .. } => "start",
@@ -129,7 +139,8 @@ fn enabled() -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
     PassThrough,
-    Refuse,
+    /// Control is off for this launch. The id is echoed so a caller can tell this from a hang.
+    Refuse { id: Option<String> },
     Report { id: Option<String>, error: String },
     Run { id: String, command: Command },
 }
@@ -137,7 +148,8 @@ pub enum Decision {
 pub fn decide(parsed: Parsed, enabled: bool) -> Decision {
     match parsed {
         Parsed::NotControl => Decision::PassThrough,
-        _ if !enabled => Decision::Refuse,
+        Parsed::Invalid { id, .. } if !enabled => Decision::Refuse { id },
+        Parsed::Request { id, .. } if !enabled => Decision::Refuse { id: Some(id) },
         Parsed::Invalid { id, error } => Decision::Report { id, error },
         Parsed::Request { id, command } => Decision::Run { id, command },
     }
@@ -154,8 +166,11 @@ pub fn decision_for(forwarded: &[String], launch_enabled: bool) -> Decision {
 pub fn handle<R: Runtime>(app: &AppHandle<R>, forwarded: &[String]) -> bool {
     match decision_for(forwarded, enabled()) {
         Decision::PassThrough => false,
-        Decision::Refuse => {
+        Decision::Refuse { id } => {
             log::warn!("Control request refused: this launch has no {ENABLE_FLAG} (#281)");
+            // A line, so the caller can tell a refusal from a hang.
+            let error = format!("control is not enabled: this launch has no {ENABLE_FLAG}");
+            write_line(app, &serde_json::json!({ "id": id, "ok": false, "error": error }));
             true
         }
         Decision::Report { id, error } => {
@@ -163,11 +178,27 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, forwarded: &[String]) -> bool {
             true
         }
         Decision::Run { id, command } => {
+            // Claimed before spawning, so two requests cannot both pass: measured on 2026-10-29,
+            // a `set-backend` that arrived while a `start` waited on a TCC prompt switched the
+            // backend between the microphone stream and the system stream, and the "selected
+            // device" run recorded through the global tap.
+            if let Some(phase) = command.phase() {
+                if let Err(busy) = claim(&IN_FLIGHT, phase) {
+                    write_line(app, &serde_json::json!({
+                        "id": id, "command": command.name(), "ok": false,
+                        "error": format!("busy: another control command is {busy}"),
+                    }));
+                    return true;
+                }
+            }
             let app = app.clone();
             // Spawned, never awaited here: this runs on the socket's accept loop, and `stop`
             // waits for transcription with no limit (#210), so `status` must not queue behind it.
             tauri::async_runtime::spawn(async move {
                 let line = run(&app, &id, &command).await;
+                if command.phase().is_some() {
+                    release(&IN_FLIGHT);
+                }
                 write_line(&app, &line);
             });
             true
@@ -175,12 +206,24 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, forwarded: &[String]) -> bool {
     }
 }
 
-/// A command in flight, for `status`. `IS_RECORDING` alone turns true before the model is
-/// validated, so it would report "recording" for a start that then fails.
+/// The one command that changes state, if any, for `status`. `IS_RECORDING` alone turns true
+/// before the model is validated, so it would report "recording" for a start that then fails.
 static IN_FLIGHT: Mutex<Option<&'static str>> = Mutex::new(None);
 
-fn set_in_flight(phase: Option<&'static str>) {
-    *IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = phase;
+/// Take the slot for `phase`, or say which phase holds it. One state-changing command at a time.
+fn claim(slot: &Mutex<Option<&'static str>>, phase: &'static str) -> Result<(), &'static str> {
+    let mut held = slot.lock().unwrap_or_else(|e| e.into_inner());
+    match *held {
+        Some(busy) => Err(busy),
+        None => {
+            *held = Some(phase);
+            Ok(())
+        }
+    }
+}
+
+fn release(slot: &Mutex<Option<&'static str>>) {
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 async fn phase() -> &'static str {
@@ -219,7 +262,6 @@ async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, command: &Command) -> ser
     };
     match command {
         Command::Start { mic, system, meeting } => {
-            set_in_flight(Some("starting"));
             let result = crate::start_recording_with_devices_and_meeting(
                 app.clone(),
                 Some(mic.clone()),
@@ -227,7 +269,6 @@ async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, command: &Command) -> ser
                 Some(meeting.clone()),
             )
             .await;
-            set_in_flight(None);
             match result {
                 Ok(()) => {
                     let folder = meeting_folder().await;
@@ -243,13 +284,11 @@ async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, command: &Command) -> ser
         }
         Command::Stop => {
             let folder = meeting_folder().await;
-            set_in_flight(Some("stopping"));
             let save_path = save_path(app);
             let result = match save_path {
                 Ok(save_path) => crate::stop_recording(app.clone(), crate::RecordingArgs { save_path }).await,
                 Err(e) => Err(e),
             };
-            set_in_flight(None);
             match result {
                 Ok(()) => with(base(true), serde_json::json!({
                     "meeting_folder": folder,
@@ -367,8 +406,8 @@ mod tests {
     #[test]
     fn nothing_runs_unless_this_launch_opted_in() {
         let request = || parse(&args(&["--control", "stop", "--control-id", "s"]));
-        assert_eq!(decide(request(), false), Decision::Refuse);
-        assert_eq!(decide(parse(&args(&["--control", "nope", "--control-id", "q"])), false), Decision::Refuse);
+        assert_eq!(decide(request(), false), Decision::Refuse { id: Some("s".into()) });
+        assert_eq!(decide(parse(&args(&["--control", "nope", "--control-id", "q"])), false), Decision::Refuse { id: Some("q".into()) });
         assert_eq!(decide(request(), true), Decision::Run { id: "s".into(), command: Command::Stop });
         assert_eq!(decide(parse(&args(&[])), false), Decision::PassThrough);
     }
@@ -380,32 +419,72 @@ mod tests {
         assert!(!enabled_by_launch(&args(&[])));
         assert!(enabled_by_launch(&args(&[ENABLE_FLAG])));
         let forwarded = args(&[ENABLE_FLAG, "--control", "stop", "--control-id", "f"]);
-        assert_eq!(decision_for(&forwarded, false), Decision::Refuse);
+        assert_eq!(decision_for(&forwarded, false), Decision::Refuse { id: Some("f".into()) });
         assert_eq!(decision_for(&forwarded, true), Decision::Run { id: "f".into(), command: Command::Stop });
         assert!(!enabled_by_launch(&["/path/to/backchannel".to_string()]));
     }
 
-    /// One path: the dispatcher reaches recording only through the crate-root commands the
-    /// buttons invoke, and reads `audio::recording_commands` only through two read-only getters.
+    /// One state-changing command at a time; `status` takes no slot.
+    #[test]
+    fn a_second_state_change_is_refused_while_one_runs() {
+        let slot = Mutex::new(None);
+        assert_eq!(claim(&slot, "starting"), Ok(()));
+        assert_eq!(claim(&slot, "setting-backend"), Err("starting"));
+        assert_eq!(claim(&slot, "stopping"), Err("starting"));
+        release(&slot);
+        assert_eq!(claim(&slot, "setting-backend"), Ok(()));
+        for command in [Command::Start { mic: "m".into(), system: "s".into(), meeting: "x".into() }, Command::Stop, Command::SetBackend("coreaudio".into())] {
+            assert!(command.phase().is_some(), "{command:?} changes state and must take the slot");
+        }
+        assert_eq!(Command::Status.phase(), None);
+    }
+
+    /// One path: the dispatcher reaches the audio code only through the crate-root commands the
+    /// buttons invoke and four named functions. Comments are stripped and `::` is matched with
+    /// any spacing, and no `use` may bring audio items in under another name: the gate's
+    /// adversary found the first version passed `crate::audio::stop_recording` (a re-export),
+    /// `use … recording_commands as rc` and `recording_commands :: start_recording`.
     #[test]
     fn the_dispatcher_records_only_through_the_buttons_commands() {
         let source = include_str!("control.rs").replace("\r\n", "\n");
-        let code = &source[..source.find("#[cfg(test)]").expect("tests marker")];
+        let code: String = source[..source.find("#[cfg(test)]").expect("tests marker")]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Whitespace around `::` normalised away, so spacing cannot hide a path.
+        let squeezed: String = {
+            let mut out = String::new();
+            let mut chars = code.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c.is_whitespace() {
+                    let rest: String = chars.clone().skip_while(|c| c.is_whitespace()).take(2).collect();
+                    if rest == "::" || out.ends_with("::") {
+                        continue;
+                    }
+                }
+                out.push(c);
+            }
+            out
+        };
         for needed in ["crate::start_recording_with_devices_and_meeting(", "crate::stop_recording("] {
-            assert!(code.contains(needed), "the dispatcher no longer calls {needed}");
+            assert!(squeezed.contains(needed), "the dispatcher no longer calls {needed}");
         }
-        let into_commands: Vec<&str> = code.match_indices("recording_commands::").map(|(i, _)| {
-            let rest = &code[i + "recording_commands::".len()..];
-            &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len())]
-        }).collect();
-        for called in &into_commands {
-            assert!(
-                ["is_recording", "get_meeting_folder_path"].contains(called),
-                "the dispatcher calls recording_commands::{called}, which bypasses the lib.rs command"
-            );
+        for line in squeezed.lines().filter(|l| l.trim_start().starts_with("use ")) {
+            assert!(!line.contains("audio"), "a `use` brings audio code in under another name: {line}");
         }
-        for forbidden in ["RecordingManager", "AudioPipeline", "AudioStream::create", "set_current_backend("] {
-            assert!(!code.contains(forbidden), "the dispatcher builds or sets {forbidden} itself");
+        let allowed = [
+            "audio::recording_commands::is_recording",
+            "audio::recording_commands::get_meeting_folder_path",
+            "audio::recording_preferences::get_current_audio_backend",
+            "audio::recording_preferences::set_audio_backend",
+        ];
+        for (i, _) in squeezed.match_indices("audio::") {
+            let path: String = squeezed[i..].chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+            assert!(allowed.contains(&path.as_str()), "the dispatcher reaches {path}, which bypasses the buttons' commands");
+        }
+        for forbidden in ["RecordingManager", "AudioPipeline", "AudioStream", "set_current_backend"] {
+            assert!(!squeezed.contains(forbidden), "the dispatcher builds or sets {forbidden} itself");
         }
     }
 }

@@ -25,7 +25,11 @@ TIMEOUT=${TIMEOUT:-120}
 
 die() { echo "macos-control: $*" >&2; exit 1; }
 
-expect_rev() { echo "${EXPECT_REV:-$(git -C "$REPO" rev-parse HEAD)}"; }
+expect_rev() {
+  # A full commit hash: a short or symbolic value would be searched for as a substring of the
+  # executable, and a short string can occur in any large binary.
+  git -C "$REPO" rev-parse --verify "${EXPECT_REV:-HEAD}^{commit}" 2>/dev/null || die "EXPECT_REV=${EXPECT_REV:-} is not a commit"
+}
 
 socket_owner() {
   # The executable of the process listening on the socket, or nothing.
@@ -43,6 +47,36 @@ check_running_bundle() {
   rev=$(expect_rev)
   [ "$owner" = "$EXE" ] || die "the running app is $owner, not $EXE (expected revision $rev)"
   grep -aqF "$rev" "$owner" || die "the running app $owner was not built from $rev (no such revision inside it; built from another revision, or before #281)"
+}
+
+# The file on disk can be rebuilt under a running process, so the running image is asked too.
+check_running_revision() {
+  local rev line
+  rev=$(expect_rev)
+  line=$(send_one status) || die "status did not answer"
+  case "$line" in *"\"built_from\":\"$rev\""*) ;; *) die "the running process reports another build than $rev: $line" ;; esac
+}
+
+send_one() {
+  local command=$1; shift
+  local id before line
+  id="$(date +%s)-$$-$RANDOM"
+  mkdir -p "$(dirname "$RESULTS")"
+  before=$( [ -f "$RESULTS" ] && wc -l < "$RESULTS" || echo 0 )
+  # The second process forwards these arguments over the socket and exits 0 whatever happens
+  # next, so its status is not read. The result line is.
+  "$EXE" --control "$command" --control-id "$id" "$@" >/dev/null 2>&1 || true
+  for _ in $(seq 1 "$TIMEOUT"); do
+    line=$(tail -n +"$((before + 1))" "$RESULTS" 2>/dev/null | grep -F "\"id\":\"$id\"" | head -1 || true)
+    if [ -n "$line" ]; then
+      echo "$line"
+      case "$line" in *'"ok":true'*) return 0 ;; *) return 1 ;; esac
+    fi
+    sleep 1
+  done
+  # The command may still be running in the app; callers that started something must stop it.
+  echo "macos-control: no result for $command ($id) within ${TIMEOUT}s; it may still be running in the app" >&2
+  return 124
 }
 
 case "${1:-}" in
@@ -72,21 +106,8 @@ case "${1:-}" in
     command=${1:?command: start, stop, status, set-backend}
     shift
     check_running_bundle
-    id="$(date +%s)-$$-$RANDOM"
-    mkdir -p "$(dirname "$RESULTS")"
-    before=$( [ -f "$RESULTS" ] && wc -l < "$RESULTS" || echo 0 )
-    # The second process forwards these arguments over the socket and exits 0 whatever happens
-    # next, so its status is not read. The result line is.
-    "$EXE" --control "$command" --control-id "$id" "$@" >/dev/null 2>&1 || true
-    for _ in $(seq 1 "$TIMEOUT"); do
-      line=$(tail -n +"$((before + 1))" "$RESULTS" 2>/dev/null | grep -F "\"id\":\"$id\"" | head -1 || true)
-      if [ -n "$line" ]; then
-        echo "$line"
-        case "$line" in *'"ok":true'*) exit 0 ;; *) exit 1 ;; esac
-      fi
-      sleep 1
-    done
-    die "no result for $command ($id) within ${TIMEOUT}s"
+    [ "$command" = status ] || check_running_revision
+    send_one "$command" "$@"
     ;;
   *)
     sed -n '2,12p' "$0"
