@@ -633,9 +633,7 @@ async fn get_or_init_transcribe<R: Runtime>(
         None => super::common::configured_local_model(app).await?,
     };
 
-    if engine.get_current_model().await.as_deref() == Some(target_model.as_str())
-        && engine.is_model_loaded().await
-    {
+    if engine.usable_model().await.as_deref() == Some(target_model.as_str()) {
         info!("Model '{}' already loaded", target_model);
         return Ok(engine);
     }

@@ -601,8 +601,9 @@ fi
 # chose is on this device." and call the chosen row "Already here from an earlier install", for a
 # file still on its way. "Is SOME model on disk" set the flag. So, from the moment the screen is up,
 # the button is read and then the chosen file is measured, as often as the driver answers. A sample is
-# *in flight* when the file is absent or under 90% of its final size after the read; no file exists
-# until the HTTP response arrives (`engine.rs:430`). Every in-flight sample must read disabled.
+# *in flight* when the file is absent or under 90% of its final size after the read; since #195 the
+# download writes a temporary file and renames it into place whole, so the final path is absent for the
+# whole of a fresh download. Every in-flight sample must read disabled.
 # An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
 if [ "$MODE" = keeps ]; then
   # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the

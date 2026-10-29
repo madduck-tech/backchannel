@@ -46,6 +46,12 @@ pub(crate) async fn engine_idle_elapsed() -> Duration {
     ENGINE_LAST_USE.lock().await.elapsed()
 }
 
+/// Does anything use the loaded model now: a recording, or a batch job? The idle unloader's test, and
+/// a model download's when it replaces the file of the model in the slot (#195).
+pub(crate) fn engine_in_use() -> bool {
+    crate::audio::recording_commands::is_recording_now() || batch_in_progress()
+}
+
 /// Is a batch job (import, retranscription, or the first-run audio check) holding the engine?
 fn batch_in_progress() -> bool {
     crate::audio::import::is_import_in_progress()
