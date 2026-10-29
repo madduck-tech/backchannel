@@ -118,10 +118,7 @@ pub fn cookie_from(
         .chain(config)
         .chain(home.map(|home| home.join(".pulse-cookie")));
     match paths.find_map(|path| read_regular(&path)) {
-        Some(mut bytes) if bytes.len() >= COOKIE_LENGTH => {
-            bytes.truncate(COOKIE_LENGTH);
-            bytes
-        }
+        Some(bytes) if bytes.len() == COOKIE_LENGTH => bytes,
         _ => vec![0; COOKIE_LENGTH],
     }
 }

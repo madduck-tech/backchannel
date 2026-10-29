@@ -10,7 +10,7 @@
   - `src/client.rs`'s `Client::from_env` sends that cookie. The published crate sent the file it found as it was, and an empty cookie when it found none. PipeWire's pulse server refuses both.
   - This file, and `PUBLISHED.sha256`, the sha256 of every file in the published crate.
 - **The two changed files are pinned** (`vendor-is-the-published-crate.test.mjs`): a change to either changes these, on purpose.
-  - `src/lib.rs` `ff90c6f1dccb4b6a1410b39964cafc3f4a089e47baa7936ea14c6803df98da1c`
+  - `src/lib.rs` `10ac624c0e2af4cd6738a018d8db0c111ae40fdce88e969d41b243acf5dd3a97`
   - `src/client.rs` `9aefc30f927fa65b1977913c0c37cbc955abcab66b5d8047ffedec7ca87b3b4b`
 - **`frontend/src-tauri/tests` holds nothing for it.** The cookie tests live in `frontend/src-tauri/src/audio/devices/host.rs` (`mod pulse_cookie`), against `pulseaudio::cookie_from`. `vendor-is-the-published-crate.test.mjs` holds every other file to the published crate's sha256.
 
