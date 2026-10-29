@@ -9,7 +9,8 @@ Backchannel is a meeting copilot that records, transcribes and summarises meetin
 
 ## Getting started
 
-1. Clone the repository. `main` is the only long-lived branch, and it always builds.
+1. Clone the repository. `main` is the only long-lived branch, and it always builds. The one
+   exception is `exp/virtual-audio`, the virtual audio experiment (ADR 0033).
    ```bash
    git clone https://github.com/madduck-tech/backchannel.git
    cd backchannel
@@ -53,14 +54,14 @@ Every change that executes goes through one cycle. [`docs/development-workflow.m
 2. **A critic attacks the issue before work starts.** The issue gets the `ready` label when it holds.
 3. **If the change touches the UI,** prototype variants are approved by the product owner first.
 4. **Stage 0:** the behaviour matrix is posted on the issue, before the first commit.
-5. **The work is done on a branch from `main`.**
+5. **The work is done on a branch from `main`** (from `exp/virtual-audio` for that experiment's steps, ADR 0033).
    - A bug starts with a test shown red on the unfixed code.
    - A feature ships with controls: break the behaviour on purpose, show the test going red, restore.
    - The rules are in `.claude/rules/testing.md`.
 6. **The gate is run:** the commands in [`gopnik.json`](gopnik.json), Stage 1 and then Stage 2, with the verdict posted on the issue.
-   - Stage 2 drives the built app on Linux, with a display and a PipeWire session.
+   - Stage 2 drives the built app on Linux, with a display and a PipeWire session. On `exp/virtual-audio` it is the experiment's macOS instrument (at step 1, before that instrument exists, the precondition run; ADR 0033).
    - Its last passes play speech through the default output, so keep the machine quiet while it runs.
-7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.**
+7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.** Into `exp/virtual-audio` it says `Refs #N` and the issue is closed by hand after the merge (ADR 0033).
 
 **Documentation-only changes** skip the gate, but still go through a pull request, because CI must pass before `main` accepts a commit.
 

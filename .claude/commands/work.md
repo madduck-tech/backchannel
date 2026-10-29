@@ -26,7 +26,8 @@ replacement for it.
    (`start_run` with `project: "backchannel-prototypes"`), send screenshots, and
    wait for the maintainer to pick one. Link the pick in the issue and commit the
    approved HTML to `design/prototypes/`. No implementation before the pick.
-4. **Do the work** on a branch from `main`.
+4. **Do the work** on a branch from `main` — or from `exp/virtual-audio` when the issue is a step
+   of the virtual audio experiment (ADR 0033).
 
 5. **Run the critic if the work produced a claim** — a diagnosis, an explanation
    of a mechanism, a statement about the codebase. Follow
@@ -40,7 +41,9 @@ replacement for it.
    repository that is the built application launched on a clean profile with
    real audio devices, as recorded in `gopnik.json`; a `tauri dev` window on the
    working tree does not stand in for it. macOS and Windows are not reachable
-   here (ADR 0005): the verdict names them as not proven, it never implies them.
+   here (ADR 0005): the verdict names them as not proven, it never implies them. On
+   `exp/virtual-audio` the experiment's macOS code is verified on the development Mac with its own
+   instrument, and Linux and Windows are the unproven ones (ADR 0033).
 
 7. **Post the verdict to the issue** — `gh issue comment` — with the evidence: what was run, what came
    back, and what a broken version would have produced instead. `NOT READY`
@@ -56,7 +59,8 @@ replacement for it.
    merge, not the verdict, is now what closes the issue.
 
 Then open the pull request with `gh pr create`, `Closes #$issue`, with the verdict linked rather
-than restated. Two things that wording depends on: the keyword only closes when
+than restated. A pull request into `exp/virtual-audio` says `Refs #$issue` instead, and the issue is
+closed by hand after the merge with a comment linking the merge commit and the verdict (ADR 0033). Two things that wording depends on: the keyword only closes when
 the pull request targets the default branch, and closing the issue before the
 pull request exists voids the state change the keyword would have made — the
 link itself survives, so the issue still shows on the pull request, already

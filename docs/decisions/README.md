@@ -9,11 +9,11 @@
 | [0005](0005-platform-support-tiers.md) | Platform support tiers; development on Linux only | accepted; decision 2 superseded by 0015 |
 | [0006](0006-proactive-mode-design.md) | Proactive mode: mechanics of the intervention levels | accepted |
 | [0007](0007-observation-schema-versioning.md) | Versioning of the observation schema | accepted |
-| [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted; decision 3's drop-cap criterion superseded by 0027 |
+| [0008](0008-latency-targets.md) | Latency targets for Milestone 0 and how to measure them | accepted; decision 3's drop-cap criterion superseded by 0027; decision 5 set aside by 0033 for the virtual audio experiment |
 | [0009](0009-positioning-share-protection.md) | Positioning: share protection, not stealth | accepted |
 | [0010](0010-project-language-english.md) | The project language is English | accepted |
 | [0011](0011-design-system-package-and-opendesign.md) | Design system as a repository package; OpenDesign for prototyping | accepted |
-| [0012](0012-development-workflow.md) | Development workflow: approval gates, conventions | partly superseded by 0013 |
+| [0012](0012-development-workflow.md) | Development workflow: approval gates, conventions | partly superseded by 0013; decision 1 set aside by 0033 for the virtual audio experiment |
 | [0013](0013-single-cycle-with-gopnik.md) | One cycle: issue → critic → design → implementation → gopnik gate → PR | accepted; merge gate superseded by 0014 |
 | [0014](0014-product-owner-and-engineering-roles.md) | Product owner and engineering: engineering merges on READY; product gates only | accepted |
 | [0015](0015-linux-system-audio-via-cpal-pulseaudio-host.md) | Linux system audio through cpal's PulseAudio host, not a new capture path | accepted; supersedes decision 2 of 0005 |
@@ -34,6 +34,7 @@
 | [0030](0030-every-model-is-offered-and-shows-its-licence.md) | Every model is offered, and shows its licence | accepted |
 | [0031](0031-every-release-has-one-shape.md) | Every release has one shape: the same files, a written description, published on the product owner's word | accepted |
 | [0032](0032-one-source-for-every-agent-harness.md) | One source of agent instructions for every harness, under Codex's cap | accepted |
+| [0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) | The virtual audio experiment is built on macOS, signed locally, on a branch of its own | accepted; supersedes 0005 decision 5, 0008 decision 5 and 0012 decision 1 for that experiment only |
 
 ## Deferred questions
 

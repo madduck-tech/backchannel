@@ -22,6 +22,10 @@ of done, and the agent session checklist.
 Key rules fixed by this ADR:
 
 1. `main` is the only long-lived branch; upstream's `devtest` convention is retired.
+
+   > **Set aside for the virtual audio experiment only by
+   > [ADR 0033](0033-the-virtual-audio-experiment-is-built-on-macos.md) (2026-10-28).** That experiment lives on
+   > `exp/virtual-audio` until its continue decision. Every other change still follows this decision.
 2. Docs, ADRs, design-system files and approved prototypes may go straight to `main`; code goes
    through a pull request that the maintainer merges.
 3. No prototype and no design-system change is committed before the maintainer has seen it.
