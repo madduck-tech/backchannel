@@ -5,7 +5,10 @@
 // reserves the name "Plex", so a subset or a converted copy may not carry it. This holds the ten files
 // and the licence to the sha256 recorded in SOURCES.md; holds each of fonts.css's ten faces to its own
 // file, so a swap of two weights is caught even where their widths are equal (Mono 400 and 500 are);
-// and holds the fallback faces to the metrics Next's Google loader generated, so `ch` does not move.
+// and holds the fallback faces to the metrics Next's Google loader generated. fonts.css is read as CSS
+// is: comments out, each @font-face a map of its declarations, quotes either way, and a declaration given
+// twice refused, since the later one is the one drawn. No other stylesheet may declare a face or a
+// --font-* variable.
 // And it holds git to storing them as they are: the licence has CRLF line endings, which
 // core.autocrlf=input would store as LF, so the clone CI checks out would carry other bytes.
 import assert from 'node:assert/strict';
@@ -21,6 +24,23 @@ const dir = path.join(frontend, 'src', 'app', 'fonts');
 const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 // Line endings normalised: a core.autocrlf=true checkout writes fonts.css with CRLF.
 const css = fs.readFileSync(path.join(frontend, 'src', 'app', 'fonts.css'), 'utf8').replace(/\r\n/g, '\n');
+const uncommented = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+const unquote = (s) => s.replace(/^(['"])(.*)\1$/, '$2');
+function faces(text) {
+  return [...uncommented(text).matchAll(/@font-face\s*\{([^}]*)\}/g)].map(([, body]) => {
+    const decl = {};
+    for (const part of body.split(';').map((s) => s.trim()).filter(Boolean)) {
+      const i = part.indexOf(':');
+      const k = part.slice(0, i).trim().toLowerCase();
+      assert.ok(!(k in decl), `an @font-face declares ${k} twice, and the later one is drawn:\n${body.trim()}`);
+      decl[k] = part.slice(i + 1).trim();
+    }
+    return decl;
+  });
+}
+const PLEX = /^IBM Plex (Sans|Serif|Mono)$/;
+const RANGE = 'U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF';
+const TAGS = { Sans: '%40ibm%2Fplex-sans%401.1.0', Serif: '%40ibm%2Fplex-serif%402.0.0', Mono: '%40ibm%2Fplex-mono%402.5.0' };
 
 test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md records', () => {
   const rows = [...fs.readFileSync(path.join(dir, 'SOURCES.md'), 'utf8').replace(/\r\n/g, '\n').matchAll(/^\| `([^`]+)` \| (\d+) \| `([0-9a-f]{64})` \| (https:\/\/raw\.githubusercontent\.com\/IBM\/plex\/\S+) \|$/gm)];
@@ -31,6 +51,9 @@ test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md rec
     assert.equal(fs.statSync(p).size, Number(bytes), `${file}: size`);
     assert.equal(sha(p), digest, `${file} is not the file SOURCES.md records`);
     assert.ok(url.endsWith(`/${file}`), `${file}: its URL names another file`);
+    // Each file from its own family's tag, the one fonts.css and ADR 0034 name.
+    const family = file === 'LICENSE.txt' ? 'Mono' : file.match(/^IBMPlex(Sans|Serif|Mono)-/)?.[1];
+    assert.ok(family && url.startsWith(`https://raw.githubusercontent.com/IBM/plex/${TAGS[family]}/`), `${file}: its URL is not at ${family}'s tag`);
   }
   // Each row names its own file, and the rows name exactly the files on disk: a row copied over
   // another would otherwise let an unrecorded file through.
@@ -41,10 +64,14 @@ test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md rec
   assert.match(fs.readFileSync(path.join(dir, 'LICENSE.txt'), 'utf8').split('\n')[0], /Reserved Font Name "Plex"/);
 });
 
-test('each face names its own file, and the families keep their names and fallbacks', () => {
-  const faces = [...css.matchAll(/@font-face \{\n  font-family: '([^']+)';\n  src: url\('\.\/fonts\/([^']+)'\) format\('woff2'\);\n  font-weight: (\d+);\n  font-style: (\w+);/g)]
-    .map(([, family, file, weight, style]) => `${family} ${weight} ${style} → ${file}`).sort();
-  assert.deepEqual(faces, [
+test('each face names its own file once, and the families keep their names and fallbacks', () => {
+  const all = faces(css);
+  assert.equal(all.length, 13, `fonts.css holds ${all.length} @font-face rules, not ten faces and three fallbacks`);
+  const got = all.filter((d) => PLEX.test(unquote(d['font-family'] ?? ''))).map((d) => {
+    const file = (d.src ?? '').match(/^url\((['"]?)\.\/fonts\/([^'")]+)\1\) format\((['"])woff2\3\)$/);
+    return `${unquote(d['font-family'])} ${d['font-weight']} ${d['font-style']} → ${file ? file[2] : d.src}`;
+  }).sort();
+  assert.deepEqual(got, [
     'IBM Plex Mono 400 normal → IBMPlexMono-Regular.woff2',
     'IBM Plex Mono 500 normal → IBMPlexMono-Medium.woff2',
     'IBM Plex Sans 400 normal → IBMPlexSans-Regular.woff2',
@@ -61,25 +88,39 @@ test('each face names its own file, and the families keep their names and fallba
     ['IBM Plex Serif Fallback', 'Times New Roman', ['88.04%', '23.62%', '116.43%']],
     ['IBM Plex Mono Fallback', 'Arial', ['76.16%', '20.43%', '134.59%']],
   ]) {
-    const block = css.split('@font-face').find((b) => b.includes(`'${family}'`)) ?? '';
-    assert.ok(block.includes(`local("${local}")`), `${family} does not fall back to ${local}`);
-    for (const [k, v] of [['ascent-override', metrics[0]], ['descent-override', metrics[1]], ['size-adjust', metrics[2]]]) assert.ok(block.includes(`${k}: ${v};`), `${family}: ${k} is not ${v}`);
+    const fb = all.filter((d) => unquote(d['font-family'] ?? '') === family);
+    assert.equal(fb.length, 1, `${family} is declared ${fb.length} times`);
+    assert.deepEqual(fb[0], { 'font-family': fb[0]['font-family'], src: `local("${local}")`, 'ascent-override': metrics[0], 'descent-override': metrics[1], 'line-gap-override': '0.00%', 'size-adjust': metrics[2] }, `${family} is not the fallback Next generated`);
   }
-  for (const v of ["--font-sans: 'IBM Plex Sans', 'IBM Plex Sans Fallback';", "--font-serif: 'IBM Plex Serif', 'IBM Plex Serif Fallback';", "--font-mono: 'IBM Plex Mono', 'IBM Plex Mono Fallback';"]) assert.ok(css.includes(v), `fonts.css does not declare ${v}`);
+  // Each variable declared once, in fonts.css, and nowhere else the frontend's styles are read from.
+  const vars = { '--font-sans': "'IBM Plex Sans', 'IBM Plex Sans Fallback'", '--font-serif': "'IBM Plex Serif', 'IBM Plex Serif Fallback'", '--font-mono': "'IBM Plex Mono', 'IBM Plex Mono Fallback'" };
+  for (const [k, v] of Object.entries(vars)) {
+    const found = [...uncommented(css).matchAll(new RegExp(`${k}\\s*:\\s*([^;]+);`, 'g'))].map((m) => m[1].trim());
+    assert.deepEqual(found, [v], `fonts.css declares ${k} as ${JSON.stringify(found)}`);
+  }
+  const elsewhere = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|scss|tsx?|jsx?|mdx|html)$/.test(e.name) && p !== path.join(frontend, 'src', 'app', 'fonts.css')) { const s = uncommented(fs.readFileSync(p, 'utf8')); if (/@font-face/.test(s) || /--font-(sans|serif|mono)\s*:/.test(s)) elsewhere.push(path.relative(frontend, p)); } } };
+  for (const d of ['src', '.storybook']) walk(path.join(frontend, d));
+  assert.deepEqual(elsewhere, [], 'a face or a --font-* variable is declared outside fonts.css');
   assert.match(fs.readFileSync(path.join(frontend, 'src', 'app', 'globals.css'), 'utf8'), /^@import "\.\/fonts\.css";$/m, 'globals.css does not bring fonts.css');
 });
 
 // The product owner's choice of 2026-10-28 (#264): IBM's files bring the slashed zero, the arrows,
 // the maths and the kerning, and the symbols stay the system's, so a colour emoji keeps its colour.
 test('every face leaves the symbol and emoji blocks to the system, and keeps text, arrows and maths', () => {
-  const blocks = css.split('@font-face').filter((b) => /font-family: 'IBM Plex (Sans|Serif|Mono)';/.test(b));
-  assert.equal(blocks.length, 10);
-  const parse = (r) => r.split(',').map((s) => s.trim().replace(/^U\+/, '').split('-').map((h) => parseInt(h, 16))).map(([a, b = a]) => [a, b]);
-  for (const b of blocks) {
-    const m = b.match(/unicode-range: ([^;]+);/);
-    assert.ok(m, `a face with no unicode-range draws every symbol IBM's file has:\n${b.slice(0, 120)}`);
-    const has = (cp) => parse(m[1]).some(([lo, hi]) => cp >= lo && cp <= hi);
-    for (const ch of '✓✕❌✅⚠★▶●☀⌛①⭐😀') assert.ok(!has(ch.codePointAt(0)), `${ch} (U+${ch.codePointAt(0).toString(16).toUpperCase()}) would be drawn by Plex`);
+  const plex = faces(css).filter((d) => PLEX.test(unquote(d['font-family'] ?? '')));
+  assert.equal(plex.length, 10);
+  // Only U+XXXX and U+XXXX-YYYY: a wildcard (U+27??) or another case parses differently here than in CSS.
+  const parse = (r) => r.split(',').map((s) => s.trim()).map((tok) => {
+    const m = tok.match(/^U\+([0-9A-F]{1,6})(?:-([0-9A-F]{1,6}))?$/);
+    assert.ok(m, `unicode-range token ${tok} is not U+XXXX or U+XXXX-YYYY`);
+    return [parseInt(m[1], 16), parseInt(m[2] ?? m[1], 16)];
+  });
+  for (const d of plex) {
+    assert.equal(d['unicode-range'], RANGE, `${unquote(d['font-family'])} ${d['font-weight']} ${d['font-style']}: the range is not the product owner's`);
+    const has = (cp) => parse(d['unicode-range']).some(([lo, hi]) => cp >= lo && cp <= hi);
+    // Every code point IBM's files carry in the excluded blocks (◊ ✓ ❌ ⬎⬏⬐⬑), and the emoji beside them.
+    for (const ch of '◊✓❌⬎⬏⬐⬑✕✅⚠★▶●☀⌛①⭐😀') assert.ok(!has(ch.codePointAt(0)), `${ch} (U+${ch.codePointAt(0).toString(16).toUpperCase()}) would be drawn by Plex`);
     for (const ch of '0Øaжё→≈≤½²₂‰—€№') assert.ok(has(ch.codePointAt(0)), `${ch} (U+${ch.codePointAt(0).toString(16).toUpperCase()}) is left out of Plex`);
   }
 });

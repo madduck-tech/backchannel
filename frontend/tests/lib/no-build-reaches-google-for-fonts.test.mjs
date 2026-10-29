@@ -39,4 +39,9 @@ test('CI reads the built frontend for Google\'s font service, and fails on it', 
   const run = String(steps[check].keys.run);
   assert.match(run, /then .*exit 1; fi/, 'the check does not fail when it finds one');
   assert.match(run, /\[ "\$N" -gt 0 \] \|\| \{[^}]*exit 1; \}/, 'the check passes on an empty or missing frontend/out');
+  assert.match(run, /^\s*N=\$\(find frontend\/out -type f 2>\/dev\/null \| wc -l\)$/m, 'N no longer counts the files under frontend/out');
+  // A step that cannot fail the job, or that may not run, checks nothing.
+  for (const k of ['continue-on-error', 'if']) assert.ok(!(k in steps[check].keys), `the check carries ${k}:, so it can pass without checking`);
+  const job = wf.jobs.find((j) => j.steps.includes(steps[check]));
+  assert.ok(!('continue-on-error' in (job.keys ?? {})), 'the job running the check carries continue-on-error:');
 });

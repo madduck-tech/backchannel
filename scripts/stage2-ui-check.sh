@@ -202,6 +202,20 @@ done
   die "gave up waiting for the UI"
 }
 
+# --- the typefaces are the shipped files, and the symbols stay the system's (#264) --------
+# Asked of WebKit, which is what draws this build, not of the Chrome the fonts were chosen in. For each
+# of the ten faces: text must be drawn by exactly that face, loaded; each symbol by none of them.
+FONTS=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-probe.js" \
+  | curl -s -m 30 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
+  | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+print(v if isinstance(v, str) else json.dumps({"error": "the probe did not answer: " + repr(v)[:200]}))')
+FONT_VERDICT=$(printf '%s' "$FONTS" | python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-verdict.py")
+say "fonts: $FONT_VERDICT"
+case "$FONT_VERDICT" in ok:*) ;; *) die "the typefaces are not what fonts.css ships: $FONT_VERDICT" ;; esac
+
 # --- the settings tabs open -------------------------------------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button in the DOM"
 click "$S" "the Settings control"
@@ -272,4 +286,4 @@ say "stored preference: ${STORED:-<none>}"
   || die "selected '$FIRST' and the app stored '$STORED'; it must store exactly '$FIRST (output)'"
 
 PASSED=1
-say "PASS - tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"
+say "PASS - the ten faces load from the shipped files and leave the symbols to the system, tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"

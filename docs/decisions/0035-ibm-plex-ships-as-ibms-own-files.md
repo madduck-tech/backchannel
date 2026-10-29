@@ -12,7 +12,7 @@ Every build fetched IBM Plex from Google through Next's font loader, and on 2026
 - **What changes on screen.** IBM's complete files are not Google's subsets.
   - They carry the OpenType `zero` feature, which `globals.css` has always asked for on `.readout`. Google's files lacked it, so the zero was dotted.
   - They kern a Cyrillic letter against ASCII punctuation, which Google's split files never did: "Т." sets 1.0–1.7 px tighter.
-  - They draw ✓ ✕ ❌, the arrows and the maths, where Google's subsets left those characters to the system.
+  - They draw the arrows, the maths and, in the pictographic blocks, ◊ ✓ ❌ and ⬎⬏⬐⬑, where Google's subsets left those characters to the system.
 
   The gate adversary measured all three in headless Chrome. The product owner saw both renders on 2026-10-28.
 
@@ -25,17 +25,18 @@ Every build fetched IBM Plex from Google through Next's font loader, and on 2026
    - No subset, conversion or rename of a Plex file is ever committed.
 2. **They load through plain `@font-face` rules** in `frontend/src/app/fonts.css`, imported by `globals.css`.
    - The `--font-*` variables live on `:root`.
-   - The three metric-adjusted fallback faces are copied verbatim from what Next's loader generated, so `ch` and line metrics do not move.
+   - The three metric-adjusted fallback faces are copied verbatim from what Next's loader generated, so text drawn before the files load keeps the box it had. Once they load, Plex's own metrics govern, as before. Line metrics on Windows (Serif's `usWinAscent`/`usWinDescent` differ from Google's) are not measured.
 3. **Each face leaves the pictographic blocks to the system** through `unicode-range`: Miscellaneous Technical, Enclosed Alphanumerics, Geometric Shapes, Miscellaneous Symbols, Dingbats, Miscellaneous Symbols and Arrows, and everything from U+10000.
    - This was the product owner's choice of 2026-10-28, from three options. The slashed zero, the arrows, the maths and the kerning come from IBM's files.
    - The symbols draw as they did before, so a summary's ❌ keeps its colour beside its ✅.
 4. **No build reaches Google's font service.**
    - A test reads every frontend file git sees for the four strings that would bring it back.
-   - CI reads the built `frontend/out` after the AppImage build, which covers a dependency's stylesheet.
+   - CI reads the built `frontend/out` after the AppImage build, which covers a dependency's stylesheet. That step is in `stage2-artifact.yml`, which is not a required check: what fails a pull request is the test.
+5. **WebKit is asked what it draws.** Stage 2's `stage2-ui-check.sh` runs `scripts/lib/fonts-probe.js` in the built app: each of the ten faces must draw text from its shipped file, loaded, and no face may draw ✓ ❌ ◊ ⬎. The fonts were chosen from Chrome renders; this is the engine Linux ships.
 
 ## Consequences
 
-- **A font upgrade** is a new IBM tag: new files, new rows in `SOURCES.md`, and the same render check, rerun.
+- **A font upgrade** is a new IBM tag: new files, new rows in `SOURCES.md`, the tag in `fonts-ship-in-the-repository.test.mjs`, and Stage 2's font probe, rerun. The widths the product owner compared were measured in Chrome and are not a committed check.
 - **#222's fixtures** follow decision 1: IBM's files, never Google's.
 - **Showing the licence inside the app** is #269.
 - **`--webpack`** was kept because of Turbopack's Google font loader. That reason is gone; dropping the flag is its own change.

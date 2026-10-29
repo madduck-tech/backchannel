@@ -15,7 +15,7 @@
  * Each face leaves out the pictographic blocks: Miscellaneous Technical (U+2300-23FF), Enclosed
  * Alphanumerics (U+2460-24FF), Geometric Shapes (U+25A0-25FF), Miscellaneous Symbols (U+2600-26FF),
  * Dingbats (U+2700-27BF), Miscellaneous Symbols and Arrows (U+2B00-2BFF), and everything from U+10000.
- * IBM's complete files draw ✓ ✕ ❌ and their neighbours in monochrome, where Google's subsets left
+ * In those blocks IBM's complete files draw ◊ ✓ ❌ and ⬎⬏⬐⬑ in monochrome, where Google's subsets left
  * them to the system, so a summary's ❌ beside its ✅ would have lost its colour. The product owner
  * chose this on 2026-10-28 (#264): the slashed zero, the arrows, the maths and the kerning IBM's
  * files bring, and the symbols as they were.
