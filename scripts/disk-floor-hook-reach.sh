@@ -31,7 +31,7 @@ STUB_PID=""
 cleanup() { [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true; rm -rf -- "$WORK"; }
 trap cleanup EXIT
 
-say "claude $("$CLAUDE" --version 2>/dev/null | head -1); main checkout HEAD $(git -C "$TOP" rev-parse --short HEAD)"
+say "claude $("$CLAUDE" --version 2>/dev/null | head -1); the clone is of $TOP at $(git -C "$TOP" rev-parse --short HEAD)"
 mkdir -p "$WORK/bin"
 printf '#!/bin/sh\ntouch "%s/marker"\necho "cargo shim: built nothing"\n' "$WORK" > "$WORK/bin/cargo"
 chmod +x "$WORK/bin/cargo"
