@@ -27,7 +27,7 @@ function cell(name, { log = PULSE, env = {}, cookie = null, alive = true } = {})
   const s2 = path.join(base, name);
   fs.mkdirSync(path.join(s2, 'home', '.config', 'pulse'), { recursive: true });
   if (cookie) fs.writeFileSync(path.join(s2, 'home', cookie), Buffer.alloc(256, 1));
-  const e = { ...process.env, ...env };
+  const e = { ...process.env, HOME: path.join(s2, 'home'), XDG_CONFIG_HOME: path.join(s2, 'home', '.config'), ...env };
   if (!('PULSE_COOKIE' in env)) delete e.PULSE_COOKIE;
   const p = spawn('sleep', ['30'], { env: e, stdio: 'ignore' }); p.unref(); procs.push(p);
   if (!alive) p.kill('SIGKILL');
@@ -63,6 +63,15 @@ for (const where of ['.config/pulse/cookie', '.pulse-cookie']) {
     assert.match(r.out, new RegExp(`${where.replace('.', '\\.')} exists`));
   });
 }
+
+test('the cookie is looked for where the process looks, not where the launch was meant to put it', () => {
+  const elsewhere = path.join(base, 'elsewhere-home');
+  fs.mkdirSync(path.join(elsewhere, '.config', 'pulse'), { recursive: true });
+  fs.writeFileSync(path.join(elsewhere, '.config', 'pulse', 'cookie'), Buffer.alloc(256, 1));
+  const r = cell('drifted', { env: { HOME: elsewhere, XDG_CONFIG_HOME: path.join(elsewhere, '.config') } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /elsewhere-home\/\.config\/pulse\/cookie exists/);
+});
 
 test('no host line, and a process that is gone, both fail', () => {
   const none = cell('no-line', { log: 'nothing about hosts' });

@@ -1,11 +1,6 @@
 //! A pure Rust implementation of the PulseAudio protocol, suitable for writing
 //! servers and clients.
 
-// Backchannel's fork (ADR 0033): rustc 1.98 flags 12 `value assigned to \`flags\` is never read` in
-// protocol/command/{playback,record}_stream.rs. From the registry the crate was built under
-// `--cap-lints`, so these were never seen; as a path dependency `-D warnings` reaches it. Allowed
-// here rather than edited, so the protocol files stay the published ones.
-#![allow(unused_assignments)]
 #![warn(
     anonymous_parameters,
     missing_copy_implementations,
@@ -25,6 +20,13 @@
 use std::path::PathBuf;
 
 mod client;
+// Backchannel's fork (ADR 0033): rustc 1.98 flags 12 `value assigned to \`flags\` is never read` in
+// protocol/command/{playback,record}_stream.rs. They are a real decode bug the published crate has too
+// (a decoded stream command loses `early_requests`, `passthrough` and `fail_on_suspend`), harmless to a
+// client, which only encodes those commands. From the registry the crate was built under
+// `--cap-lints`; as a path dependency `-D warnings` reaches it. Allowed on this module only, so the
+// protocol files stay the published ones and the lint still covers the cookie code.
+#[allow(unused_assignments)]
 pub mod protocol;
 pub use client::*;
 
@@ -94,9 +96,12 @@ pub fn cookie_from_env() -> Vec<u8> {
 ///      empty, and `$HOME/.config/pulse/cookie` otherwise;
 ///   3. `$HOME/.pulse-cookie`.
 ///
-/// The first file that can be read decides: its first [COOKIE_LENGTH] bytes if
-/// it holds that many, and [COOKIE_LENGTH] zero bytes otherwise. With no file
-/// to read, the cookie is zero bytes too, as libpulse sends. Nothing is written.
+/// The first regular file that can be read decides: its first [COOKIE_LENGTH]
+/// bytes if it holds that many, and [COOKIE_LENGTH] zero bytes otherwise. A
+/// path that is missing, unreadable or not a regular file (a directory, a FIFO,
+/// `/dev/zero`) is passed over, and at most [COOKIE_LENGTH] bytes are read, so
+/// no path can block the audio host or fill its memory. With no file to read,
+/// the cookie is zero bytes too, as libpulse sends. Nothing is written.
 pub fn cookie_from(
     pulse_cookie: Option<&std::ffi::OsStr>,
     xdg_config_home: Option<&std::ffi::OsStr>,
@@ -112,13 +117,28 @@ pub fn cookie_from(
         .into_iter()
         .chain(config)
         .chain(home.map(|home| home.join(".pulse-cookie")));
-    match paths.find_map(|path| std::fs::read(path).ok()) {
+    match paths.find_map(|path| read_regular(&path)) {
         Some(mut bytes) if bytes.len() >= COOKIE_LENGTH => {
             bytes.truncate(COOKIE_LENGTH);
             bytes
         }
         _ => vec![0; COOKIE_LENGTH],
     }
+}
+
+/// At most [COOKIE_LENGTH] bytes of `path`, when it is a regular file that can be read.
+fn read_regular(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(COOKIE_LENGTH);
+    std::fs::File::open(path)
+        .ok()?
+        .take(COOKIE_LENGTH as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(bytes)
 }
 
 /// Attempts to find the authentication cookie from the environment, checking

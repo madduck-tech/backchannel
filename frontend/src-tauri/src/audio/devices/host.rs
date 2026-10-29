@@ -1108,6 +1108,19 @@ pub(crate) mod tests {
 
         let home = tempfile::tempdir().unwrap();
         let config = tempfile::tempdir().unwrap();
+        // Put back afterwards, even on a failed assertion: the temp dirs are gone once this returns.
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(["PULSE_COOKIE", "HOME", "XDG_CONFIG_HOME"].iter().map(|k| (*k, std::env::var_os(k))).collect());
         std::env::remove_var("PULSE_COOKIE");
         std::env::set_var("HOME", home.path());
         std::env::set_var("XDG_CONFIG_HOME", config.path());
@@ -1214,6 +1227,55 @@ pub(crate) mod tests {
             let home = tempfile::tempdir().unwrap();
             let p = file(home.path(), ".pulse-cookie", 256, 3);
             assert_eq!(cookie_from(None, None, Some(home.path())), first(&p));
+        }
+
+        // Two files at once: each case below is the one input that tells the rule from a neighbour of
+        // it (the gate adversary, round 1: five neighbours passed the single-file cases).
+
+        #[test]
+        fn pulse_cookie_is_read_before_the_home_pulse_cookie() {
+            let home = tempfile::tempdir().unwrap();
+            let env = file(home.path(), "elsewhere/cookie", 256, 2);
+            file(home.path(), ".pulse-cookie", 256, 3);
+            assert_eq!(cookie_from(Some(env.as_os_str()), None, Some(home.path())), first(&env));
+        }
+
+        #[test]
+        fn the_config_file_is_read_before_the_home_pulse_cookie() {
+            let home = tempfile::tempdir().unwrap();
+            let config = file(home.path(), ".config/pulse/cookie", 256, 1);
+            file(home.path(), ".pulse-cookie", 256, 3);
+            assert_eq!(cookie_from(None, None, Some(home.path())), first(&config));
+        }
+
+        #[test]
+        fn with_xdg_config_home_set_the_home_config_file_is_not_read() {
+            let home = tempfile::tempdir().unwrap();
+            let config = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 256, 1);
+            assert_eq!(cookie_from(None, Some(config.path().as_os_str()), Some(home.path())), zeros());
+        }
+
+        #[test]
+        fn a_short_first_file_decides_and_the_lookup_stops_there() {
+            let home = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 10, 1);
+            file(home.path(), ".pulse-cookie", 256, 3);
+            assert_eq!(cookie_from(None, None, Some(home.path())), zeros());
+        }
+
+        #[test]
+        fn a_path_that_is_not_a_file_is_passed_over() {
+            let home = tempfile::tempdir().unwrap();
+            let config = file(home.path(), ".config/pulse/cookie", 256, 1);
+            let dir = home.path().join("a-directory");
+            std::fs::create_dir(&dir).unwrap();
+            assert_eq!(cookie_from(Some(dir.as_os_str()), None, Some(home.path())), first(&config));
+            // Neither a device that never ends nor a FIFO that never answers may hold the audio host.
+            assert_eq!(cookie_from(Some(OsStr::new("/dev/zero")), None, Some(home.path())), first(&config));
+            let fifo = home.path().join("fifo");
+            assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+            assert_eq!(cookie_from(Some(fifo.as_os_str()), None, Some(home.path())), first(&config));
         }
     }
 }

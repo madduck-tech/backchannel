@@ -18,11 +18,17 @@ say() { printf 'pulse-host: %s\n' "$*" >&2; }
 S2=${1:?usage: stage2-pulse-host-check.sh <stage 2 root>}
 PID=$(cat "$S2/pid" 2>/dev/null) || { say "no pid file under $S2"; exit 1; }
 [ -r "/proc/$PID/environ" ] || { say "process $PID is not running, so there is nothing to read"; exit 1; }
-if tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^PULSE_COOKIE='; then
+ENV=$(tr '\0' '\n' < "/proc/$PID/environ")
+if printf '%s\n' "$ENV" | grep -q '^PULSE_COOKIE='; then
   say "the launched process carries PULSE_COOKIE, so this run cannot show the app authenticating with no cookie; unset it in the shell that runs the gate"
   exit 1
 fi
-for c in "$S2/home/.config/pulse/cookie" "$S2/home/.pulse-cookie"; do
+# The places the client reads, from the process's own environment, not from where the launch is
+# meant to have put them: a launch that drifted from entry 6 would otherwise pass on paths nobody read.
+P_HOME=$(printf '%s\n' "$ENV" | sed -n 's/^HOME=//p' | head -1)
+P_XDG=$(printf '%s\n' "$ENV" | sed -n 's/^XDG_CONFIG_HOME=//p' | head -1)
+[ -n "$P_HOME" ] || { say "the launched process has no HOME"; exit 1; }
+for c in "${P_XDG:-$P_HOME/.config}/pulse/cookie" "$P_HOME/.config/pulse/cookie" "$P_HOME/.pulse-cookie"; do
   [ -e "$c" ] && { say "$c exists, so this run had a cookie and cannot judge"; exit 1; }
 done
 line=$(grep -m1 'Audio host selected for this process:' "$S2/stdout.log" 2>/dev/null) || { say "the app logged no host selection line"; exit 1; }
