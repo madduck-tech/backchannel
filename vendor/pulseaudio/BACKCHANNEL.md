@@ -1,6 +1,6 @@
 # This is a fork
 
-`vendor/pulseaudio` is the `pulseaudio` crate 0.3.1 as published on crates.io, by Colin Marc, under the MIT licence in `LICENSE.md`. Backchannel patches it in at the workspace root (`Cargo.toml`, `[patch.crates-io]`). ADR 0033 records why, and #243 is the issue.
+`vendor/pulseaudio` is the `pulseaudio` crate 0.3.1 as published on crates.io, by Colin Marc, under the MIT licence in `LICENSE.md`. Backchannel patches it in at the workspace root (`Cargo.toml`, `[patch.crates-io]`). ADR 0034 records why, and #243 is the issue.
 
 - **Source:** https://crates.io/api/v1/crates/pulseaudio/0.3.1/download. Its sha256, `d70623bd7967a9ca4c2ae0e807fc380b291f98480fc037042305ec643a4d3373`, is the checksum `Cargo.lock` pinned before the patch.
 - **Extracted** with `tar -xzf … --strip-components=1`. Every file is kept, including the crate's own `Cargo.lock`, which its `.gitignore` would have hidden.
@@ -10,7 +10,7 @@
   - `src/client.rs`'s `Client::from_env` sends that cookie. The published crate sent the file it found as it was, and an empty cookie when it found none. PipeWire's pulse server refuses both.
   - This file, and `PUBLISHED.sha256`, the sha256 of every file in the published crate.
 - **The two changed files are pinned** (`vendor-is-the-published-crate.test.mjs`): a change to either changes these, on purpose.
-  - `src/lib.rs` `a02bb4bf0d335a49813da7b07695db68351c6d8f33fdc719f13c97173126e457`
+  - `src/lib.rs` `ff90c6f1dccb4b6a1410b39964cafc3f4a089e47baa7936ea14c6803df98da1c`
   - `src/client.rs` `9aefc30f927fa65b1977913c0c37cbc955abcab66b5d8047ffedec7ca87b3b4b`
 - **`frontend/src-tauri/tests` holds nothing for it.** The cookie tests live in `frontend/src-tauri/src/audio/devices/host.rs` (`mod pulse_cookie`), against `pulseaudio::cookie_from`. `vendor-is-the-published-crate.test.mjs` holds every other file to the published crate's sha256.
 

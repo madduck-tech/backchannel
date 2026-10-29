@@ -1,4 +1,4 @@
-// vendor/pulseaudio is the published crate, changed in two files and no others. (#243, ADR 0033)
+// vendor/pulseaudio is the published crate, changed in two files and no others. (#243, ADR 0034)
 //
 // The fork exists to send a 256-byte cookie. Anything else that drifted from the published crate --
 // an edit made while debugging, a file lost to the crate's own .gitignore, which hides its Cargo.lock
@@ -26,7 +26,7 @@ test('every file but the two changed ones is the published crate\'s, byte for by
   const onDisk = execFileSync('git', ['ls-files', '-z', '--', '.'], { cwd: vendor, encoding: 'utf8' }).split('\0').filter((f) => f && !OURS.includes(f)).sort();
   assert.deepEqual(onDisk, [...published.keys()].sort(), 'git does not track exactly the published crate\'s files under vendor/pulseaudio');
   const drifted = onDisk.filter((f) => !CHANGED.includes(f) && sha(path.join(vendor, f)) !== published.get(f));
-  assert.deepEqual(drifted, [], `files that differ from the published crate though ADR 0033 changes none of them`);
+  assert.deepEqual(drifted, [], `files that differ from the published crate though ADR 0034 changes none of them`);
   for (const f of CHANGED) assert.notEqual(sha(path.join(vendor, f)), published.get(f), `${f} is the published file: the patch is gone`);
   // The two forked files are pinned in BACKCHANNEL.md: a change to the cookie code changes them on purpose.
   const notes = fs.readFileSync(path.join(vendor, 'BACKCHANNEL.md'), 'utf8');

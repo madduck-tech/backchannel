@@ -1,4 +1,4 @@
-# 0033 — The PulseAudio cookie is computed in memory, by a fork of the `pulseaudio` crate patched at the workspace root
+# 0034 — The PulseAudio cookie is computed in memory, by a fork of the `pulseaudio` crate patched at the workspace root
 
 Date: 2026-10-28
 Status: accepted

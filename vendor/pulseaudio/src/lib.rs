@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 
 mod client;
-// Backchannel's fork (ADR 0033): rustc 1.98 flags 12 `value assigned to \`flags\` is never read` in
+// Backchannel's fork (ADR 0034): rustc 1.98 flags 12 `value assigned to \`flags\` is never read` in
 // protocol/command/{playback,record}_stream.rs. They are a real decode bug the published crate has too
 // (a decoded stream command loses `early_requests`, `passthrough` and `fail_on_suspend`), harmless to a
 // client, which only encodes those commands. From the registry the crate was built under
@@ -73,7 +73,7 @@ pub const COOKIE_LENGTH: usize = 256;
 /// The cookie [Client::from_env] sends, read from the
 /// environment. See [cookie_from].
 ///
-/// Backchannel's fork (ADR 0033): the published crate sent the file it found
+/// Backchannel's fork (ADR 0034): the published crate sent the file it found
 /// as is, and an empty cookie when it found none, both of which PipeWire
 /// refuses.
 pub fn cookie_from_env() -> Vec<u8> {

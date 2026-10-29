@@ -1,6 +1,6 @@
 # sha256 of every file in pulseaudio-0.3.1.crate as published (crate sha256
 # d70623bd7967a9ca4c2ae0e807fc380b291f98480fc037042305ec643a4d3373). Two differ here on
-# purpose, src/lib.rs and src/client.rs (ADR 0033); every other file must match.
+# purpose, src/lib.rs and src/client.rs (ADR 0034); every other file must match.
 9b23b7c18d6b7a5f213033207ba7ff502eecbab2dba09911ea963a32121cfc50  .cargo_vcs_info.json
 f31e594bc774f8436a6ff1e718ea09965e157237412ceb85cdc363c54e3d8a9d  .github/workflows/tests.yaml
 f9b1ca6ae27d1c18215265024629a8960c31379f206d9ed20f64e0b2dcf79805  .gitignore

@@ -1,4 +1,4 @@
-// Stage 2 judges the audio host with no PulseAudio cookie anywhere it looks. (#243, ADR 0033)
+// Stage 2 judges the audio host with no PulseAudio cookie anywhere it looks. (#243, ADR 0034)
 //
 // scripts/stage2-pulse-host-check.sh reads the app entry 6 launched. It may pass only when the first
 // host line reads PulseAudio *and* the run had no cookie: none in the process's environment, which the

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The audio host authenticates with no PulseAudio cookie anywhere it looks. (#243, ADR 0033)
+# The audio host authenticates with no PulseAudio cookie anywhere it looks. (#243, ADR 0034)
 #
 #   stage2-pulse-host-check.sh <stage 2 root>
 #
 # Reads the app Stage 2 entry 6 launched: its pid, its fresh home and its log. It passes only when
 # the first `Audio host selected for this process:` line reads PulseAudio, and the run had no cookie
 # to send: no PULSE_COOKIE in the process's environment, which the gate passes through from the
-# shell, and no cookie file in its home. Until ADR 0033 the client sent an empty cookie when it found
+# shell, and no cookie file in its home. Until ADR 0034 the client sent an empty cookie when it found
 # none, PipeWire refused it, and the CI-built AppImage fell back to ALSA.
 #
 # On this machine a local build escaped by accident: GTK loads libcanberra, whose libpulse writes a

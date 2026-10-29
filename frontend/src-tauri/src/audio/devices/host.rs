@@ -1082,7 +1082,7 @@ pub(crate) mod tests {
         assert_eq!(audio_host().id(), cpal::HostId::PulseAudio);
     }
 
-    /// #243, ADR 0033: built the way the application builds it, with no cookie anywhere the client
+    /// #243, ADR 0034: built the way the application builds it, with no cookie anywhere the client
     /// looks, the PulseAudio host authenticates, and nothing is written to the home it was given.
     /// Until the vendored client computed the cookie in memory it sent an empty one, PipeWire
     /// refused it (`server error: Invalid`), and the CI-built AppImage recorded no system audio.
@@ -1147,7 +1147,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// #243, ADR 0033: the cookie the PulseAudio client sends is always 256 bytes, computed in memory
+    /// #243, ADR 0034: the cookie the PulseAudio client sends is always 256 bytes, computed in memory
     /// by the vendored `pulseaudio` crate. PipeWire refuses any other length. The lookup takes the
     /// variables' values, so these tests set no environment variable; the files are real.
     #[cfg(target_os = "linux")]
