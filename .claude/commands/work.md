@@ -60,7 +60,9 @@ replacement for it.
 
 Then open the pull request with `gh pr create`, `Closes #$issue`, with the verdict linked rather
 than restated. A pull request into `exp/virtual-audio` says `Refs #$issue` instead, and the issue is
-closed by hand after the merge with a comment linking the merge commit and the verdict (ADR 0033). Two things that wording depends on: the keyword only closes when
+closed by hand after the merge with a comment linking the merge commit and the verdict (ADR 0033). It is merged without waiting
+for CI; then `gh workflow run test.yml --ref exp/virtual-audio` (and `stage2-artifact.yml` when the AppImage's inputs
+changed), with the result posted to the issue. A red or unstarted run blocks the next merge into the branch (ADR 0035). Two things that wording depends on: the keyword only closes when
 the pull request targets the default branch, and closing the issue before the
 pull request exists voids the state change the keyword would have made — the
 link itself survives, so the issue still shows on the pull request, already

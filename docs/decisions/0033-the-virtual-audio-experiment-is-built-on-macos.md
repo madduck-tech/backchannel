@@ -4,7 +4,9 @@ Date: 2026-10-28
 Status: accepted. Supersedes, for the virtual audio experiment only, decision 5 of
 [ADR 0005](0005-platform-support-tiers.md), decision 5 of [ADR 0008](0008-latency-targets.md) and
 decision 1 of [ADR 0012](0012-development-workflow.md) ("`main` is the only long-lived branch", as
-`docs/development-workflow.md` repeats it). None of them is changed for any other work.
+`docs/development-workflow.md` repeats it). None of them is changed for any other work. Decision 3 is
+amended by [ADR 0035](0035-the-experiment-branch-merges-before-ci-and-runs-it-after.md): pull requests into the
+branch merge before CI, which runs after.
 
 ## Context
 

@@ -346,7 +346,7 @@ cfg-gated) cannot
 be reached by Linux Stage 2 on the development Mac, and ADR 0022 makes that a named gap that blocks
 until the product owner or an issue accepts it. **The product owner accepted it on 2026-10-28**, in
 conversation, recorded on #273: Linux Stage 2 will be reworked separately, so pull requests into
-`exp/virtual-audio` run Linux Stage 1 only, and Linux Stage 2 is owed at the merge into `main`. Each
+`exp/virtual-audio` run Linux Stage 1 only (in CI after the merge, ADR 0035), and Linux Stage 2 is owed at the merge into `main`. Each
 such verdict still names the Linux surfaces it touched and cites this acceptance rather than implying
 a pass. The acceptance does not extend to the merge into `main`, whose gap is decided there.
 

@@ -61,7 +61,7 @@ Every change that executes goes through one cycle. [`docs/development-workflow.m
 6. **The gate is run:** the commands in [`gopnik.json`](gopnik.json), Stage 1 and then Stage 2, with the verdict posted on the issue.
    - Stage 2 drives the built app on Linux, with a display and a PipeWire session. On `exp/virtual-audio` it is the experiment's macOS instrument (at step 1, before that instrument exists, the precondition run; ADR 0033).
    - Its last passes play speech through the default output, so keep the machine quiet while it runs.
-7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.** Into `exp/virtual-audio` it says `Refs #N` and the issue is closed by hand after the merge (ADR 0033).
+7. **The pull request says `Closes #N`, links the verdict, and is merged once CI is green.** Into `exp/virtual-audio` it says `Refs #N`, the issue is closed by hand after the merge (ADR 0033), and the merge does not wait for CI: CI is dispatched on the branch afterwards, and a red run blocks the next merge (ADR 0035).
 
 **Documentation-only changes** skip the gate, but still go through a pull request, because CI must pass before `main` accepts a commit.
 

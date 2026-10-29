@@ -62,7 +62,9 @@ record and `main` never disagrees with it.
    and Linux and Windows are the unproven ones (ADR 0033).
 6. **Pull request** with `Closes #N` and a link to the verdict (into `exp/virtual-audio`: `Refs #N`,
    and the issue closed by hand after the merge; ADR 0033). On a `READY` verdict engineering
-   merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by
+   merges it (merge commit, branch deleted); the merge closes the issue. Into `exp/virtual-audio`
+   the merge does not wait for CI: CI is dispatched on the branch after it, and a red run blocks the
+   next merge (ADR 0035). A verdict superseded by
    a later fix is not merged on.
 
 That is the whole cycle. It applies to every executable change without exception; waiting longer
