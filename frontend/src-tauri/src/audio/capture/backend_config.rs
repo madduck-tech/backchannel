@@ -43,12 +43,13 @@ impl Platform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioCaptureBackend {
-    /// ScreenCaptureKit backend (macOS default)
-    /// Uses CPAL with ScreenCaptureKit host for system audio
+    /// cpal on the device selected under System Audio. No ScreenCaptureKit is involved:
+    /// upstream 483fea6 removed that host and kept the name, which is a storage key (#276).
+    /// cpal reads an input-capable device's input and taps an output-only device.
     ScreenCaptureKit,
 
-    /// Core Audio backend (macOS only)
-    /// Uses direct Core Audio API with aggregate device + tap
+    /// Core Audio backend (macOS only): one global mono tap of every application, with an
+    /// aggregate device for the clock. The device selected under System Audio is not used.
     CoreAudio,
 }
 
@@ -56,8 +57,8 @@ impl AudioCaptureBackend {
     /// Get human-readable name
     pub fn name(&self) -> &'static str {
         match self {
-            AudioCaptureBackend::ScreenCaptureKit => "ScreenCaptureKit",
-            AudioCaptureBackend::CoreAudio => "Core Audio",
+            AudioCaptureBackend::ScreenCaptureKit => "Selected device",
+            AudioCaptureBackend::CoreAudio => "All system audio",
         }
     }
 
@@ -65,10 +66,14 @@ impl AudioCaptureBackend {
     pub fn description(&self) -> &'static str {
         match self {
             AudioCaptureBackend::ScreenCaptureKit => {
-                "Apple's ScreenCaptureKit framework - Higher level API with good compatibility"
+                "Records only the device selected above. A loopback device such as BlackHole is \
+                 read as an input, a speaker or headphone output is recorded through a tap on \
+                 that device, and a device with a microphone, such as a headset, records its \
+                 microphone."
             }
             AudioCaptureBackend::CoreAudio => {
-                "Direct Core Audio API - Lower latency, more control over audio pipeline"
+                "Records what every application plays, mixed to mono, through a Core Audio tap. \
+                 The System Audio device selected above is not used."
             }
         }
     }
@@ -87,7 +92,7 @@ impl AudioCaptureBackend {
     /// It used to be an inherent `to_string`, which shadowed this type's own `Display`
     /// (`clippy::inherent_to_string_shadow_display`, deny-by-default). The two were not the
     /// same string and were never meant to be — `Display` writes the human label
-    /// ("ScreenCaptureKit"), this writes the id that goes in `recording_preferences.json`
+    /// ("Selected device"), this writes the id that goes in `recording_preferences.json`
     /// ("screencapturekit") — so a caller reaching one instead of the other silently got the
     /// wrong one. Renamed rather than allowed, because the round trip below is the thing
     /// that must hold.
