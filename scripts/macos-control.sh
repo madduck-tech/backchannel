@@ -4,7 +4,8 @@
 #   macos-control.sh build                    build the bundle with the HEAD revision embedded
 #   macos-control.sh launch                   start that bundle with control enabled
 #   macos-control.sh send <command> [args]    run one command and print its result line
-#       start --mic <name> --system <name> [--meeting <name>]
+#       start --mic "<name> (input)" --system "<name> (output)" [--meeting <name>]
+#             (the suffixed form the UI passes; a bare name is refused by the command)
 #       stop | status | set-backend --backend <id>
 #
 # Every `send` first checks that the app owning the single-instance socket is the bundle built
