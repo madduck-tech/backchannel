@@ -143,7 +143,7 @@ def peaks(score, threshold, min_gap):
 def refine(score, i):
     """Sub-sample peak position by parabolic interpolation."""
     if 0 < i < score.size - 1:
-        a, b, c = score[i - 1], score[i], score[i + 1]
+        a, b, c = (float(v) for v in score[i - 1:i + 2])
         d = a - 2 * b + c
         if d < 0:
             return i + 0.5 * (a - c) / d
