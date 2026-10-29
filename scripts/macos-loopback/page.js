@@ -53,7 +53,13 @@ async function main() {
     autoGainControl: settings.autoGainControl, channelCount: settings.channelCount,
   };
 
-  const ctx = new AudioContext({ sampleRate: 48000, sinkId: { type: 'none' } });
+  // Clocked by the output device, not by a timer: with `sinkId: { type: 'none' }` the hour-long
+  // L1 run lost 150-300 ms of side A and side B in steps (#291). The taps reach the destination
+  // only through a gain of 0, so nothing extra is played.
+  const ctx = new AudioContext({ sampleRate: 48000, sinkId: resolved.output_device_id });
+  const silent = ctx.createGain();
+  silent.gain.value = 0;
+  silent.connect(ctx.destination);
   await ctx.audioWorklet.addModule('/worklet.js');
   if (test.suspend) await ctx.suspend(); else await ctx.resume();
   record.applied.contextState = ctx.state;
@@ -100,20 +106,34 @@ async function main() {
   await audio.play();
   record.applied.sinkId = audio.sinkId;
 
+  record.applied.contextGaps = {};
   const tap = (src, name) => {
     const node = new AudioWorkletNode(ctx, 'tap');
     let pending = [];
     let size = 0;
+    let written = 0;
+    let expected = null;
+    record.applied.contextGaps[name] = { gaps: 0, frames: 0 };
     node.port.onmessage = (m) => {
-      pending.push(m.data); size += m.data.length;
+      const { frame, data } = m.data;
+      if (expected !== null && frame !== expected) {
+        record.applied.contextGaps[name].gaps += 1;
+        record.applied.contextGaps[name].frames += frame - expected;
+      }
+      expected = frame + data.length;
+      pending.push(data); size += data.length;
       if (size >= 48000) {
         const buf = new Float32Array(size); let o = 0;
         for (const c of pending) { buf.set(c, o); o += c.length; }
         pending = []; size = 0;
-        post('/chunk/' + name, buf.buffer, 'application/octet-stream');
+        // The byte offset travels with the chunk: concurrent posts can arrive out of order, and
+        // did (#291: two one-second chunks swapped at 510 s).
+        post(`/chunk/${name}/${written * 4}`, buf.buffer, 'application/octet-stream');
+        written += buf.length;
       }
     };
     src.connect(node);
+    node.connect(silent);
     return node;
   };
   tap(ctx.createMediaStreamSource(stream), 'pre_send');

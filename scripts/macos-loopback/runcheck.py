@@ -105,6 +105,9 @@ def void_reasons(r):
         reasons.append("bitrate not measurable over the noise window")
     elif abs(kbps - PINNED_KBPS) > BITRATE_TOLERANCE * PINNED_KBPS:
         reasons.append(f"bitrate {kbps:.1f} kbit/s over the noise window, pinned {PINNED_KBPS:.0f} ±{BITRATE_TOLERANCE:.0%}")
+    for track, g in (app.get("contextGaps") or {}).items():
+        if g.get("gaps"):
+            reasons.append(f"{track} recording not continuous: {g['gaps']} gaps, {g['frames']} frames")
     if "capture" in r and (r["capture"] or {}).get("gaps") != 0:
         reasons.append(f"independent capture not continuous: {r['capture']}")
     return reasons

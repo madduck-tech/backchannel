@@ -11,8 +11,9 @@ cannot name a path: it posts to fixed routes and the server decides where each b
     GET  /params.json      the run's parameters (requested labels, seconds, test mutations)
     POST /devices          enumerateDevices() as the page sees it; answers the resolved ids or a
                            void reason, from runcheck.resolve, before the page opens any input
-    POST /chunk/<track>    raw float32 PCM appended to <run-dir>/<track>.f32; track is pre_send
-                           or side_b and nothing else
+    POST /chunk/<track>/<byte offset>
+                           raw float32 PCM written at that offset of <run-dir>/<track>.f32; track
+                           is pre_send or side_b and nothing else
     POST /event            one JSON line appended to <run-dir>/events.jsonl (ready, stats, done)
     POST /record           the applied record, written to <run-dir>/page-record.json
 """
@@ -20,6 +21,7 @@ import http.server
 import json
 import os
 import sys
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -28,6 +30,7 @@ import runcheck  # noqa: E402
 STATIC = {"/": ("page.html", "text/html"), "/page.js": ("page.js", "text/javascript"),
           "/worklet.js": ("worklet.js", "text/javascript")}
 TRACKS = ("pre_send", "side_b")
+CHUNK_LOCK = threading.Lock()
 
 
 def make_handler(run_dir, params):
@@ -72,11 +75,16 @@ def make_handler(run_dir, params):
                     json.dump(answer, f)
                 return self.reply(200, json.dumps(answer).encode())
             if self.path.startswith("/chunk/"):
-                track = self.path[len("/chunk/"):]
-                if track not in TRACKS:
+                parts = self.path.split("/")
+                if len(parts) != 4 or parts[2] not in TRACKS or not parts[3].isdigit():
                     return self.reply(404)
-                with open(os.path.join(run_dir, f"{track}.f32"), "ab") as f:
-                    f.write(data)
+                path = os.path.join(run_dir, f"{parts[2]}.f32")
+                with CHUNK_LOCK:
+                    # Written at the offset the page sent, so chunks that arrive out of order
+                    # land in order.
+                    with open(path, "r+b" if os.path.exists(path) else "wb") as f:
+                        f.seek(int(parts[3]))
+                        f.write(data)
                 return self.reply(204)
             if self.path == "/event":
                 with open(os.path.join(run_dir, "events.jsonl"), "ab") as f:

@@ -477,7 +477,9 @@ def cmd_judge(a):
         "late": [e for e in errors if abs(e["error_ms"]) > a.p95_ms],
     }
     failed = []
-    if truth["markers"] and a.p95_ms is not None and (report["timing_p95_ms"] is None or report["timing_p95_ms"] > a.p95_ms):
+    # --no-absolute for live runs: no shared clock, so timing is judged by pair offsets (L1c) and
+    # alignment by the slots; absolute error is still reported.
+    if truth["markers"] and not a.no_absolute and a.p95_ms is not None and (report["timing_p95_ms"] is None or report["timing_p95_ms"] > a.p95_ms):
         p95 = report["timing_p95_ms"]
         failed.append(f"timing p95 {'none (no hits)' if p95 is None else f'{p95:.3f} ms'} > {a.p95_ms} ms")
     if a.per_marker and report["late"]:
@@ -536,6 +538,7 @@ def main():
     j.add_argument("--p95-ms", type=float, default=5.0)
     j.add_argument("--per-marker", action="store_true", help="fail any single marker beyond --p95-ms")
     j.add_argument("--pairs", action="store_true")
+    j.add_argument("--no-absolute", action="store_true", help="do not judge absolute timing (live runs)")
     j.add_argument("--zero-misses", action="store_true")
     j.add_argument("--zero-false", action="store_true")
     a = p.parse_args()

@@ -183,6 +183,26 @@ class TheDetectorReportsEachMutation(Fixture):
         self.assertEqual(rep["misses"], [])
         self.assertEqual([f["id"] for f in rep["false_matches"]], [m["id"]])
 
+    def test_no_absolute_judges_pairs_and_slots_but_not_absolute_timing(self):
+        out, truth = self.fresh("noabs", "--pairs")
+        for m in truth["markers"]:
+            m["onset"] += 0.030  # a constant 30 ms the live path may add with no shared clock
+        with open(os.path.join(out, "truth-shift.json"), "w") as f:
+            json.dump(truth, f)
+        code, rep = self.detect_and_judge(out, "markers.wav", "truth-shift.json", "--pairs", "--zero-misses")
+        self.assertEqual(code, 1, rep)  # judged absolutely, 30 ms is beyond 5
+        self.assertTrue(any(f.startswith("timing p95") for f in rep["failed"]), rep["failed"])
+        code, rep = self.detect_and_judge(out, "markers.wav", "truth-shift.json", "--pairs", "--zero-misses", "--no-absolute")
+        self.assertEqual(code, 0, rep)  # pairs and slots hold; the absolute error is reported, not judged
+        self.assertGreater(rep["timing_p95_ms"], 25)
+        truth["markers"][2]["onset"] += 0.030
+        with open(os.path.join(out, "truth-one.json"), "w") as f:
+            json.dump(truth, f)
+        code, rep = self.detect_and_judge(out, "markers.wav", "truth-one.json", "--pairs", "--zero-misses", "--no-absolute")
+        self.assertEqual(code, 1, rep)  # the pair holding marker 2 is still judged
+        self.assertTrue(any(f.startswith("pair offset p95") for f in rep["failed"]), rep["failed"])
+        self.assertFalse(any(f.startswith("timing p95") for f in rep["failed"]), rep["failed"])
+
     def test_pair_offsets_are_measured_against_the_truth(self):
         out, truth = self.fresh("pairs", "--pairs")
         code, rep = self.detect_and_judge(out, "markers.wav", "truth.json", "--pairs", "--zero-misses")

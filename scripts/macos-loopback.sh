@@ -196,7 +196,9 @@ if [ -n "$ALSO" ]; then
 fi
 
 open -n -a "$CHROME_APP" --args --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
-  --use-fake-ui-for-media-stream --autoplay-policy=no-user-gesture-required "$ORIGIN/"
+  --use-fake-ui-for-media-stream --autoplay-policy=no-user-gesture-required \
+  --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows \
+  "$ORIGIN/"
 for _ in $(seq 1 30); do pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null && break; sleep 1; done
 pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null || die "Chrome did not start"
 "$CHROME_APP/Contents/MacOS/Google Chrome" --version > "$RUN_DIR/chrome-version" 2>/dev/null || true
