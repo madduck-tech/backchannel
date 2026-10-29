@@ -58,7 +58,7 @@ the issues until tests exist. Do not edit generated `AGENTS.md` files; edit thei
 | --- | --- | --- |
 | 0 | Umbrella issue, ADR and worktree; no dependency | Umbrella issue #273 with macOS-only scope, deferred Linux/Windows, thresholds A1–A14 inlined, owed assertions and an accepted critic verdict. ADR 0033 and the rule exceptions merged to `main`. Experiment branch and worktree created from that `main` and recorded in #273. |
 | 1 | Loopback usefulness check; after step 0 | See "Step 1: loopback usefulness check". Precondition run first; then the product owner's calls; **go/no-go** recorded on #273. Third-party devices removed and the removal shown by census. No code merged except a precondition fix (see "Step 1"). |
-| 2 | macOS verification instrument and protocol freeze; after step 1 go | The Stage 2 that every later step needs, and the frozen protocol (see "macOS verification instrument"). Exit: one recorded run on the development Mac in which each oracle is shown red by a deliberate fault and green without it, and #273 carries the control table with its count, the rig and the matching rules. No product code. |
+| 2 | macOS verification instrument and protocol freeze; after step 1 go | The Stage 2 that every later step needs, and the frozen protocol (see "macOS verification instrument"). Exit: one recorded run on the development Mac in which each oracle is shown red by a deliberate fault and green without it, and #273 carries the control table with its count, the rig and the matching rules. No product code except the control instrument (#281, [ADR 0034](decisions/0034-a-control-channel-drives-recordings-for-the-experiments-verification.md)). |
 | 3 | HAL plug-in and helper feasibility spike; after step 2 | Two public devices plus private bridge from a locally built plug-in; a launchd helper forwarding real bidirectional PCM; distinct markers recovered at an independent peer. First observations: whether `coreaudiod` loads the ad-hoc or self-signed plug-in, whether TCC keeps the helper's microphone grant across rebuilds, and on-demand opening from `StartIO`/`StopIO`. Install, restart and removal recorded. A1/A2/A14 preliminary, against the frozen protocol. |
 | 4 | Backend decision; after step 3 | New ADR: plug-in source (owned versus reused, licence), bridge transport, helper launch mechanism and code identity, clock/rate-conversion strategy, shared-state ownership. |
 | 5 | Setup/settings/tray design; after step 0, using step 3 constraints | Approved committed prototypes for setup (including the administrator install step and its audio interruption), physical selectors, health, mute, recording and repair; failure/missing-device/quit states included. A12 requirement debts linked. Can overlap step 4. |
@@ -116,9 +116,15 @@ so they are recorded in `gopnik.json` and not guessed:
 
 - **Artifact.** A locally built `.app` whose revision is bound the way `stage2-locate-app.sh`
   binds the AppImage (a `.built-from` file), so a stale bundle is refused.
+- **Recording without a person.** Audio runs start, stop and read recordings through the
+  control channel of ADR 0034 (`scripts/macos-control.sh`, #281). A pass that uses it names
+  what it skips: every UI surface, the onboarding gate, the frontend's model check and title,
+  and the meeting's database row.
 - **UI driving.** The macOS accessibility API or computer-use, with the #160 rules: a refused
   interaction is a failure, every wait names something false in the state being left, and
-  state is asserted after the interaction rather than its return value.
+  state is asserted after the interaction rather than its return value. The product owner
+  chose the control channel over this for audio runs on 2026-10-29; UI coverage on macOS
+  remains this route's, in a later issue.
 - **Environment record.** `scripts/environment-record.sh` gains macOS keys: OS version and
   build, architecture, plug-in and helper versions and signing identity, microphone TCC state
   for the helper, and the physical devices in use (ADR 0019).

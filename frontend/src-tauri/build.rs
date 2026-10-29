@@ -2,6 +2,11 @@
 mod ffmpeg;
 
 fn main() {
+    // The revision a control-instrument build was made from (#281). `option_env!` alone would
+    // keep a stale value across builds that change no Rust source, so the crate rebuilds when
+    // it changes. Unset in every other build, which then reports "unknown".
+    println!("cargo:rerun-if-env-changed=BACKCHANNEL_BUILT_FROM");
+
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
