@@ -157,6 +157,59 @@ async fn a_failed_redownload_leaves_the_original() {
     }
 }
 
+/// After a failed "Download again" on a damaged file, the row reads Damaged again, not Downloading
+/// (#195's gate adversary: a cached Downloading held the row there until a restart).
+#[tokio::test]
+async fn a_failed_redownload_of_a_damaged_file_reads_damaged_again() {
+    for reply in [Reply::Status500, Reply::CloseMidBody { sent: vec![1u8; 1000], claimed: 1_000_000 }] {
+        let dir = tempfile::tempdir().unwrap();
+        original(dir.path());
+        let s = stub(reply).await;
+        let engine = engine_at(dir.path(), &s);
+        let row = |ms: Vec<ModelInfo>| ms.into_iter().find(|m| m.name == ROW).unwrap().status;
+        assert!(matches!(row(engine.discover_models().await.unwrap()), ModelStatus::Corrupted { .. }), "the fixture is not damaged");
+        engine.download_model(ROW, None).await.expect_err("the download fails");
+        let after = row(engine.discover_models().await.unwrap());
+        assert!(matches!(after, ModelStatus::Corrupted { .. }), "after a failed Download again the row reads {after:?}");
+    }
+}
+
+/// "Completed" is said once the file is at its final path, not when its last byte arrives (#195's
+/// gate adversary): first run enables Continue on it.
+#[tokio::test]
+async fn completed_is_reported_once_the_file_is_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = stub(Reply::Body(vec![9u8; 10_000])).await;
+    let at_100 = Arc::new(Mutex::new(Vec::new()));
+    let (seen, path) = (at_100.clone(), final_path(dir.path()));
+    let cb: Box<dyn Fn(DownloadProgress) + Send> = Box::new(move |p| {
+        if p.percent >= 100 {
+            seen.lock().unwrap().push(path.exists());
+        }
+    });
+    engine_at(dir.path(), &s).download_model(ROW, Some(cb)).await.unwrap();
+    assert_eq!(*at_100.lock().unwrap(), vec![true], "a 100% event came while the final file was absent, or none came");
+}
+
+/// A cancel that arrives while the commit waits for the engine still cancels, and leaves the original.
+#[tokio::test]
+async fn a_cancel_while_the_commit_waits_still_cancels() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = original(dir.path());
+    let before = bytes(&path);
+    let s = stub(Reply::Body(vec![9u8; 10_000])).await;
+    let engine = engine_at(dir.path(), &s);
+    let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
+    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    engine.test_hooks().before_commit.notified().await;
+    engine.cancel_download(ROW).await.expect("the download is still in flight");
+    drop(held);
+    let e = running.await.unwrap().expect_err("the cancel was ignored");
+    assert_eq!(e.to_string(), "Download cancelled by user");
+    assert_eq!(bytes(&path), before, "the cancelled download replaced the file anyway");
+    assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
+}
+
 /// Condition 2, a fresh download: a failure leaves neither a final nor a temporary file.
 #[tokio::test]
 async fn a_failed_fresh_download_leaves_nothing() {
@@ -265,6 +318,9 @@ async fn a_download_in_flight_reads_downloading() {
         wait_until("the stub to send bytes", || s.sent.load(Ordering::SeqCst) > 0).await;
         let status = engine.discover_models().await.unwrap().into_iter().find(|m| m.name == ROW).unwrap().status;
         assert!(matches!(status, ModelStatus::Downloading { .. }), "{what}: the row reads {status:?} mid-body");
+        // Beside the final file, so the rename stays on one file system.
+        let partial = dir.path().join(format!("{PARTIAL_PREFIX}{}", final_path(dir.path()).file_name().unwrap().to_string_lossy()));
+        assert!(partial.is_file(), "{what}: no temporary file beside the final one mid-body");
         engine.cancel_download(ROW).await.unwrap();
         let _ = running.await;
     }
@@ -286,6 +342,8 @@ fn the_reads_that_skip_a_load_ask_whether_the_model_is_usable() {
     for (file, text) in [("import.rs", import), ("retranscription.rs", retranscription)] {
         assert!(text.contains("engine.usable_model().await.as_deref() == Some(target_model.as_str())"), "{file}'s read");
     }
+    // The sweep runs where the models directory is set, at startup, before any download can start.
+    assert!(commands.contains("TranscribeEngine::purge_legacy_models(&models_dir);\n    // And what a download left when the application stopped mid-way (#195), before any can start.\n    TranscribeEngine::sweep_partial_downloads(&models_dir);"), "set_models_directory does not sweep");
 }
 
 /// Condition 7, with real models: the old file is whisper-tiny's, the new one moonshine-tiny's, under
@@ -313,6 +371,10 @@ mod replace_against_load {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "needs whisper-tiny and moonshine-tiny on disk (crate::measure), and runs alone: it holds the process-wide device-check count; selected by name in gopnik.json stage 1"]
     async fn a_replace_against_a_load_and_a_job() {
+        // Every failure is collected, so a control shows the assertion it is named for, not the first.
+        let mut fails: Vec<String> = Vec::new();
+        let mut check = |ok: bool, what: &str| if !ok { fails.push(what.to_string()) };
+
         // 7a: a replace while a load is paused between opening the old file and installing it.
         let (_dir, _s, engine) = setup().await;
         let hooks = engine.test_hooks();
@@ -324,36 +386,41 @@ mod replace_against_load {
         hooks.before_commit.notified().await;
         // Bounded: long enough for a commit that took no engine lock to finish its rename.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let committed_inside_the_pause = download.is_finished();
-        eprintln!("7a: the commit {} while the load was paused", if committed_inside_the_pause { "finished" } else { "waited" });
+        eprintln!("7a: the commit {} while the load was paused", if download.is_finished() { "finished" } else { "waited" });
         hooks.release_load.notify_one();
         load.await.unwrap().expect("the load succeeds");
         download.await.unwrap().expect("the download succeeds");
-        assert_eq!(engine.usable_model().await, None, "7a: the old file stays installed after a replace");
+        check(engine.usable_model().await.is_none(), "7a: the old file stays installed after a replace");
         engine.load_model(WHISPER).await.unwrap();
-        assert_eq!(arch(&engine).await, "moonshine", "7a: the next load does not read the new file");
+        check(arch(&engine).await == "moonshine", "7a: the next load does not read the new file");
+        check(engine.usable_model().await.as_deref() == Some(WHISPER), "7a: a fresh load is not offered as usable");
 
         // 7b: a replace with the old model loaded and idle unloads it.
         let (_dir, _s, engine) = setup().await;
         engine.load_model(WHISPER).await.unwrap();
-        assert_eq!(arch(&engine).await, "whisper");
+        check(arch(&engine).await == "whisper", "7b: the fixture's old model is not whisper");
         engine.download_model(WHISPER, None).await.unwrap();
-        assert!(!engine.is_model_loaded().await, "7b: an idle replace leaves the old model loaded");
+        check(!engine.is_model_loaded().await, "7b: an idle replace leaves the old model loaded");
 
         // 7c: a replace while a job holds the engine leaves the job its model.
         let (_dir, _s, engine) = setup().await;
         engine.load_model(WHISPER).await.unwrap();
         let job = crate::audio::common::DeviceCheckHoldsEngine::take();
         engine.download_model(WHISPER, None).await.unwrap();
-        engine.transcribe_batch(vec![0.0; 16_000], None).await.expect("7c: the job lost its model");
-        assert_eq!(arch(&engine).await, "whisper", "7c: the job's model changed under it");
+        check(engine.transcribe_batch(vec![0.0; 16_000], None).await.is_ok(), "7c: the job lost its model");
+        if engine.is_model_loaded().await {
+            check(arch(&engine).await == "whisper", "7c: the job's model changed under it");
+        }
 
         // 7d: once the job is done, the slot is not offered again, and the next load reads the new file.
         drop(job);
-        assert_eq!(engine.usable_model().await, None, "7d: the replaced model is offered again");
+        check(engine.usable_model().await.is_none(), "7d: the replaced model is offered again");
         let resolution = super::super::commands::resolve_with_engine(&engine, Some("local"), Some(WHISPER)).await.unwrap();
-        assert!(!matches!(resolution, super::super::commands::Resolution::Ready(_)), "7d: the pre-flight answers Ready on the old weights");
+        check(!matches!(resolution, super::super::commands::Resolution::Ready(_)), "7d: the pre-flight answers Ready on the old weights");
         engine.load_model(WHISPER).await.unwrap();
-        assert_eq!(arch(&engine).await, "moonshine", "7d: the next load does not read the new file");
+        check(arch(&engine).await == "moonshine", "7d: the next load does not read the new file");
+        check(engine.usable_model().await.as_deref() == Some(WHISPER), "7d: a fresh load is not offered as usable");
+
+        assert!(fails.is_empty(), "condition 7 failed: {fails:#?}");
     }
 }

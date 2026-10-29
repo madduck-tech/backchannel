@@ -238,19 +238,12 @@ impl TranscribeEngine {
                     _ => ModelStatus::Downloading { progress: 0 },
                 }
             } else if path.exists() {
+                // Not the cached status: a download that failed over a damaged file leaves that file,
+                // and a cached Downloading would hold the row there until a restart (#195's adversary).
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 let expected_min = Self::available_floor_bytes(size_mb);
                 if file_size >= expected_min {
                     ModelStatus::Available
-                } else if let ModelStatus::Downloading { progress } = self
-                    .available_models
-                    .read()
-                    .await
-                    .get(name)
-                    .map(|m| m.status.clone())
-                    .unwrap_or(ModelStatus::Missing)
-                {
-                    ModelStatus::Downloading { progress }
                 } else {
                     warn!(
                         "Model {} is {} bytes, expected at least {}",
@@ -364,9 +357,9 @@ impl TranscribeEngine {
 
     /// The models a download is in flight for right now. (#182)
     ///
-    /// Read rather than the cached `ModelStatus`, which `discover_models` rebuilds from the file on
-    /// disk: between a download's start and its first bytes the file is absent (`Missing`), and a
-    /// short one reads `Corrupted` until the next progress tick.
+    /// `discover_models` reads it too since #195: a download writes its temporary file, so the final
+    /// one is absent for a fresh download and whole for a re-download, and only this set says either is
+    /// on its way.
     pub async fn downloads_in_flight(&self) -> HashSet<String> {
         self.active_downloads.read().await.clone()
     }
@@ -523,6 +516,11 @@ impl TranscribeEngine {
         self.test_hooks.before_commit.notify_one();
         let _lifecycle = crate::audio::common::acquire_engine_lifecycle_lock().await;
         let _load = self.load_lock.lock().await;
+        // A cancel that came while the commit waited for its locks still cancels.
+        if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
+            *self.cancel_download_flag.write().await = None;
+            return Err(anyhow!("Download cancelled by user"));
+        }
         fs::rename(self.partial_path(filename), self.models_dir.join(filename))
             .await
             .map_err(|e| anyhow!("Failed to put the downloaded {} in place: {}", filename, e))?;
@@ -633,10 +631,12 @@ impl TranscribeEngine {
                     last_report_time = std::time::Instant::now();
                     bytes_since_report = 0;
 
+                    // Never 100 here: "completed" is said once the file is at its final path, below.
+                    let progress = progress.min(99);
                     self.set_status(model_name, ModelStatus::Downloading { progress })
                         .await;
                     if let Some(ref cb) = progress_callback {
-                        cb(DownloadProgress::new(downloaded, total_size, speed_mbps));
+                        cb(DownloadProgress::new(downloaded.min(total_size - 1), total_size, speed_mbps));
                     }
                 }
             }
@@ -648,6 +648,10 @@ impl TranscribeEngine {
         self.commit_download(model_name, filename).await?;
 
         self.set_status(model_name, ModelStatus::Available).await;
+        if let Some(ref cb) = progress_callback {
+            let whole = total_size.max(downloaded);
+            cb(DownloadProgress::new(whole, whole, 0.0));
+        }
         info!(
             "Downloaded {} ({:.1} MB)",
             model_name,

@@ -2,9 +2,9 @@
 //!
 //! **Loads copy the weights.** From v0.4.1 the engine memory-maps a model file on the CPU and on
 //! Metal, and a mapped file truncated or rewritten in place kills the process on its next access
-//! (SIGBUS; `transcribe.h:1051-1073`). The download writes the final path with `File::create`, so a
-//! "Download again" over the loaded model would do exactly that. `no_mmap: true` reads the file as
-//! the pin before v0.4.1 did. Mapping, and the download it needs, are #195.
+//! (SIGBUS; `transcribe.h:1051-1073`). Since #195 a download writes a temporary file and renames it
+//! over the final path, so it no longer rewrites a file in place; `no_mmap: true` still reads the file
+//! as the pin before v0.4.1 did. Mapping itself is #253.
 //!
 //! **Runs take upstream's ITN default, with one exception.** v0.4.1 turned inverse text normalisation
 //! on by default for sensevoice and fun-asr, so their transcripts gain capitals, punctuation and digits.
