@@ -240,6 +240,52 @@ class TheThresholdIsFrozen(Fixture):
                 f.write(original)
 
 
+class MarkerFreeMaterial(Fixture):
+    """K3's path: a schedule with no sync and no markers, where every detection is false."""
+
+    def free_schedule(self, name, extra=None):
+        out = os.path.join(self.repo, name)
+        os.makedirs(out)
+        x = read(os.path.join(self.repo, "free", "free.wav")).astype(np.float64)
+        if extra is not None:
+            mid, at = extra
+            sys.path.insert(0, self.repo)
+            import markers
+            w = np.round(markers.waveform(mid, 48000) * 32767)
+            i0 = int(round(at * 48000))
+            x[i0:i0 + w.size] += w
+        write(os.path.join(out, "markers.wav"), x)
+        sched = {"rate": 48000, "sync": None, "slot": 0.1, "pairs": [], "noise_segment": None,
+                 "markers": [], "header": {"judge": False, "seed": 0}}
+        for f in ("schedule.json", "truth.json"):
+            with open(os.path.join(out, f), "w") as fh:
+                json.dump(sched, fh)
+        return out
+
+    def test_marker_free_material_has_no_false_matches(self):
+        code, rep = self.detect_and_judge(self.free_schedule("k3-clean"), "markers.wav", "truth.json", "--zero-false")
+        self.assertEqual(code, 0, rep)
+        self.assertEqual((rep["false_matches"], rep["sync_detections"]), ([], 0))
+
+    def test_a_marker_in_marker_free_material_is_a_false_match(self):
+        out = self.free_schedule("k3-one", ("2", 40.0))
+        code, rep = self.detect_and_judge(out, "markers.wav", "truth.json", "--zero-false")
+        self.assertEqual(code, 1)
+        self.assertEqual([f["id"] for f in rep["false_matches"]], ["2"])
+
+    def test_a_sync_in_marker_free_material_is_a_false_sync(self):
+        out = self.free_schedule("k3-sync", ("sync", 50.0))
+        code, rep = self.detect_and_judge(out, "markers.wav", "truth.json", "--zero-false")
+        self.assertEqual(code, 1)
+        self.assertEqual(rep["sync_detections"], 1)
+        self.assertIn("false sync detections: 1", rep["failed"])
+
+    def test_judging_marker_free_material_with_the_tuning_seed_is_refused(self):
+        r = run(self.repo, "free", os.path.join(self.repo, "k3-seed"), "--minutes", "0.5", "--seed", "7", "--judge")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("T1 was tuned on", r.stderr)
+
+
 class WithoutAThreshold(unittest.TestCase):
 
     def test_judging_with_no_threshold_file_is_refused(self):

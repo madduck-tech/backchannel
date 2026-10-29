@@ -106,16 +106,23 @@ def read_audio(path, rate, channel=1):
 
 # --- scoring -----------------------------------------------------------------------------------
 
+# A window quieter than this RMS is silence and scores 0. Its correlation is rounding error divided
+# by a near-zero energy: measured on #291, a window of digital silence after 30 s of noise had a
+# numerator of 1.2e-10 (FFT rounding) and a true energy of 5.7e-13, its running-sum energy came out
+# exactly 0, and it scored 1.24 for a template it had never seen. No marker this detector judges is
+# this quiet; L2's floor starts at -85 dBFS.
+SILENCE_RMS = 1e-5  # -100 dBFS
+
+
 def ncc(x, h, chunk=1 << 20):
     """Normalised correlation of `x` with template `h` at every lag (score[i] for x[i:i+len(h)])."""
     L = h.size
     n = x.size - L + 1
     if n <= 0:
-        return np.zeros(0)
+        return np.zeros(0, dtype=np.float32)
     h = h / np.linalg.norm(h)
-    csum = np.concatenate([[0.0], np.cumsum(x * x)])
-    energy = np.sqrt(np.maximum(csum[L:] - csum[:-L], 1e-20))
     out = np.empty(n, dtype=np.float32)  # nine of these over an hour at 8 kHz: 1 GB, not 2
+    floor = L * SILENCE_RMS ** 2
     size = 1
     while size < chunk + L:
         size <<= 1
@@ -125,8 +132,9 @@ def ncc(x, h, chunk=1 << 20):
         seg = x[start:start + size]
         c = np.fft.irfft(np.fft.rfft(seg, size) * H, size)
         m = min(step, n - start)
-        out[start:start + m] = c[:m]
-    out /= energy
+        cs = np.concatenate([[0.0], np.cumsum(seg[: m + L - 1] ** 2)])
+        e = cs[L:L + m] - cs[:m]
+        out[start:start + m] = np.where(e < floor, 0.0, c[:m] / np.sqrt(np.maximum(e, floor)))
     return out
 
 
@@ -247,15 +255,42 @@ def pink_noise(n, rng):
     return y * (LEVEL_RMS / np.sqrt(np.mean(y ** 2)))
 
 
+# The marker-free material T1 was tuned on: seed 7, Samantha and Daniel, the first text. A judging
+# recording (K3) must be other material, so `free --judge` refuses this seed.
+TUNING_FREE_SEED = 7
+VOICES = ("Samantha", "Daniel", "Karen", "Moira", "Fred", "Kathy", "Reed", "Shelley")
+TEXTS = (
+    "The quarterly numbers were discussed at length, and the team agreed to revisit the "
+    "budget next week after the vendor sends the revised estimate for the migration.",
+    "Before we move on, can someone confirm whether the release notes went out yesterday, "
+    "because two customers asked about the change to the export format this morning.",
+    "I think the simplest option is to keep the old endpoint running for a month, measure "
+    "who still calls it, and then decide whether a migration guide is worth writing.",
+    "Let me share my screen for a second. This chart shows the error rate by region, and the "
+    "spike on Tuesday lines up with the configuration push to the eastern cluster.",
+)
+
+
 def cmd_free(a):
     """Marker-free material, cycled to length: speech in two voices, pink noise, silence, tone."""
+    header = {"judge": False, "seed": a.seed}
+    if a.judge:
+        frozen_threshold()
+        require_committed_and_clean()
+        if a.seed == TUNING_FREE_SEED:
+            die(f"seed {a.seed} is the marker-free material T1 was tuned on; judging needs another")
+        header = {"judge": True, "seed": a.seed, "commit": git("rev-parse", "HEAD").stdout.strip(),
+                  "hash": freeze_hash()}
     os.makedirs(a.out, exist_ok=True)
-    rng = np.random.default_rng(7)
+    rng = np.random.default_rng(a.seed)
+    if a.seed == TUNING_FREE_SEED:
+        voices, text = ("Samantha", "Daniel"), TEXTS[0]
+    else:
+        voices = tuple(rng.choice(VOICES[2:], 2, replace=False))
+        text = TEXTS[1 + int(rng.integers(len(TEXTS) - 1))]
     parts = []
-    text = ("The quarterly numbers were discussed at length, and the team agreed to revisit the "
-            "budget next week after the vendor sends the revised estimate for the migration.")
     with tempfile.TemporaryDirectory() as tmp:
-        for voice in ("Samantha", "Daniel"):
+        for voice in voices:
             aiff = os.path.join(tmp, f"{voice}.aiff")
             r = subprocess.run(["say", "-v", voice, "-o", aiff, text], capture_output=True)
             if r.returncode != 0:
@@ -271,7 +306,12 @@ def cmd_free(a):
     total = int(round(a.minutes * 60 * PLAY_RATE))
     x = np.tile(cycle, total // cycle.size + 1)[:total]
     write_wav(os.path.join(a.out, "free.wav"), x)
-    print(json.dumps({"seconds": a.minutes * 60, "cycle_s": cycle.size / PLAY_RATE}))
+    sched = {"rate": PLAY_RATE, "sync": None, "slot": SLOT_S, "pairs": [], "noise_segment": None,
+             "markers": [], "header": header}
+    with open(os.path.join(a.out, "schedule.json"), "w") as f:
+        json.dump(sched, f)
+    print(json.dumps({"seconds": a.minutes * 60, "cycle_s": cycle.size / PLAY_RATE,
+                      "voices": list(voices), "header": header}))
 
 
 def cmd_chain(a):
@@ -303,10 +343,15 @@ def locate_sync(scores, threshold, sched):
 
 def match(scores, sched, threshold):
     """Hits, misses and false matches against the nominal schedule, aligned on the sync marker."""
-    sync_at, sync_count = locate_sync(scores, threshold, sched)
-    if sync_at is None:
-        return {"void": "no sync"}
-    offset = sync_at - sched["sync"]
+    if sched["sync"] is None:
+        # Marker-free material (K3): nothing to align, every detection is false, sync included.
+        sync_count = len(peaks(scores["sync"], threshold, int(SYNC_S * DETECT_RATE)))
+        sync_at, offset = None, 0.0
+    else:
+        sync_at, sync_count = locate_sync(scores, threshold, sched)
+        if sync_at is None:
+            return {"void": "no sync"}
+        offset = sync_at - sched["sync"]
     slot = int(sched["slot"] * DETECT_RATE)
     gap = int(MARKER_S * DETECT_RATE)
     hits, misses, false = [], [], []
@@ -430,7 +475,7 @@ def cmd_judge(a):
         "late": [e for e in errors if abs(e["error_ms"]) > a.p95_ms],
     }
     failed = []
-    if a.p95_ms is not None and report["timing_p95_ms"] > a.p95_ms:
+    if truth["markers"] and a.p95_ms is not None and report["timing_p95_ms"] > a.p95_ms:
         failed.append(f"timing p95 {report['timing_p95_ms']:.3f} ms > {a.p95_ms} ms")
     if a.per_marker and report["late"]:
         failed.append(f"{len(report['late'])} markers with error beyond {a.p95_ms} ms: "
@@ -441,8 +486,9 @@ def cmd_judge(a):
         failed.append("misses: " + ", ".join(f"n={m['n']} id={m['id']}" for m in det["misses"][:10]))
     if a.zero_false and det["false_matches"]:
         failed.append("false matches: " + ", ".join(f"id={f['id']} at {f['at']:.3f}s" for f in det["false_matches"][:10]))
-    if a.zero_false and det["sync_detections"] > 1:
-        failed.append(f"false sync detections: {det['sync_detections'] - 1}")
+    expected_sync = 0 if truth["sync"] is None else 1
+    if a.zero_false and det["sync_detections"] > expected_sync:
+        failed.append(f"false sync detections: {det['sync_detections'] - expected_sync}")
     report["failed"] = failed
     print(json.dumps(report))
     sys.exit(1 if failed else 0)
@@ -463,6 +509,8 @@ def main():
     f = sub.add_parser("free")
     f.add_argument("out")
     f.add_argument("--minutes", type=float, required=True)
+    f.add_argument("--seed", type=int, default=TUNING_FREE_SEED)
+    f.add_argument("--judge", action="store_true")
     c = sub.add_parser("chain")
     c.add_argument("input")
     c.add_argument("output")
