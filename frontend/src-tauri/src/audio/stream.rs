@@ -49,7 +49,7 @@ pub fn stream_path_for(
 /// before, and also a fact about a platform rather than about this machine.
 pub fn cpal_backend_label(backend: AudioCaptureBackend, platform: Platform) -> &'static str {
     match (platform, backend) {
-        (Platform::MacOs, AudioCaptureBackend::ScreenCaptureKit) => "ScreenCaptureKit",
+        (Platform::MacOs, AudioCaptureBackend::ScreenCaptureKit) => "CPAL (selected device)",
         (Platform::MacOs, _) => "CPAL (default)",
         _ => "CPAL",
     }
@@ -537,10 +537,10 @@ mod tests {
     /// The log label was two `cfg` branches too. It is only a string, which is exactly why it
     /// would have drifted unnoticed: nothing fails when a log lies.
     #[test]
-    fn the_cpal_label_names_screencapturekit_only_where_that_host_exists() {
+    fn the_cpal_label_names_the_selected_device_only_on_macos() {
         assert_eq!(
             cpal_backend_label(AudioCaptureBackend::ScreenCaptureKit, Platform::MacOs),
-            "ScreenCaptureKit"
+            "CPAL (selected device)"
         );
         assert_eq!(
             cpal_backend_label(AudioCaptureBackend::CoreAudio, Platform::MacOs),
@@ -554,9 +554,63 @@ mod tests {
                 assert_eq!(
                     cpal_backend_label(backend, platform),
                     "CPAL",
-                    "{platform:?} has no ScreenCaptureKit host to name"
+                    "{platform:?} offers one backend, so there is nothing to tell apart"
                 );
             }
+        }
+    }
+
+    /// The option ids are storage keys and keep their names; the words a person reads do not.
+    /// Upstream 483fea6 removed the ScreenCaptureKit host and left "ScreenCaptureKit" on the
+    /// option that now means cpal on the selected device (#276).
+    #[test]
+    fn no_backend_label_claims_what_the_code_no_longer_does() {
+        for backend in [
+            AudioCaptureBackend::ScreenCaptureKit,
+            AudioCaptureBackend::CoreAudio,
+        ] {
+            for text in [
+                backend.name(),
+                backend.description(),
+                cpal_backend_label(backend, Platform::MacOs),
+            ] {
+                for retired in ["ScreenCaptureKit", "Higher level API", "Lower latency"] {
+                    assert!(
+                        !text.contains(retired),
+                        "{backend:?} still says {retired:?}: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The name and the description say whether the device picked above is used, and that is
+    /// decided by `stream_path_for`, not by the words. So the words are checked against the rule.
+    #[test]
+    fn a_backend_label_says_what_its_stream_path_does() {
+        for backend in [
+            AudioCaptureBackend::ScreenCaptureKit,
+            AudioCaptureBackend::CoreAudio,
+        ] {
+            let taps = stream_path_for(&DeviceType::System, backend, Platform::MacOs)
+                == StreamPath::CoreAudioTap;
+            let name = backend.name();
+            assert_eq!(
+                name,
+                if taps { "All system audio" } else { "Selected device" },
+                "{backend:?}: tap = {taps}"
+            );
+            let description = backend.description();
+            assert_eq!(
+                description.contains("selected above is not used"),
+                taps,
+                "{backend:?}: tap = {taps}, description = {description:?}"
+            );
+            assert_eq!(
+                description.contains("Records only the device selected above"),
+                !taps,
+                "{backend:?}: tap = {taps}, description = {description:?}"
+            );
         }
     }
 
