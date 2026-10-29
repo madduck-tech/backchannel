@@ -1,0 +1,10 @@
+{
+  "value": 0.3146374327849608,
+  "seed_tuning": 101,
+  "min_true_score": 0.7613180875778198,
+  "max_non_marker_score": 0.13003331422805786,
+  "margin": 5.854792612934469,
+  "id_ratio_min": 5.954330771772469,
+  "markers": 200,
+  "rule": "geometric mean of min true-marker score and max non-marker score"
+}
