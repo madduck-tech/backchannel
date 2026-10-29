@@ -61,7 +61,7 @@ jobs:
       - name: Install dependencies (Ubuntu 24.04)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+          sudo apt-get install -y ffmpeg python3-numpy libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -151,6 +151,17 @@ jobs:
           n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
           [ "$rc" -eq 0 ] || exit "$rc"
           [ "${n:-0}" -ge 18 ] || { echo "ran ${n:-0} Python tests, expected at least 18"; exit 1; }
+
+      # The loopback markers' detector and its controls (#291). Same count check as above, and the
+      # same line as `gopnik.json` stage 1; ffmpeg and numpy are installed with the system packages.
+      - name: Loopback marker tests (Python)
+        run: |
+          set -o pipefail
+          rc=0; out=$(python3 -I -m unittest discover -s scripts/macos-loopback -p 'test_*.py' 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
+          [ "$rc" -eq 0 ] || exit "$rc"
+          [ "${n:-0}" -ge 13 ] || { echo "ran ${n:-0} loopback marker tests, expected at least 13"; exit 1; }
 
       - name: List what this platform ignores
         run: cargo test --workspace -- --ignored --list
