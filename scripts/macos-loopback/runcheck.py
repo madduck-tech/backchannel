@@ -14,14 +14,15 @@ A void run is rerun; it is never read as a pass or as a red. Its reasons say whi
 differed from the request.
 """
 import json
+import re
 import sys
 
 # Entries Chrome adds for the OS defaults. Never matched: requesting one is a void (P5), because
 # what it resolves to is whatever the OS default is at that moment.
 DEFAULT_IDS = ("default", "communications")
-# Suffixes Chrome appends to a device label on macOS. The first run records the labels Chrome
-# actually reports; `(Bluetooth)` is in Chrome 156's strings, `(Virtual)` is not.
-SUFFIXES = (" (Bluetooth)", " (Built-in)", " (Virtual)", " (USB)")
+# Suffixes Chrome 156 appends to a device label on macOS, as reported on this Mac on 2026-10-29
+# (devices.json of the first live run): the transport, or a USB device's vendor:product.
+SUFFIX = re.compile(r" \((?:Bluetooth|Built-in|Virtual|HDMI|DisplayPort|USB|[0-9a-f]{4}:[0-9a-f]{4})\)$")
 PINNED_KBPS = 32.0
 BITRATE_TOLERANCE = 0.20
 
@@ -31,10 +32,7 @@ class Void(Exception):
 
 
 def strip_suffix(label):
-    for s in SUFFIXES:
-        if label.endswith(s):
-            return label[: -len(s)]
-    return label
+    return SUFFIX.sub("", label)
 
 
 def resolve(devices, kind, requested):
@@ -103,6 +101,8 @@ def void_reasons(r):
         reasons.append("bitrate not measurable over the noise window")
     elif abs(kbps - PINNED_KBPS) > BITRATE_TOLERANCE * PINNED_KBPS:
         reasons.append(f"bitrate {kbps:.1f} kbit/s over the noise window, pinned {PINNED_KBPS:.0f} ±{BITRATE_TOLERANCE:.0%}")
+    if "capture" in r and (r["capture"] or {}).get("gaps") != 0:
+        reasons.append(f"independent capture not continuous: {r['capture']}")
     return reasons
 
 

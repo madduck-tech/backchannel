@@ -468,15 +468,17 @@ def cmd_judge(a):
     report = {
         "markers": len(truth["markers"]), "hits": len(det["hits"]), "misses": det["misses"],
         "false_matches": det["false_matches"], "sync_detections": det["sync_detections"],
-        "timing_p95_ms": float(np.percentile(abs_e, 95)), "timing_max_ms": float(abs_e.max()),
+        "timing_p95_ms": float(np.percentile(abs_e, 95)) if errors else None,
+        "timing_max_ms": float(abs_e.max()) if errors else None,
         "timing_n": len(errors),
         "pairs_n": len(pair_errors),
         "pair_p95_ms": float(np.percentile(np.abs(pair_errors), 95)) if pair_errors else None,
         "late": [e for e in errors if abs(e["error_ms"]) > a.p95_ms],
     }
     failed = []
-    if truth["markers"] and a.p95_ms is not None and report["timing_p95_ms"] > a.p95_ms:
-        failed.append(f"timing p95 {report['timing_p95_ms']:.3f} ms > {a.p95_ms} ms")
+    if truth["markers"] and a.p95_ms is not None and (report["timing_p95_ms"] is None or report["timing_p95_ms"] > a.p95_ms):
+        p95 = report["timing_p95_ms"]
+        failed.append(f"timing p95 {'none (no hits)' if p95 is None else f'{p95:.3f} ms'} > {a.p95_ms} ms")
     if a.per_marker and report["late"]:
         failed.append(f"{len(report['late'])} markers with error beyond {a.p95_ms} ms: "
                       + ", ".join(f"n={e['n']} id={e['id']} {e['error_ms']:.1f} ms" for e in report["late"][:10]))

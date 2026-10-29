@@ -51,6 +51,20 @@ class TheLabelMatch(unittest.TestCase):
         self.assertEqual(runcheck.resolve(DEVICES, "audioinput", "BlackHole 2ch (Virtual)"), "bh2")
         self.assertEqual(runcheck.resolve(DEVICES, "audiooutput", "soundcore Space One"), "sc-out")
 
+    def test_the_suffixes_chrome_reported_on_this_mac_are_stripped(self):
+        seen = [{"kind": "audioinput", "deviceId": "dock", "label": "DL-Dock (17e9:6000)"},
+                {"kind": "audiooutput", "deviceId": "lg", "label": "LG ULTRAFINE (HDMI)"},
+                {"kind": "audioinput", "deviceId": "mic", "label": "Микрофон MacBook Pro (Built-in)"}]
+        self.assertEqual(runcheck.resolve(seen, "audioinput", "DL-Dock"), "dock")
+        self.assertEqual(runcheck.resolve(seen, "audiooutput", "LG ULTRAFINE"), "lg")
+        self.assertEqual(runcheck.resolve(seen, "audioinput", "Микрофон MacBook Pro"), "mic")
+
+    def test_p5_the_localised_default_entry_is_void(self):
+        ru = [{"kind": "audioinput", "deviceId": "default", "label": "По умолчанию - soundcore Space One (Bluetooth)"},
+              {"kind": "audioinput", "deviceId": "sc", "label": "soundcore Space One (Bluetooth)"}]
+        with self.assertRaisesRegex(runcheck.Void, "default entry"):
+            runcheck.resolve(ru, "audioinput", "По умолчанию - soundcore Space One")
+
     def test_p4_a_label_that_does_not_exist_is_void(self):
         with self.assertRaisesRegex(runcheck.Void, "no audioinput labelled 'No Such Device'"):
             runcheck.resolve(DEVICES, "audioinput", "No Such Device")
@@ -102,6 +116,11 @@ class TheVoidRules(unittest.TestCase):
     def test_a_sink_other_than_requested_is_void(self):
         reasons = runcheck.void_reasons(with_(["applied", "sinkId"], "steam"))
         self.assertEqual(reasons, ["sink applied 'steam', requested 'bh16'"])
+
+    def test_an_independent_capture_with_a_gap_is_void(self):
+        r = with_(["capture"], {"frames": 100, "gaps": 1, "gap_frames": 512})
+        self.assertEqual(runcheck.void_reasons(r), ["independent capture not continuous: {'frames': 100, 'gaps': 1, 'gap_frames': 512}"])
+        self.assertEqual(runcheck.void_reasons(with_(["capture"], {"frames": 100, "gaps": 0, "gap_frames": 0})), [])
 
     def test_a_connection_that_never_connected_is_void(self):
         reasons = runcheck.void_reasons(with_(["ice", "connectionState"], "failed"))
