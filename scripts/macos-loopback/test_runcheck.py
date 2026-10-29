@@ -122,6 +122,11 @@ class TheVoidRules(unittest.TestCase):
         self.assertEqual(runcheck.void_reasons(r), ["independent capture not continuous: {'frames': 100, 'gaps': 1, 'gap_frames': 512}"])
         self.assertEqual(runcheck.void_reasons(with_(["capture"], {"frames": 100, "gaps": 0, "gap_frames": 0})), [])
 
+    def test_a_label_refused_before_capture_is_the_one_reason(self):
+        r = {"requested": {"input_device_id": None, "output_device_id": None}, "applied": {},
+             "void_before_capture": "no audioinput labelled 'No Such Device'"}
+        self.assertEqual(runcheck.void_reasons(r), ["before capture: no audioinput labelled 'No Such Device'"])
+
     def test_a_connection_that_never_connected_is_void(self):
         reasons = runcheck.void_reasons(with_(["ice", "connectionState"], "failed"))
         self.assertEqual(reasons, ["connection 'failed', not connected"])

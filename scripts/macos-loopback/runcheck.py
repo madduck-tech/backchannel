@@ -65,6 +65,10 @@ def bitrate_kbps(samples, window):
 
 def void_reasons(r):
     """Every reason the run is void; empty when it measured what it was asked to."""
+    if r.get("void_before_capture"):
+        # The label match refused before any input was opened (P4, P5): nothing else ran, so the
+        # rest of the record is empty, and listing those empties would bury the one reason.
+        return [f"before capture: {r['void_before_capture']}"]
     reasons = []
     req, app = r["requested"], r.get("applied") or {}
     inp = app.get("input") or {}

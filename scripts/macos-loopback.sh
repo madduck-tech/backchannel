@@ -3,7 +3,8 @@
 #
 #   macos-loopback.sh run --in <label> --out <label> --play <wav> --seconds N
 #                         [--play-to <output>] [--capture-out <input label>] [--schedule <json>]
-#                         [--test key=value ...] [--no-seed] [--run-dir <dir>]
+#                         [--test key=value ...] [--no-seed] [--run-dir <dir>] [--lead S]
+#                         [--also-play <wav> --also-to <output>]   a second WAV, at the same time
 #
 # One run, end to end:
 #   1. a server on 127.0.0.1 (scripts/macos-loopback/server.py) and a fresh Chrome profile whose
@@ -37,7 +38,7 @@ die() { echo "macos-loopback: $*" >&2; exit 1; }
 
 [ "${1:-}" = run ] || { sed -n '2,25p' "$0"; exit 64; }
 shift
-IN= OUT= PLAY= PLAY_TO= SECONDS_= CAPTURE= SCHEDULE= SEED=1 RUN_DIR= LEAD=45
+IN= OUT= PLAY= PLAY_TO= SECONDS_= CAPTURE= SCHEDULE= SEED=1 RUN_DIR= LEAD=45 ALSO= ALSO_TO=
 TESTS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -52,6 +53,8 @@ while [ $# -gt 0 ]; do
     --no-seed) SEED=; shift ;;
     --run-dir) RUN_DIR=$2; shift 2 ;;
     --lead) LEAD=$2; shift 2 ;;
+    --also-play) ALSO=$2; shift 2 ;;
+    --also-to) ALSO_TO=$2; shift 2 ;;
     *) die "unknown argument $1" ;;
   esac
 done
@@ -84,7 +87,9 @@ for item in json.load(sys.stdin).get("SPAudioDataType", []):
         if dev.get("_name") == want and "coreaudio_device_input" in dev:
             print(int(dev["coreaudio_device_srate"])); sys.exit()
 ' "$IN") || true
-[ -n "$RATE" ] || die "no input device named '$IN' in system_profiler"
+# Not found: left empty, so the page's label match (P4, P5) is what voids the run, before any
+# input is opened.
+RATE=${RATE:-0}
 
 python3 -I - "$RUN_DIR/params.json" "$IN" "$OUT" "$SECONDS_" "$RATE" "${TESTS[@]:-}" <<'PY'
 import json, sys
@@ -95,7 +100,7 @@ for t in tests:
         continue
     k, _, v = t.partition("=")
     test[k] = json.loads(v) if v else True
-json.dump({"in": inp, "out": out, "seconds": float(seconds), "rate": int(rate), "test": test}, open(path, "w"))
+json.dump({"in": inp, "out": out, "seconds": float(seconds), "rate": int(rate) or None, "test": test}, open(path, "w"))
 PY
 
 python3 -I "$LIB/server.py" "$RUN_DIR" "$RUN_DIR/params.json" &
@@ -180,6 +185,15 @@ PLAY_START=$(python3 -I -c 'import time; print(time.time())')
   -f audiotoolbox -audio_device_index "$pi" - &
 PIDS+=($!)
 echo "{\"type\": \"play\", \"t\": $PLAY_START, \"device\": \"$target\", \"lead\": $LEAD}" >> "$RUN_DIR/events.jsonl"
+if [ -n "$ALSO" ]; then
+  [ -n "$ALSO_TO" ] || die "--also-play needs --also-to"
+  ai=$(audiotoolbox_index "$ALSO_TO"); [ -n "$ai" ] || die "no audiotoolbox output named '$ALSO_TO'"
+  "$FFMPEG" -nostdin -hide_banner -loglevel error -i "$ALSO" \
+    -af "adelay=$((LEAD * 1000)):all=1,aresample=48000,pan=stereo|c0=c0|c1=c0" \
+    -f audiotoolbox -audio_device_index "$ai" - &
+  PIDS+=($!)
+  echo "{\"type\": \"also-play\", \"device\": \"$ALSO_TO\"}" >> "$RUN_DIR/events.jsonl"
+fi
 
 open -n -a "$CHROME_APP" --args --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
   --use-fake-ui-for-media-stream --autoplay-policy=no-user-gesture-required "$ORIGIN/"

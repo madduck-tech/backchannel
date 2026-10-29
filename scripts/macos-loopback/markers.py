@@ -2,7 +2,7 @@
 """Timed PCM markers and their codec-tolerant detector, for the virtual audio experiment (#291).
 
     markers.py gen <out-dir> --minutes M --seed S [--spacing SEC] [--jitter-ms J] [--pairs]
-                   [--noise-segment] [--judge]
+                   [--noise-segment] [--ids 0,1,...] [--judge]
         writes markers.wav (48 kHz mono s16), schedule.json (nominal onsets: what the detector
         is given) and truth.json (the onsets actually written: what only `judge` reads)
     markers.py free <out-dir> --minutes M
@@ -212,12 +212,13 @@ def cmd_gen(a):
         n0, n1 = int(noise_at * PLAY_RATE), int((noise_at + 30.0) * PLAY_RATE)
         x[n0:n1] += pink_noise(n1 - n0, rng)
     t = (noise_at + 32.0) if noise_at is not None else SYNC_AT_S + SYNC_S + 2.0
+    ids_used = [str(i) for i in a.ids] if a.ids else [str(i) for i in range(IDS)]
     k = 0
     end = a.minutes * 60 - 1.0
     while t + (PAIR_OFFSET_S + MARKER_S if a.pairs else MARKER_S) < end:
-        ids = [str(k % IDS)]
+        ids = [ids_used[k % len(ids_used)]]
         if a.pairs:
-            ids.append(str((k + 3) % IDS))
+            ids.append(ids_used[(k + 3) % len(ids_used)])
         group = []
         for j, mid in enumerate(ids):
             nom = t + j * PAIR_OFFSET_S
@@ -508,6 +509,8 @@ def main():
     g.add_argument("--pairs", action="store_true")
     g.add_argument("--noise-segment", action="store_true")
     g.add_argument("--judge", action="store_true")
+    g.add_argument("--ids", type=lambda v: [int(x) for x in v.split(",")], default=None,
+                   help="only these ids, e.g. 0,1,2,3,4,5,6 for call markers and 7 for a sentinel")
     f = sub.add_parser("free")
     f.add_argument("out")
     f.add_argument("--minutes", type=float, required=True)
