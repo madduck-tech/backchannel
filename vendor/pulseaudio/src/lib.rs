@@ -89,33 +89,47 @@ pub fn cookie_from_env() -> Vec<u8> {
 /// The cookie to send, from the values of `$PULSE_COOKIE`, `$XDG_CONFIG_HOME`
 /// and the home directory. It is always exactly [COOKIE_LENGTH] bytes.
 ///
-/// The files are tried in libpulse 16.1's order:
+/// The files are tried in libpulse 16.1's order, with its config directory
+/// `$XDG_CONFIG_HOME/pulse` when `XDG_CONFIG_HOME` is set and not empty, and
+/// `$HOME/.config/pulse` otherwise:
 ///
-///   1. `$PULSE_COOKIE`;
-///   2. `$XDG_CONFIG_HOME/pulse/cookie` when `XDG_CONFIG_HOME` is set and not
-///      empty, and `$HOME/.config/pulse/cookie` otherwise;
+///   1. `$PULSE_COOKIE`, which, when relative, names a file in that directory;
+///   2. `cookie` in that directory;
 ///   3. `$HOME/.pulse-cookie`.
+///
+/// A home directory that is not absolute is not used, as libpulse refuses it.
 ///
 /// The first regular file that can be read decides: its first [COOKIE_LENGTH]
 /// bytes if it holds that many, and [COOKIE_LENGTH] zero bytes otherwise. A
 /// path that is missing, unreadable or not a regular file (a directory, a FIFO,
 /// `/dev/zero`) is passed over, and at most [COOKIE_LENGTH] bytes are read, so
-/// no path can block the audio host or fill its memory. With no file to read,
-/// the cookie is zero bytes too, as libpulse sends. Nothing is written.
+/// no path can fill the audio host's memory. A FIFO swapped in between the
+/// check and the open can still block it; cpal's connection timeout bounds
+/// that. With no file to read, the cookie is zero bytes too, as libpulse sends.
+/// Nothing is written.
 pub fn cookie_from(
     pulse_cookie: Option<&std::ffi::OsStr>,
     xdg_config_home: Option<&std::ffi::OsStr>,
     home: Option<&std::path::Path>,
 ) -> Vec<u8> {
-    let config = match xdg_config_home.filter(|dir| !dir.is_empty()) {
-        Some(dir) => Some(PathBuf::from(dir).join("pulse/cookie")),
-        None => home.map(|home| home.join(".config/pulse/cookie")),
+    let home = home.filter(|home| home.is_absolute());
+    let config_dir = match xdg_config_home.filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir).join("pulse")),
+        None => home.map(|home| home.join(".config/pulse")),
     };
-    let mut paths = pulse_cookie
+    let pulse_cookie = pulse_cookie
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
+        .and_then(|path| {
+            if path.is_absolute() {
+                Some(path)
+            } else {
+                config_dir.as_ref().map(|dir| dir.join(path))
+            }
+        });
+    let mut paths = pulse_cookie
         .into_iter()
-        .chain(config)
+        .chain(config_dir.as_ref().map(|dir| dir.join("cookie")))
         .chain(home.map(|home| home.join(".pulse-cookie")));
     match paths.find_map(|path| read_regular(&path)) {
         Some(bytes) if bytes.len() == COOKIE_LENGTH => bytes,

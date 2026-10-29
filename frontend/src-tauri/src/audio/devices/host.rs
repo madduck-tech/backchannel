@@ -1277,5 +1277,136 @@ pub(crate) mod tests {
             assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
             assert_eq!(cookie_from(Some(fifo.as_os_str()), None, Some(home.path())), first(&config));
         }
+
+        // As libpulse resolves them (the gate adversary, round 2): a relative $PULSE_COOKIE is a name in
+        // the config directory, and a home directory that is not absolute is not used.
+
+        #[test]
+        fn a_relative_pulse_cookie_names_a_file_in_the_config_directory() {
+            let home = tempfile::tempdir().unwrap();
+            let mine = file(home.path(), ".config/pulse/mine", 256, 2);
+            file(home.path(), ".config/pulse/cookie", 256, 1);
+            assert_eq!(cookie_from(Some(OsStr::new("mine")), None, Some(home.path())), first(&mine));
+            let config = tempfile::tempdir().unwrap();
+            let theirs = file(config.path(), "pulse/mine", 256, 3);
+            assert_eq!(cookie_from(Some(OsStr::new("mine")), Some(config.path().as_os_str()), Some(home.path())), first(&theirs));
+        }
+
+        #[test]
+        fn a_home_that_is_not_absolute_is_not_used() {
+            let home = tempfile::tempdir().unwrap();
+            file(home.path(), ".config/pulse/cookie", 256, 1);
+            file(home.path(), ".pulse-cookie", 256, 3);
+            // The same directory, named relative to where the test runs: found if a relative home were used.
+            let cwd = std::env::current_dir().unwrap();
+            let relative: PathBuf = cwd.components().skip(1).map(|_| "..").collect::<PathBuf>().join(home.path().strip_prefix("/").unwrap());
+            assert!(relative.is_relative() && cwd.join(&relative).join(".pulse-cookie").is_file(), "{relative:?} does not reach the fixture");
+            assert_eq!(cookie_from(None, None, Some(&relative)), zeros());
+        }
+
+        // Three of the reading's own cells (the gate adversary, round 2).
+
+        #[test]
+        fn an_unreadable_file_is_passed_over() {
+            use std::os::unix::fs::PermissionsExt;
+            let home = tempfile::tempdir().unwrap();
+            let config = file(home.path(), ".config/pulse/cookie", 256, 1);
+            let dot = file(home.path(), ".pulse-cookie", 256, 3);
+            std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::File::open(&config).is_ok() {
+                eprintln!("running as a user who can read a mode-000 file, so this cell cannot be observed here");
+                return;
+            }
+            assert_eq!(cookie_from(None, None, Some(home.path())), first(&dot));
+        }
+
+        #[test]
+        fn a_symlink_to_a_cookie_is_followed() {
+            let home = tempfile::tempdir().unwrap();
+            let real = file(home.path(), "dotfiles/cookie", 256, 2);
+            std::fs::create_dir_all(home.path().join(".config/pulse")).unwrap();
+            std::os::unix::fs::symlink(&real, home.path().join(".config/pulse/cookie")).unwrap();
+            assert_eq!(cookie_from(None, None, Some(home.path())), first(&real));
+        }
+
+        #[test]
+        fn at_most_256_bytes_of_a_file_are_read() {
+            let home = tempfile::tempdir().unwrap();
+            let config = file(home.path(), ".config/pulse/cookie", 256, 1);
+            // A terabyte, sparse: reading all of it is refused at the allocation, or never ends.
+            std::fs::OpenOptions::new().write(true).open(&config).unwrap().set_len(1 << 40).unwrap();
+            let want: Vec<u8> = (0..256).map(|i| 1u8.wrapping_add(i as u8)).collect();
+            assert_eq!(cookie_from(None, None, Some(home.path())), want);
+        }
+
+        // What `Client::from_env` puts on the wire. The tests above call the lookup with values; this one
+        // reads the environment the way the application does, in a child process, so the environment of
+        // this test binary never changes. A socket stands in for the server and keeps the AUTH packet:
+        // its 256 cookie bytes follow the tag 'x' and the length 0x100 (`write_arbitrary`).
+        #[test]
+        fn from_env_sends_the_cookie_the_environment_names() {
+            use std::io::Read;
+            let dir = tempfile::tempdir().unwrap();
+            let (home, xdg) = (dir.path().join("home"), dir.path().join("xdg"));
+            let env_cookie = file(dir.path(), "elsewhere/cookie", 256, 10);
+            let xdg_cookie = file(&xdg, "pulse/cookie", 256, 20);
+            let home_cookie = file(&home, ".config/pulse/cookie", 256, 30);
+            file(&home, ".pulse-cookie", 256, 40);
+            let name = concat!(module_path!(), "::child_connects_with_from_env");
+            let name = &name[name.find("::").unwrap() + 2..];
+            let cases: [(&str, Option<&Path>, bool, Vec<u8>); 4] = [
+                ("PULSE_COOKIE first", Some(env_cookie.as_path()), true, first(&env_cookie)),
+                ("XDG_CONFIG_HOME's file before the home's", None, true, first(&xdg_cookie)),
+                ("the home's config file without XDG_CONFIG_HOME", None, false, first(&home_cookie)),
+                ("256 zero bytes with nothing to read", None, false, zeros()),
+            ];
+            for (i, (what, pulse_cookie, with_xdg, want)) in cases.into_iter().enumerate() {
+                if i == 3 {
+                    for p in [&home_cookie, &home.join(".pulse-cookie")] {
+                        std::fs::remove_file(p).unwrap();
+                    }
+                }
+                let sock = dir.path().join(format!("native-{i}"));
+                let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+                child.args(["--exact", name, "--ignored", "--test-threads=1"]).env_clear()
+                    .env("PULSE_SERVER", format!("unix:{}", sock.display())).env("HOME", &home)
+                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+                if let Some(p) = pulse_cookie { child.env("PULSE_COOKIE", p); }
+                if with_xdg { child.env("XDG_CONFIG_HOME", &xdg); }
+                let mut child = child.spawn().unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((s, _)) => break s,
+                        Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                        Err(e) => { let _ = child.kill(); panic!("{what}: the child never connected: {e}"); }
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let (mut got, mut buf, marker) = (Vec::new(), [0u8; 512], [b'x', 0, 0, 1, 0]);
+                let cookie = loop {
+                    if let Some(at) = got.windows(5).position(|w| w == marker) {
+                        if got.len() >= at + 5 + COOKIE_LENGTH { break got[at + 5..at + 5 + COOKIE_LENGTH].to_vec(); }
+                    }
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => { let _ = child.kill(); panic!("{what}: no 256-byte cookie in the AUTH packet: {got:02x?}"); }
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                };
+                let _ = child.kill();
+                let _ = child.wait();
+                assert_eq!(cookie, want, "{what}: the AUTH packet carries another cookie");
+            }
+        }
+
+        /// Run by `from_env_sends_the_cookie_the_environment_names` as a child, against its socket.
+        #[test]
+        #[ignore = "a child of from_env_sends_the_cookie_the_environment_names, which gives it its environment"]
+        fn child_connects_with_from_env() {
+            let _ = pulseaudio::Client::from_env(c"backchannel-auth-probe");
+        }
     }
 }

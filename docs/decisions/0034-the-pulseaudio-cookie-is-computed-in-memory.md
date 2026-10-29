@@ -21,12 +21,12 @@ It also requires that the audio host write nothing to the user's home, and that 
 
 1. **A fork of `pulseaudio` 0.3.1 lives at `vendor/pulseaudio`, and the root `Cargo.toml` patches crates.io with it.**
    - It is the published crate, unmodified, except:
-     - `COOKIE_LENGTH`, `cookie_from_env` and `cookie_from(pulse_cookie, xdg_config_home, home)`, which return a 256-byte `Vec<u8>`, reading only regular files and at most 256 bytes of one;
+     - `COOKIE_LENGTH`, `cookie_from_env` and `cookie_from(pulse_cookie, xdg_config_home, home)`, which return a 256-byte `Vec<u8>`, reading only regular files and at most 256 bytes of one, a relative `$PULSE_COOKIE` in the config directory and only an absolute home, as libpulse does;
      - `#[allow(unused_assignments)]` on the protocol module, for 12 assignments rustc 1.98 flags there. The registry build hid them under `--cap-lints`; the protocol files stay as published;
      - `Client::from_env` sends that value.
    - `vendor/pulseaudio/BACKCHANNEL.md` records the published crate's sha256 and the diff. `PUBLISHED.sha256` holds every published file, and `vendor-is-the-published-crate.test.mjs` holds the tree to it.
 2. **The fork is not a workspace member.** Its own tests, examples and ten dev-dependencies stay out of `Cargo.lock` and out of Stage 1.
-   - The cookie tests live in the application crate, against `pulseaudio::cookie_from`. They need no sound server, and Stage 1's `cargo test --workspace` runs them. The wiring test, which reaches the real server with an empty `HOME`, is `#[ignore]`d and run by name in Stage 1.
+   - The cookie tests live in the application crate, against `pulseaudio::cookie_from`. They need no sound server, and Stage 1's `cargo test --workspace` runs them. `from_env_sends_the_cookie_the_environment_names` reads what `Client::from_env` puts on the wire: a socket stands in for the server, and a child process of the test binary connects with the environment each case gives it. The wiring test, which reaches the real server with an empty `HOME`, is `#[ignore]`d and run by name in Stage 1.
    - `RUSTFLAGS="-D warnings"` reaches the fork, as it reaches any path dependency, and Stage 1's check entry holds it to compiling clean. Clippy lints only workspace members and does not reach it.
 3. **Nothing sets or exports an environment variable for this,** and no file is written anywhere. The client reads `PULSE_COOKIE`, `XDG_CONFIG_HOME` and `HOME` as libpulse does, and the cookie never leaves the process except in the AUTH it is sent with.
 

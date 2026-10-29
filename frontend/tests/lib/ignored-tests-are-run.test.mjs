@@ -26,6 +26,9 @@ const repo = path.join(root, '..');
 // must name its covering test, whose existence is then held below, so deleting that test
 // makes the excuse leaning on it go stale.
 const NOT_RUN_BY_THE_GATE = new Map([
+  ['frontend/src-tauri/src/audio/devices/host.rs::child_connects_with_from_env',
+   { coveredBy: 'from_env_sends_the_cookie_the_environment_names',
+     why: 'a child process that test starts with --exact and --ignored, with the environment and the socket it gives it; alone it would wait for a server that is not there' }],
   ['frontend/src-tauri/src/audio/capture/core_audio.rs::test_core_audio_capture',
    { blocker: 'macOS-only (ScreenCaptureKit); no macOS machine is reachable — ADR 0005' }],
   ['frontend/src-tauri/src/audio/system_detector.rs::test_system_audio_detector',
