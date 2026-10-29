@@ -133,7 +133,7 @@ pub async fn load_recording_preferences<R: Runtime>(
                 #[cfg(target_os = "macos")]
                 {
                     let backend = crate::audio::capture::get_current_backend();
-                    p.system_audio_backend = Some(backend.id().to_string());
+                    p.system_audio_backend = Some(reported_backend(backend).to_string());
                 }
                 p
             }
@@ -263,7 +263,7 @@ pub async fn get_current_audio_backend() -> Result<String, String> {
         // The id, which the selector compares against `BackendInfo::id`. This returned
         // `Display`, so after any remount no option was checked (#275, cause 4).
         let backend = crate::audio::capture::get_current_backend();
-        Ok(backend.id().to_string())
+        Ok(reported_backend(backend).to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -383,6 +383,11 @@ pub fn with_backend(
         );
     }
     prefs
+}
+
+/// How the current backend is reported to the frontend: its id, never `Display` (#275).
+pub fn reported_backend(backend: crate::audio::capture::AudioCaptureBackend) -> &'static str {
+    backend.id()
 }
 
 /// What `save_recording_preferences` writes.
@@ -643,5 +648,36 @@ mod tests {
         let written = value_to_store(&stale, AudioCaptureBackend::ScreenCaptureKit).expect("value");
         assert_eq!(written["system_audio_backend"], "screencapturekit");
         assert_eq!(written["preferred_mic_device"], "BlackHole 2ch (input)");
+    }
+    /// Both variants, without reading the shared global: a test of `get_current_audio_backend`
+    /// sees whichever backend a parallel test last set, so it cannot hold "both".
+    #[test]
+    fn every_backend_is_reported_as_its_id() {
+        use crate::audio::capture::AudioCaptureBackend;
+
+        for backend in [AudioCaptureBackend::ScreenCaptureKit, AudioCaptureBackend::CoreAudio] {
+            assert_eq!(reported_backend(backend), backend.id());
+            assert_ne!(reported_backend(backend), backend.to_string());
+        }
+    }
+
+    /// Cause 5 had two halves: the save wrote the stale copy, and it applied it to the global.
+    /// `value_to_store` holds the first. The second is a call that must not exist, so it is
+    /// counted in the source: the global is set only by choosing a backend and by startup.
+    #[test]
+    fn only_choosing_and_startup_set_the_backend() {
+        let source = include_str!("recording_preferences.rs");
+        let body = |name: &str| {
+            let start = source.find(&format!("fn {name}")).unwrap_or_else(|| panic!("no fn {name}"));
+            let end = source[start..].find("\n}\n").map_or(source.len(), |e| start + e);
+            &source[start..end]
+        };
+        let call = ["set_current_backend", "("].concat();
+        let total = source.matches(call.as_str()).count();
+        let in_apply = body("apply_audio_backend").matches(call.as_str()).count();
+        let in_startup = body("apply_stored_backend").matches(call.as_str()).count();
+        assert_eq!((in_apply, in_startup), (1, 1), "each owner sets the backend once");
+        assert_eq!(total, 2, "a third caller of set_current_backend in this file");
+        assert!(!body("save_recording_preferences").contains(call.as_str()));
     }
 }
