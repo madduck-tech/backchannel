@@ -114,6 +114,25 @@ for (const [needle, what] of [
   );
 }
 
+// --- 3b. the AppImage is built at the portable floor, and checked where cmake left it (#289) ---
+// The comparison above holds the two sides to each other, so a change dropping the flag or the
+// check from both would stay green; this holds entry 3 itself. The check must come after the build
+// and before `.built-from`: placed after it, a red build would leave a provenance file the locator
+// accepts.
+{
+  const entry3 = commandsOf(gateEntry('tauri build --bundles appimage'));
+  const build = entry3.findIndex((c) => c.includes('tauri build --bundles appimage'));
+  const check = entry3.findIndex((c) => c === '../scripts/assert-no-avx512.sh');
+  const provenance = entry3.findIndex((c) => c.includes('.built-from'));
+  assert.ok(entry3[build].startsWith('TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF ./node_modules/.bin/tauri build'),
+    `gate entry 3 builds without TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF: ${entry3[build]}`);
+  assert.ok(check > build && check < provenance,
+    `gate entry 3 runs assert-no-avx512.sh at position ${check}, not between the build (${build}) and .built-from (${provenance})`);
+  const deb = workflowStep('tauri build --bundles deb').keys.run;
+  assert.match(String(deb), /TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF \.\/node_modules\/\.bin\/tauri build --bundles deb/,
+    'the .deb is built without the flag, so it reconfigures ggml for the runner');
+}
+
 // --- 4. the job cannot be quietly switched off ------------------------------------------
 for (const [level, keys, name] of [
   ['job', job.keys, job.id],

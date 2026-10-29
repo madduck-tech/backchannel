@@ -60,6 +60,11 @@ record and `main` never disagrees with it.
    quality, macOS and Windows — it names what is not proven. On `exp/virtual-audio` the experiment's
    Stage 2 is its own macOS instrument instead (at step 1, before it exists, the precondition run),
    and Linux and Windows are the unproven ones (ADR 0033).
+   Stage 2 entry 3 builds the AppImage with `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF`, as the release
+   does, and `scripts/assert-no-avx512.sh` fails it unless every transcribe.cpp cmake cache is at the
+   portable floor (#289). A `target/` whose release tree was configured without the flag keeps its
+   tiers OFF, because CMake keeps a cached option, so it needs `cargo clean --release -p
+   transcribe-cpp-sys` once; the check names that when it fails.
 6. **Pull request** with `Closes #N` and a link to the verdict (into `exp/virtual-audio`: `Refs #N`,
    and the issue closed by hand after the merge; ADR 0033). On a `READY` verdict engineering
    merges it (merge commit, branch deleted); the merge closes the issue. A verdict superseded by
@@ -139,7 +144,7 @@ so wiring a thing up, deleting it, or adding a new unreached one all force an ed
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 89 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 90 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and

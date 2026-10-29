@@ -59,7 +59,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ubuntu-24.04-x86_64-unknown-linux-gnu-appimage-v1
+          # -v2 (#289): v1 caches were saved by builds with GGML_NATIVE on, and CMake's option() keeps a
+          # cached value, so a restored one keeps every instruction-set tier OFF under the flag below.
+          key: ubuntu-24.04-x86_64-unknown-linux-gnu-appimage-v2
 
       # Same package list and pins as test.yml and build-linux.yml's Ubuntu 24.04 step,
       # plus FUSE, which appimagetool needs and `cargo test` does not.
@@ -101,11 +103,13 @@ jobs:
           cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
 
       # gopnik.json stage 2, entry 3, verbatim -- and `stage2-artifact-matches-the-gate`
-      # asserts the two strings are identical. If CI built the AppImage with different
+      # asserts the two strings are identical. TRANSCRIBE_CMAKE_ARGS turns ggml's NATIVE off, as
+      # build.yml does for the release: without it ggml compiles for this runner's CPU, which may have
+      # AVX-512 (#289). assert-no-avx512.sh then fails the step on the cache cmake actually used. If CI built the AppImage with different
       # flags, a person downloading it would be running Stage 2 against something the gate
       # never described, which is worse than building it themselves.
       - name: Build the AppImage
-        run: cd frontend && npx --yes pnpm@11 run build && ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && BUILT=$(ls -t ../target/release/bundle/appimage/*.AppImage | head -1) && [ -n "$BUILT" ] && git rev-parse HEAD > "$BUILT.built-from"
+        run: cd frontend && npx --yes pnpm@11 run build && TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF ./node_modules/.bin/tauri build --bundles appimage --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}' && ../scripts/assert-no-avx512.sh && BUILT=$(ls -t ../target/release/bundle/appimage/*.AppImage | head -1) && [ -n "$BUILT" ] && git rev-parse HEAD > "$BUILT.built-from"
 
       # A bundle step that produces nothing still exits 0 in some tauri failure modes, so
       # assert the file rather than the command's return value -- `.claude/rules/testing.md`,
@@ -173,7 +177,7 @@ jobs:
       # Unlike the headless probe below, this one FAILS. A package that cannot be installed, or
       # that installs and cannot start, is a release nobody should be able to cut.
       - name: Build the .deb
-        run: cd frontend && ./node_modules/.bin/tauri build --bundles deb --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+        run: cd frontend && TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF ./node_modules/.bin/tauri build --bundles deb --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Install the .deb in a clean container and launch it
         run: scripts/deb-install-check.sh "$(ls -t target/release/bundle/deb/*.deb | head -1)" 20
