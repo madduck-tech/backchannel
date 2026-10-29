@@ -182,23 +182,23 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, forwarded: &[String]) -> bool {
             // a `set-backend` that arrived while a `start` waited on a TCC prompt switched the
             // backend between the microphone stream and the system stream, and the "selected
             // device" run recorded through the global tap.
-            if let Some(phase) = command.phase() {
-                if let Err(busy) = claim(&IN_FLIGHT, phase) {
+            let held = match command.phase().map(|phase| claim(&IN_FLIGHT, phase)) {
+                Some(Err(busy)) => {
                     write_line(app, &serde_json::json!({
                         "id": id, "command": command.name(), "ok": false,
                         "error": format!("busy: another control command is {busy}"),
                     }));
                     return true;
                 }
-            }
+                Some(Ok(held)) => Some(held),
+                None => None,
+            };
             let app = app.clone();
             // Spawned, never awaited here: this runs on the socket's accept loop, and `stop`
             // waits for transcription with no limit (#210), so `status` must not queue behind it.
             tauri::async_runtime::spawn(async move {
                 let line = run(&app, &id, &command).await;
-                if command.phase().is_some() {
-                    release(&IN_FLIGHT);
-                }
+                drop(held);
                 write_line(&app, &line);
             });
             true
@@ -211,19 +211,26 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, forwarded: &[String]) -> bool {
 static IN_FLIGHT: Mutex<Option<&'static str>> = Mutex::new(None);
 
 /// Take the slot for `phase`, or say which phase holds it. One state-changing command at a time.
-fn claim(slot: &Mutex<Option<&'static str>>, phase: &'static str) -> Result<(), &'static str> {
+fn claim<'a>(slot: &'a Mutex<Option<&'static str>>, phase: &'static str) -> Result<Held<'a>, &'static str> {
     let mut held = slot.lock().unwrap_or_else(|e| e.into_inner());
     match *held {
         Some(busy) => Err(busy),
         None => {
             *held = Some(phase);
-            Ok(())
+            Ok(Held(slot))
         }
     }
 }
 
-fn release(slot: &Mutex<Option<&'static str>>) {
-    *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+/// The slot, released when dropped, so a command that panics does not leave every later state
+/// change answering "busy" until the app is relaunched (the gate's round 2, L2).
+#[must_use]
+struct Held<'a>(&'a Mutex<Option<&'static str>>);
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 async fn phase() -> &'static str {
@@ -428,11 +435,18 @@ mod tests {
     #[test]
     fn a_second_state_change_is_refused_while_one_runs() {
         let slot = Mutex::new(None);
-        assert_eq!(claim(&slot, "starting"), Ok(()));
-        assert_eq!(claim(&slot, "setting-backend"), Err("starting"));
-        assert_eq!(claim(&slot, "stopping"), Err("starting"));
-        release(&slot);
-        assert_eq!(claim(&slot, "setting-backend"), Ok(()));
+        let held = claim(&slot, "starting").expect("an empty slot is taken");
+        assert_eq!(claim(&slot, "setting-backend").err(), Some("starting"));
+        assert_eq!(claim(&slot, "stopping").err(), Some("starting"));
+        drop(held);
+        let held = claim(&slot, "setting-backend").expect("released when the command ends");
+        // A command that panics while holding the slot still releases it.
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _held = held;
+            panic!("a command panicked");
+        }));
+        assert!(unwound.is_err());
+        assert!(claim(&slot, "stopping").is_ok(), "a panic left the slot held");
         for command in [Command::Start { mic: "m".into(), system: "s".into(), meeting: "x".into() }, Command::Stop, Command::SetBackend("coreaudio".into())] {
             assert!(command.phase().is_some(), "{command:?} changes state and must take the slot");
         }

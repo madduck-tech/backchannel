@@ -11,11 +11,14 @@
 # row of the channel holds all of them; absent = none of them in any row of the channel;
 # anything else is inconclusive and fails the run.
 #
-# P4, spoken into BlackHole 2ch after P3, must be present in YOU: it is the sentinel that the
-# transcript covers the time P3 was played, so P3's absence is not a truncated transcript.
+# P4 into BlackHole 2ch and P5 into BlackHole 16ch, both after P3, are the sentinels that each
+# channel was still being transcribed when P3 played: without them, P3's absence could be a
+# transcript that ended early (P4, YOU) or a system stream that died after P2 (P5, OTHERS; the
+# gate's round 2, M2). In selected mode both must be present in their channel; P4 always.
 #
-# On any exit, a recording this script started is stopped (waiting out a start still in flight,
-# e.g. one held by a TCC prompt) and the backend is restored afterwards, never under it.
+# On any exit, a recording this script started is stopped and the backend is restored
+# afterwards, never under it. Cleanup waits up to CLEANUP_WAIT seconds (default 1200) for a
+# command still in flight: one start was measured held for 9 minutes by a TCC prompt.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,6 +30,7 @@ P1="Первая фраза про зелёный трактор на рассв
 P2="Вторая реплика о синем океане и старом маяке."
 P3="Третий голос считает апельсины в плетёной корзине."
 P4="Четвёртая контрольная отметка завершает проверку."
+P5="Пятый сигнал целиком проходит системный канал."
 SPEAKERS=${SPEAKERS:-Динамики MacBook Pro}
 FFMPEG=${FFMPEG:-ffmpeg}
 
@@ -37,8 +41,8 @@ previous=$(field "$before" backend)
 [ "$(field "$before" phase)" = idle ] || { echo "the app is not idle: $before" >&2; exit 1; }
 work=$(mktemp -d)
 cleanup() {
-  local phase line
-  for _ in $(seq 1 60); do
+  local phase line deadline=$((SECONDS + ${CLEANUP_WAIT:-1200}))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     line=$("$CTL" send status 2>/dev/null) || break
     phase=$(field "$line" phase)
     case "$phase" in
@@ -47,6 +51,7 @@ cleanup() {
       *) break ;;
     esac
   done
+  [ "${phase:-}" != starting ] && [ "${phase:-}" != stopping ] || echo "cleanup: gave up after ${CLEANUP_WAIT:-1200}s with the app still $phase; stop it by hand" >&2
   [ -z "$previous" ] || "$CTL" send set-backend --backend "$previous" >/dev/null || echo "cleanup: could not restore backend $previous" >&2
   rm -rf "$work"
 }
@@ -58,6 +63,7 @@ echo "start: $started"
 transcripts=$(field "$started" transcripts)
 
 say -v Milena -o "$work/p2.aiff" "$P2"
+say -v Milena -o "$work/p5.aiff" "$P5"
 sleep 4
 say -v Milena -a "BlackHole 2ch" "$P1"
 sleep 4
@@ -66,17 +72,20 @@ index=$("$FFMPEG" -nostdin -hide_banner -f lavfi -i anullsrc -t 0.01 -f audiotoo
         pid=$!; sleep 1; kill -9 $pid 2>/dev/null; true)
 index=$(printf '%s\n' "$index" | sed -n 's/.*\[\([0-9][0-9]*\)\] *BlackHole 16ch,.*/\1/p' | head -1)
 [ -n "$index" ] || { echo "no BlackHole 16ch output" >&2; exit 1; }
-"$FFMPEG" -nostdin -hide_banner -loglevel error -i "$work/p2.aiff" -af "aresample=48000,pan=stereo|c0=c0|c1=c0" -f audiotoolbox -audio_device_index "$index" -
+to_16ch() { "$FFMPEG" -nostdin -hide_banner -loglevel error -i "$1" -af "aresample=48000,pan=stereo|c0=c0|c1=c0" -f audiotoolbox -audio_device_index "$index" -; }
+to_16ch "$work/p2.aiff"
 sleep 4
 say -v Milena -a "$SPEAKERS" "$P3"
 sleep 4
 say -v Milena -a "BlackHole 2ch" "$P4"
+sleep 4
+to_16ch "$work/p5.aiff"
 sleep 8
 # Assigned, not interpolated into echo, so a failed or timed-out stop fails the run here.
 stopped=$(TIMEOUT=600 "$CTL" send stop)
 echo "stop: $stopped"
 
-python3 -I - "$transcripts" "$MODE" "$P1" "$P2" "$P3" "$P4" <<'PY'
+python3 -I - "$transcripts" "$MODE" "$P1" "$P2" "$P3" "$P4" "$P5" <<'PY'
 import json, re, sys
 path, mode, *phrases = sys.argv[1:]
 def words(text):
@@ -105,7 +114,8 @@ expect = {
     "selected": {"P1": {"you": "present", "others": "absent"},
                  "P2": {"you": "absent", "others": "present"},
                  "P3": {"you": "absent", "others": "absent"},
-                 "P4": {"you": "present", "others": "absent"}},
+                 "P4": {"you": "present", "others": "absent"},
+                 "P5": {"you": "absent", "others": "present"}},
 }
 if mode == "selected":
     ok = got == expect["selected"]
