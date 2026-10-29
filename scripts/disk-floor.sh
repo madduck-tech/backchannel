@@ -16,7 +16,12 @@
 #
 # Inputs, so tests can point it at fixtures: BC_DISK_FLOOR_GB (the floor, in decimal GB; default in
 # scripts/lib/disk-floor-default.sh) and
-# BC_DISK_FLOOR_LIST (the directory whose largest entries a failure names; default /tmp). It is not
+# BC_DISK_FLOOR_LIST (the directory whose largest entries a failure names; default /tmp).
+#
+# BC_DISK_FLOOR_SKIP_RAM=1 passes over a path whose filesystem is tmpfs or ramfs: memory, not disk. The
+# disk-floor hook (#259) sets it, because a build writes to target/ on disk, and a tmpfs /tmp of half the
+# memory -- Fedora's, Arch's, Debian 13's -- would otherwise block every build for good. The gate does not
+# set it: its kept profiles are written to /tmp, and there a small tmpfs is a real limit. It is not
 # in test.yml: CI runners have their own disk, and environment-record.sh must always exit 0
 # (ADR 0019).
 set -uo pipefail
@@ -65,6 +70,9 @@ for c in "$HOME"/.cache/backchannel-*; do [ -e "$c" ] && PATHS+=("$c"); done
 short=""; worst=""
 for p in "${PATHS[@]}"; do
   e=$(existing "$p")
+  if [ -n "${BC_DISK_FLOOR_SKIP_RAM:-}" ]; then
+    case "$(df --output=fstype -- "$e" 2>/dev/null | tail -n +2 | tr -d ' ')" in tmpfs|ramfs) continue ;; esac
+  fi
   avail=$(df --output=avail -B1 -- "$e" 2>/dev/null | tail -n +2 | tr -d ' ')
   # Fail closed: a free space that cannot be read is not enough.
   if ! [ "$avail" -eq "$avail" ] 2>/dev/null; then

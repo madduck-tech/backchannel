@@ -6,7 +6,7 @@
 # (13 of 18 registered, removed by hand) and Cargo's target/ directories (29 GiB and 19 GiB), which
 # Cargo never prunes.
 #
-#   disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>]
+#   disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>] [--log <file>] [--deadline <epoch s>]
 #
 # 1. A registered worktree of this repository is removed when it is done: not the main worktree, not
 #    locked, not holding $CLAUDE_PROJECT_DIR, its HEAD a commit reachable from the local origin/main,
@@ -29,16 +29,24 @@
 # ${XDG_STATE_HOME:-$HOME/.local/state}/backchannel/disk-sweep.lock, so the gate's sweep and a hook's
 # in another session never run at once. One that finds it held waits, then exits 4 without sweeping:
 # the other run has just swept, and the caller measures again.
+#
+# --log <file> appends each removal as it happens: a `removing` line before it starts and a `removed`
+# line, with its size, once it has succeeded, so a sweep killed half way leaves every path it touched
+# in the log. --deadline <epoch seconds> starts no removal, and waits for no lock, past that time: it
+# exits 5 instead, with what is left untouched. The disk-floor hook (#259) passes both, because Claude
+# Code kills a hook at its timeout and then runs the command unguarded.
 set -uo pipefail
 
-DRY=""; PROFILES=""; KEEP=""; REPO=${BC_SWEEP_REPO:-.}
-usage() { echo "usage: disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>]" >&2; exit 2; }
+DRY=""; PROFILES=""; KEEP=""; REPO=${BC_SWEEP_REPO:-.}; LOG=""; DEADLINE=""
+usage() { echo "usage: disk-sweep.sh [--dry-run] [--profiles] [--keep <path>] [--repo <dir>] [--log <file>] [--deadline <epoch s>]" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
     --profiles) PROFILES=1 ;;
     --keep) [ $# -ge 2 ] || usage; KEEP=$2; shift ;;
     --repo) [ $# -ge 2 ] || usage; REPO=$2; shift ;;
+    --log) [ $# -ge 2 ] || usage; LOG=$2; shift ;;
+    --deadline) [ $# -ge 2 ] && [ "$2" -eq "$2" ] 2>/dev/null || usage; DEADLINE=$2; shift ;;
     *) usage ;;
   esac
   shift
@@ -54,6 +62,18 @@ CACHEDIR_CARGO='# This file is a cache directory tag created by cargo.'
 LOCKS=(.cargo-lock .cargo-build-lock .cargo-artifact-lock)
 verb=$([ -n "$DRY" ] && echo "would remove" || echo "removed")
 size_of() { du -sxh -- "$1" 2>/dev/null | cut -f1; }
+# The log, written as each removal happens. A line that cannot be written is said, not skipped silently.
+logged() {
+  [ -n "$LOG" ] && [ -z "$DRY" ] || return 0
+  { mkdir -p -- "$(dirname -- "$LOG")" && printf '%s %s\n' "$(date -Iseconds)" "$*" >> "$LOG"; } 2>/dev/null \
+    || say "could not write to $LOG: $*"
+}
+# Past the deadline nothing more is started; the caller measures what is there.
+deadline_check() {
+  [ -n "$DEADLINE" ] && [ "$(date +%s)" -ge "$DEADLINE" ] || return 0
+  say "stopped at the deadline; what is left was not examined"
+  exit 5
+}
 
 # The repository to act on: the one holding the working directory, or --repo / BC_SWEEP_REPO. Every
 # repository-level command goes through it, so the sweep can run from outside every worktree.
@@ -66,7 +86,12 @@ if [ -z "$DRY" ]; then
   exec {SWEEP_LOCK}>"$LOCKDIR/disk-sweep.lock" || { say "cannot open the sweep's lock"; exit 1; }
   if ! flock -n "$SWEEP_LOCK"; then
     say "another sweep is running; waiting for it"
-    flock "$SWEEP_LOCK"
+    if [ -n "$DEADLINE" ]; then
+      wait_s=$(( DEADLINE - $(date +%s) )); [ "$wait_s" -gt 0 ] || wait_s=0
+      flock -w "$wait_s" "$SWEEP_LOCK" || { say "it was still running at the deadline"; exit 5; }
+    else
+      flock "$SWEEP_LOCK"
+    fi
     say "it has finished; not sweeping again, so measure again"
     exit 4
   fi
@@ -138,16 +163,24 @@ while IFS= read -r line; do
       [ -n "${seen:-}" ] || continue; seen=""
       if [ -n "$first" ]; then first=""; continue; fi        # the main worktree
       [ -n "$locked" ] && continue                            # git refuses it, and so does this
+      deadline_check
       if [ -n "$prunable" ] || [ ! -d "$w" ]; then
         say "$verb the registration of $w, whose directory is gone"
-        [ -z "$DRY" ] && g worktree prune
+        [ -z "$DRY" ] && g worktree prune && logged "removed the registration of $w"
         continue
       fi
       reason=$(why_kept "$w")
       if [ -n "$reason" ]; then say "kept $w: $reason"; continue; fi
-      say "$verb $w ($(size_of "$w"))"
+      size=$(size_of "$w")
+      if [ -n "$DRY" ]; then say "$verb $w ($size)"; continue; fi
+      logged "removing $w ($size)"
       # Without --force, so git refuses on its own a worktree that gained untracked work since the check.
-      [ -z "$DRY" ] && { err=$(g worktree remove "$w" 2>&1) || say "could not remove $w: $err"; }
+      # Said, and logged, only once it is gone.
+      if err=$(g worktree remove "$w" 2>&1); then
+        say "$verb $w ($size)"; logged "removed $w ($size)"
+      else
+        say "could not remove $w: $err"; logged "could not remove $w"
+      fi
       ;;
   esac
 done < <(g worktree list --porcelain; echo)
@@ -209,9 +242,12 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     n=$(bytes_of "$1"); n=${n:-0}
     for q in "${planned[@]+"${planned[@]}"}"; do case "$q" in "$1"/*) n=$(( n - ${counted[$q]:-0} )) ;; esac; done
     planned+=("$1"); counted[$1]=$n
-    say "$verb $1 ($(size_of "$1"))"
-    if [ -n "$DRY" ]; then remaining=$(( remaining - n )); return 0; fi
-    rm -rf -- "$1" || say "could not remove all of $1"
+    local size; size=$(size_of "$1")
+    if [ -n "$DRY" ]; then say "$verb $1 ($size)"; remaining=$(( remaining - n )); return 0; fi
+    deadline_check
+    logged "removing $1 ($size)"
+    if rm -rf -- "$1"; then say "$verb $1 ($size)"; logged "removed $1 ($size)"
+    else say "could not remove all of $1"; logged "could not remove all of $1"; fi
     remaining=$(bytes_of "$t"); remaining=${remaining:-0}
   }
   # A process whose executable, working directory or an open file is at or under a path.
