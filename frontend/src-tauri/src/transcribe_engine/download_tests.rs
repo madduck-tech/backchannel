@@ -249,6 +249,8 @@ async fn a_cancelled_redownload_leaves_the_original() {
     engine.cancel_download(ROW).await.expect("a download is in flight");
     let e = running.await.unwrap().expect_err("a cancelled download fails");
     assert_eq!(e.to_string(), "Download cancelled by user");
+    // Stopped mid-body, not after it: a cancelled 700 MB model must not be fetched to the end first.
+    assert!(s.sent.load(Ordering::SeqCst) < 200_000, "the cancel did not stop the transfer: {} of 200000 bytes sent", s.sent.load(Ordering::SeqCst));
     assert_eq!(bytes(&path), before, "the cancel changed the file that was there");
     assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
 }
@@ -263,6 +265,7 @@ async fn a_cancelled_fresh_download_leaves_nothing() {
     wait_until("the first chunk", || s.sent.load(Ordering::SeqCst) > 0).await;
     engine.cancel_download(ROW).await.expect("a download is in flight");
     assert!(running.await.unwrap().is_err());
+    assert!(s.sent.load(Ordering::SeqCst) < 200_000, "the cancel did not stop the transfer: {} of 200000 bytes sent", s.sent.load(Ordering::SeqCst));
     assert!(!final_path(dir.path()).exists(), "a cancelled download left a file at the final path");
     assert_eq!(partials(dir.path()), Vec::<String>::new(), "a cancelled download left a temporary file");
 }
