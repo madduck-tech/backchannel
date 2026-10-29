@@ -51,7 +51,6 @@ const BACKLOG = new Set([
   'src/components/AISummary/Section.tsx',
   'src/components/AISummary/index.tsx',
   'src/components/About.tsx',
-  'src/components/AudioBackendSelector.tsx',
   'src/components/BlockNoteEditor/BasicBlockNoteTest.tsx',
   'src/components/BlockNoteEditor/Editor.tsx',
   'src/components/BluetoothPlaybackWarning.tsx',

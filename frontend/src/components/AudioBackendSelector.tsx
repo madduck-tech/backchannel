@@ -129,9 +129,10 @@ export function AudioBackendSelector({
 
       <div className="space-y-2">
         {backends.map((backend) => {
-          // Disable Core Audio option
-          const isCoreAudio = backend.id === 'screencapturekit';
-          const isDisabled = disabled || isCoreAudio;
+          // No option is disabled by id. Upstream 483fea6 disabled `screencapturekit` here when
+          // it removed the ScreenCaptureKit host; the id has meant cpal on the selected device
+          // since, and that is the path a loopback device needs (#275).
+          const isDisabled = disabled;
 
           return (
             <label
@@ -159,11 +160,6 @@ export function AudioBackendSelector({
                   {currentBackend === backend.id && (
                     <span className="text-xs font-medium text-brand-soft-ink bg-brand-soft px-2 py-0.5 rounded">
                       Active
-                    </span>
-                  )}
-                  {isCoreAudio && (
-                    <span className="text-xs font-medium text-ink-muted bg-sunken px-2 py-0.5 rounded">
-                      Disabled
                     </span>
                   )}
                 </div>

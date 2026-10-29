@@ -428,6 +428,12 @@ pub fn run() {
         .setup(|_app| {
             log::info!("Starting application...");
 
+            // Synchronously, on the main thread, before setup returns: Tauri builds the config
+            // windows first, but serves no IPC until this hook is done, so the window's first
+            // `get_current_audio_backend` sees the stored choice (#275).
+            #[cfg(target_os = "macos")]
+            audio::recording_preferences::apply_stored_backend(_app.handle());
+
             log::info!("Application setup complete");
 
             // Initialize system tray
