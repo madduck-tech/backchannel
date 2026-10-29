@@ -115,7 +115,7 @@ def ncc(x, h, chunk=1 << 20):
     h = h / np.linalg.norm(h)
     csum = np.concatenate([[0.0], np.cumsum(x * x)])
     energy = np.sqrt(np.maximum(csum[L:] - csum[:-L], 1e-20))
-    out = np.empty(n)
+    out = np.empty(n, dtype=np.float32)  # nine of these over an hour at 8 kHz: 1 GB, not 2
     size = 1
     while size < chunk + L:
         size <<= 1
@@ -126,7 +126,8 @@ def ncc(x, h, chunk=1 << 20):
         c = np.fft.irfft(np.fft.rfft(seg, size) * H, size)
         m = min(step, n - start)
         out[start:start + m] = c[:m]
-    return out / energy
+    out /= energy
+    return out
 
 
 def peaks(score, threshold, min_gap):
