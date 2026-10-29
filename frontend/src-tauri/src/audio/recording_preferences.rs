@@ -666,7 +666,10 @@ mod tests {
     /// counted in the source: the global is set only by choosing a backend and by startup.
     #[test]
     fn only_choosing_and_startup_set_the_backend() {
-        let source = include_str!("recording_preferences.rs");
+        // Windows checks this file out with CRLF, and a body that ends at "\n}\n" then ran to
+        // the end of the file and counted the next owner's call as this one's (measured in CI).
+        let source = include_str!("recording_preferences.rs").replace("\r\n", "\n");
+        let source = source.as_str();
         let body = |name: &str| {
             let start = source.find(&format!("fn {name}")).unwrap_or_else(|| panic!("no fn {name}"));
             let end = source[start..].find("\n}\n").map_or(source.len(), |e| start + e);
