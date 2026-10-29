@@ -8,9 +8,6 @@ use anyhow::Result;
 #[cfg(target_os = "macos")]
 use log::error;
 
-#[cfg(target_os = "macos")]
-use crate::audio::capture::AudioCaptureBackend;
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
     pub save_folder: PathBuf,
@@ -130,11 +127,13 @@ pub async fn load_recording_preferences<R: Runtime>(
             #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
             Ok(mut p) => {
                 info!("Loaded recording preferences from store");
-                // Update macOS backend to current value if needed
+                // The backend is owned by the in-memory global: set by `set_audio_backend`,
+                // restored from the store at startup (`apply_stored_backend`). Report its id,
+                // never its label -- `to_string()` is `Display`, which nothing parses (#275).
                 #[cfg(target_os = "macos")]
                 {
                     let backend = crate::audio::capture::get_current_backend();
-                    p.system_audio_backend = Some(backend.to_string());
+                    p.system_audio_backend = Some(backend.id().to_string());
                 }
                 p
             }
@@ -168,9 +167,7 @@ pub async fn save_recording_preferences<R: Runtime>(
         .store("recording_preferences.json")
         .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
 
-    // Serialize preferences to JSON value
-    let prefs_value = serde_json::to_value(preferences)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize preferences: {}", e))?;
+    let prefs_value = value_to_store(preferences, crate::audio::capture::get_current_backend())?;
 
     // Save to store
     store.set("preferences", prefs_value);
@@ -181,15 +178,6 @@ pub async fn save_recording_preferences<R: Runtime>(
         .map_err(|e| anyhow::anyhow!("Failed to save store to disk: {}", e))?;
 
     info!("Successfully persisted recording preferences to disk");
-
-    // Save backend preference to global config
-    #[cfg(target_os = "macos")]
-    if let Some(backend_str) = &preferences.system_audio_backend {
-        if let Some(backend) = AudioCaptureBackend::from_string(backend_str) {
-            info!("Setting audio capture backend to: {:?}", backend);
-            crate::audio::capture::set_current_backend(backend);
-        }
-    }
 
     // Ensure the directory exists
     ensure_recordings_directory(&preferences.save_folder)?;
@@ -272,8 +260,10 @@ pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(),
 pub async fn get_current_audio_backend() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
+        // The id, which the selector compares against `BackendInfo::id`. This returned
+        // `Display`, so after any remount no option was checked (#275, cause 4).
         let backend = crate::audio::capture::get_current_backend();
-        Ok(backend.to_string())
+        Ok(backend.id().to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -282,9 +272,22 @@ pub async fn get_current_audio_backend() -> Result<String, String> {
     }
 }
 
-/// Set audio capture backend
+/// Set audio capture backend, and keep it across a relaunch.
 #[tauri::command]
-pub async fn set_audio_backend(backend: String) -> Result<(), String> {
+pub async fn set_audio_backend<R: Runtime>(app: AppHandle<R>, backend: String) -> Result<(), String> {
+    apply_audio_backend(backend).await?;
+
+    // Nothing persisted the choice before #275 (cause 3): the global was set and forgotten.
+    #[cfg(target_os = "macos")]
+    persist_current_backend(&app).map_err(|e| format!("Backend set but not saved: {}", e))?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+
+    Ok(())
+}
+
+/// Validate a backend id and make it the current backend. No store: callable without an app.
+pub async fn apply_audio_backend(backend: String) -> Result<(), String> {
     use crate::audio::capture::{AudioCaptureBackend, Platform};
 
     // One rule, asked once. This used to be two `cfg` branches: the macOS one parsed the id,
@@ -336,6 +339,97 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
         crate::audio::capture::set_current_backend(backend_enum);
     }
 
+    Ok(())
+}
+
+/// The backend a stored preferences object names, for `platform`.
+///
+/// Only an exact id the platform offers counts. `from_string` lowercases, so it would read
+/// the legacy label "ScreenCaptureKit" -- written by every build before #275, which stored
+/// `Display` -- as a choice nobody made; a label never meant a persisted choice, because
+/// nothing persisted one. Anything else is the platform's default.
+pub fn backend_from_store(
+    stored: Option<&serde_json::Value>,
+    platform: crate::audio::capture::Platform,
+) -> crate::audio::capture::AudioCaptureBackend {
+    use crate::audio::capture::AudioCaptureBackend;
+
+    stored
+        .and_then(|prefs| prefs.get("system_audio_backend"))
+        .and_then(|value| value.as_str())
+        .and_then(|id| {
+            AudioCaptureBackend::available_on(platform)
+                .into_iter()
+                .find(|backend| backend.id() == id)
+        })
+        .unwrap_or_else(|| AudioCaptureBackend::default_on(platform))
+}
+
+/// `stored` with its backend set to `backend`'s id. A missing or malformed object becomes the
+/// defaults, so a first choice made before any other preference is saved is still kept.
+pub fn with_backend(
+    stored: Option<serde_json::Value>,
+    backend: crate::audio::capture::AudioCaptureBackend,
+) -> serde_json::Value {
+    let mut prefs = match stored {
+        Some(value @ serde_json::Value::Object(_)) => value,
+        _ => serde_json::to_value(RecordingPreferences::default())
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
+    };
+    if let Some(object) = prefs.as_object_mut() {
+        object.insert(
+            "system_audio_backend".to_string(),
+            serde_json::Value::String(backend.id().to_string()),
+        );
+    }
+    prefs
+}
+
+/// What `save_recording_preferences` writes.
+///
+/// The frontend's copy of the backend is whatever it loaded on mount, and a device change
+/// sends it back unchanged. Applying it reverted a backend chosen since (#275, cause 5), so
+/// the store gets `current`'s id and the copy is ignored.
+fn value_to_store(
+    preferences: &RecordingPreferences,
+    current: crate::audio::capture::AudioCaptureBackend,
+) -> Result<serde_json::Value> {
+    let value = serde_json::to_value(preferences)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize preferences: {}", e))?;
+    #[cfg(target_os = "macos")]
+    return Ok(with_backend(Some(value), current));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = current;
+        Ok(value)
+    }
+}
+
+/// Make the stored backend current. Called synchronously from setup, before the window can
+/// ask `get_current_audio_backend`; nothing applied the stored value before #275 (cause 3).
+#[cfg(target_os = "macos")]
+pub fn apply_stored_backend<R: Runtime>(app: &AppHandle<R>) {
+    use crate::audio::capture::Platform;
+
+    let stored = app
+        .store("recording_preferences.json")
+        .ok()
+        .and_then(|store| store.get("preferences"));
+    let backend = backend_from_store(stored.as_ref(), Platform::CURRENT);
+    info!("Audio capture backend from the store: {}", backend.id());
+    crate::audio::capture::set_current_backend(backend);
+}
+
+#[cfg(target_os = "macos")]
+fn persist_current_backend<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+    let store = app
+        .store("recording_preferences.json")
+        .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
+    let prefs = with_backend(store.get("preferences"), crate::audio::capture::get_current_backend());
+    store.set("preferences", prefs);
+    store
+        .save()
+        .map_err(|e| anyhow::anyhow!("Failed to save store to disk: {}", e))?;
     Ok(())
 }
 
@@ -430,7 +524,7 @@ mod tests {
             );
 
             let offered = backend.is_available_on(Platform::CURRENT);
-            let result = set_audio_backend(backend.id().to_string()).await;
+            let result = apply_audio_backend(backend.id().to_string()).await;
             assert_eq!(
                 result.is_ok(),
                 offered,
@@ -461,5 +555,93 @@ mod tests {
             .collect();
         assert_eq!(offered, expected);
     }
-}
+    /// A stored id the platform offers is the backend; everything else is the default. The
+    /// legacy labels every earlier build wrote (`Display`) are never read as a choice (#275).
+    #[test]
+    fn the_stored_backend_is_an_exact_offered_id_or_the_default() {
+        use crate::audio::capture::{AudioCaptureBackend, Platform};
+        use serde_json::json;
 
+        let mac = Platform::MacOs;
+        let default = AudioCaptureBackend::default_on(mac);
+        for backend in AudioCaptureBackend::available_on(mac) {
+            let stored = json!({ "system_audio_backend": backend.id() });
+            assert_eq!(backend_from_store(Some(&stored), mac), backend, "{:?}", backend.id());
+        }
+        let not_a_choice = [
+            None,
+            Some(json!({})),
+            Some(json!({ "system_audio_backend": null })),
+            Some(json!({ "system_audio_backend": "garbage" })),
+            Some(json!({ "system_audio_backend": "Core Audio" })),
+            Some(json!({ "system_audio_backend": "ScreenCaptureKit" })),
+            Some(json!({ "system_audio_backend": "Selected device" })),
+            Some(json!({ "system_audio_backend": "All system audio" })),
+        ];
+        for stored in &not_a_choice {
+            assert_eq!(backend_from_store(stored.as_ref(), mac), default, "{stored:?}");
+        }
+        // An id this platform does not offer is not a choice it can make.
+        let linux = Platform::Linux;
+        let stored = json!({ "system_audio_backend": "coreaudio" });
+        assert_eq!(
+            backend_from_store(Some(&stored), linux),
+            AudioCaptureBackend::default_on(linux)
+        );
+    }
+
+    /// The store holds the id of the backend chosen, whatever else the object holds, and a
+    /// first choice is kept even when nothing else has been saved yet.
+    #[test]
+    fn a_chosen_backend_is_stored_as_its_id() {
+        use crate::audio::capture::AudioCaptureBackend;
+        use serde_json::json;
+
+        for backend in [AudioCaptureBackend::ScreenCaptureKit, AudioCaptureBackend::CoreAudio] {
+            let kept = with_backend(Some(json!({ "auto_save": false })), backend);
+            assert_eq!(kept["system_audio_backend"], json!(backend.id()));
+            assert_eq!(kept["auto_save"], json!(false), "other preferences survive");
+
+            for stored in [None, Some(json!("not an object"))] {
+                let fresh = with_backend(stored, backend);
+                assert_eq!(fresh["system_audio_backend"], json!(backend.id()));
+                assert!(
+                    serde_json::from_value::<RecordingPreferences>(fresh.clone()).is_ok(),
+                    "a fresh object must load back: {fresh}"
+                );
+            }
+        }
+    }
+
+    /// The selector compares this against `BackendInfo::id`. It returned `Display` before
+    /// #275, so after any remount no option was checked (observed in #276's gate).
+    #[tokio::test]
+    async fn the_current_backend_is_reported_as_an_offered_id() {
+        use crate::audio::capture::{AudioCaptureBackend, Platform};
+
+        let current = get_current_audio_backend().await.expect("current backend");
+        assert!(
+            AudioCaptureBackend::available_on(Platform::CURRENT)
+                .iter()
+                .any(|b| b.id() == current),
+            "{current:?} is not an id the selector can match"
+        );
+    }
+
+    /// Cause 5. A device change saves the frontend's mount-time copy, which still names the
+    /// backend that was current when the screen opened; that copy must not win.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_stale_copy_of_the_backend_does_not_overwrite_the_chosen_one() {
+        use crate::audio::capture::AudioCaptureBackend;
+
+        let stale = RecordingPreferences {
+            system_audio_backend: Some("coreaudio".to_string()),
+            preferred_mic_device: Some("BlackHole 2ch (input)".to_string()),
+            ..RecordingPreferences::default()
+        };
+        let written = value_to_store(&stale, AudioCaptureBackend::ScreenCaptureKit).expect("value");
+        assert_eq!(written["system_audio_backend"], "screencapturekit");
+        assert_eq!(written["preferred_mic_device"], "BlackHole 2ch (input)");
+    }
+}
