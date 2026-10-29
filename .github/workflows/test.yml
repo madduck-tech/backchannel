@@ -161,7 +161,7 @@ jobs:
           printf '%s\n' "$out"
           n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
           [ "$rc" -eq 0 ] || exit "$rc"
-          [ "${n:-0}" -ge 37 ] || { echo "ran ${n:-0} loopback tests, expected at least 37"; exit 1; }
+          [ "${n:-0}" -ge 41 ] || { echo "ran ${n:-0} loopback tests, expected at least 41"; exit 1; }
 
       - name: List what this platform ignores
         run: cargo test --workspace -- --ignored --list

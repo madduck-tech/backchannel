@@ -22,7 +22,7 @@
       "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib checking_permissions_does_not_panic -- --ignored --nocapture",
       "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib the_diarizer_agrees_with_what_it_said_before_the_engine_moved -- --ignored --nocapture",
       "set -o pipefail; rc=0; out=$(python3 -I -m unittest discover -s frontend/src-tauri/scripts -p 'test_*.py' 2>&1) || rc=$?; printf '%s\\n' \"$out\"; n=$(printf '%s\\n' \"$out\" | sed -n 's/^Ran \\([0-9][0-9]*\\) tests\\{0,1\\} in .*/\\1/p'); [ \"$rc\" -eq 0 ] || exit \"$rc\"; [ \"${n:-0}\" -ge 18 ] || { echo \"ran ${n:-0} Python tests, expected at least 18\"; exit 1; }",
-      "set -o pipefail; rc=0; out=$(python3 -I -m unittest discover -s scripts/macos-loopback -p 'test_*.py' 2>&1) || rc=$?; printf '%s\\n' \"$out\"; n=$(printf '%s\\n' \"$out\" | sed -n 's/^Ran \\([0-9][0-9]*\\) tests\\{0,1\\} in .*/\\1/p'); [ \"$rc\" -eq 0 ] || exit \"$rc\"; [ \"${n:-0}\" -ge 37 ] || { echo \"ran ${n:-0} loopback tests, expected at least 37\"; exit 1; }"
+      "set -o pipefail; rc=0; out=$(python3 -I -m unittest discover -s scripts/macos-loopback -p 'test_*.py' 2>&1) || rc=$?; printf '%s\\n' \"$out\"; n=$(printf '%s\\n' \"$out\" | sed -n 's/^Ran \\([0-9][0-9]*\\) tests\\{0,1\\} in .*/\\1/p'); [ \"$rc\" -eq 0 ] || exit \"$rc\"; [ \"${n:-0}\" -ge 41 ] || { echo \"ran ${n:-0} loopback tests, expected at least 41\"; exit 1; }"
     ],
     "stage2": [
       "test -z \"$(git status --porcelain)\" || { echo 'working tree is not clean: the artifact would not be the revision under test'; exit 1; }",
