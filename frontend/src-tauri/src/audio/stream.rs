@@ -584,16 +584,22 @@ mod tests {
         }
     }
 
-    /// The description says whether the device picked above is used, and that is decided by
-    /// `stream_path_for`, not by the words. So the words are checked against the rule.
+    /// The name and the description say whether the device picked above is used, and that is
+    /// decided by `stream_path_for`, not by the words. So the words are checked against the rule.
     #[test]
-    fn a_backend_description_says_what_its_stream_path_does() {
+    fn a_backend_label_says_what_its_stream_path_does() {
         for backend in [
             AudioCaptureBackend::ScreenCaptureKit,
             AudioCaptureBackend::CoreAudio,
         ] {
             let taps = stream_path_for(&DeviceType::System, backend, Platform::MacOs)
                 == StreamPath::CoreAudioTap;
+            let name = backend.name();
+            assert_eq!(
+                name,
+                if taps { "All system audio" } else { "Selected device" },
+                "{backend:?}: tap = {taps}"
+            );
             let description = backend.description();
             assert_eq!(
                 description.contains("selected above is not used"),
