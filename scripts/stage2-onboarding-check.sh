@@ -1002,10 +1002,10 @@ if [ "$MODE" = keeps ]; then
   [ -e "$APPDATA/models/.partial-$PRESENT_FILE" ] && die "$PRESENT_FILE is being re-fetched: its temporary file exists"
   LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
   [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
-  # This mode downloads nothing, so the sentinel for the absence below is the audio check's load of
-  # the file that was there, from the same log.
-  grep -qE "Loading model [^ ]+ from .+/$PRESENT_FILE" "$LOG" \
-    || die "the log shows no load of $PRESENT_FILE, so it cannot say no re-fetch started"
+  # The absence below means something only beside the downloader's own line in the same log: this mode
+  # downloads the chosen model, and its line is the sentinel.
+  grep -qE "Downloading model file .+/$CHOSEN_FILE" "$LOG" \
+    || die "the log names no download of the chosen $CHOSEN_FILE, so it cannot say no re-fetch of $PRESENT_FILE started"
   grep -nE "Downloading model file .+/$PRESENT_FILE" "$LOG" && die "the application started re-fetching $PRESENT_FILE, which was already there"
   say "the model that was already there was left alone: $PRESENT_AFTER"
 fi
