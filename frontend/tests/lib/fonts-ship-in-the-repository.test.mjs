@@ -51,7 +51,7 @@ test('the ten files and the licence are IBM\'s, byte for byte, as SOURCES.md rec
     assert.equal(fs.statSync(p).size, Number(bytes), `${file}: size`);
     assert.equal(sha(p), digest, `${file} is not the file SOURCES.md records`);
     assert.ok(url.endsWith(`/${file}`), `${file}: its URL names another file`);
-    // Each file from its own family's tag, the one fonts.css and ADR 0034 name.
+    // Each file from its own family's tag, the one fonts.css and ADR 0035 name.
     const family = file === 'LICENSE.txt' ? 'Mono' : file.match(/^IBMPlex(Sans|Serif|Mono)-/)?.[1];
     assert.ok(family && url.startsWith(`https://raw.githubusercontent.com/IBM/plex/${TAGS[family]}/`), `${file}: its URL is not at ${family}'s tag`);
   }
