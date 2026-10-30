@@ -104,7 +104,7 @@ pub struct TranscribeModel {
     /// The Hugging Face commit the file is downloaded at, 40 hex characters: the
     /// newest commit, dated on or before the pinned transcribe.cpp commit, at which
     /// the file is exactly `size_bytes` long (#179). `main` serves whatever was
-    /// uploaded last, and 14 rows' files changed there after v0.4.1 described them.
+    /// uploaded last, which for 14 rows is not the export v0.4.1 describes.
     pub revision: &'static str,
     /// The file's exact length and its LFS sha256 at `revision`, from the walk the
     /// generator commits as `scripts/hf_revisions.json`. A download is kept only if

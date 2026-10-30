@@ -588,14 +588,19 @@ async fn a_download_with_one_flipped_byte_is_refused_and_replaces_nothing() {
     let body = vec![9u8; 10_000];
     let mut flipped = body.clone();
     flipped[5_000] ^= 1;
-    let dir = tempfile::tempdir().unwrap();
-    let before = bytes(&original(dir.path()));
-    let s = stub(Reply::Body(flipped.clone())).await;
-    let e = download_body(&engine_at(dir.path(), &s), ROW, &body, None).await.expect_err("a flipped byte is kept");
-    let expected = format!("hashes to {}, not the pinned {}", sha256_of(&flipped), sha256_of(&body));
-    assert!(e.to_string().contains(&expected), "not the hash error: {e}");
-    assert_eq!(bytes(&final_path(dir.path())), before, "the file that was there changed");
-    assert_eq!(partials(dir.path()), Vec::<String>::new(), "a refused download left a temporary file");
+    for fresh in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let before = (!fresh).then(|| bytes(&original(dir.path())));
+        let s = stub(Reply::Body(flipped.clone())).await;
+        let e = download_body(&engine_at(dir.path(), &s), ROW, &body, None).await.expect_err("a flipped byte is kept");
+        let expected = format!("hashes to {}, not the pinned {}", sha256_of(&flipped), sha256_of(&body));
+        assert!(e.to_string().contains(&expected), "not the hash error: {e}");
+        match before {
+            Some(before) => assert_eq!(bytes(&final_path(dir.path())), before, "the file that was there changed"),
+            None => assert!(!final_path(dir.path()).exists(), "a refused fresh download left a file at the final path"),
+        }
+        assert_eq!(partials(dir.path()), Vec::<String>::new(), "a refused download left a temporary file");
+    }
 }
 
 /// #179 condition 4, the caller: `download_model` asks for its row's file at the row's revision, and

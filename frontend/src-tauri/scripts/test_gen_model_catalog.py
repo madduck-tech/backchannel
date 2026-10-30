@@ -277,10 +277,10 @@ class TheSource(unittest.TestCase):
         Offline: the pins are selected from `hf_revisions.json`, and its two lists are applied (#179)."""
         entries, diarizer = gen.generate_with_diarizer(RECORDS)
         region = CONFIG[CONFIG.index(gen.BEGIN) : CONFIG.index(gen.END) + len(gen.END)]
-        self.assertEqual(region, gen.render(entries))
+        self.assertEqual(region, gen.render(entries), "the catalogue region of config.rs")
         pin = CONFIG[CONFIG.index(gen.PIN_BEGIN) : CONFIG.index(gen.PIN_END) + len(gen.PIN_END)]
-        self.assertEqual(pin, gen.render_diarizer_pin(diarizer))
-        self.assertEqual(gen.DOWNLOAD_URLS.read_text(encoding="utf-8"), gen.render_urls(entries, diarizer))
+        self.assertEqual(pin, gen.render_diarizer_pin(diarizer), "the diarizer's pin in config.rs")
+        self.assertEqual(gen.DOWNLOAD_URLS.read_text(encoding="utf-8"), gen.render_urls(entries, diarizer), "download_urls.tsv")
 
 
 # The pinned transcribe.cpp commit's date as git prints it, and a commit HF dates seven hours earlier
@@ -334,11 +334,12 @@ class TheSelection(unittest.TestCase):
 
     def test_a_listed_collision_is_accepted_by_its_bytes_not_its_revision(self):
         """(w): the entry names the newest bytes. It still approves them when a later commit holding the
-        same bytes becomes head, which an entry keyed by revision would not."""
+        same bytes becomes head, which an entry keyed by revision would not. Listed oldest first, so
+        "newest" is chosen by date, not by the order the walk recorded."""
         listed = {("row", "b" * 64): "fixture"}
-        rows = {"row": [commit("newer", "2026-10-02T00:00:00.000Z", sha="b" * 64), commit("older", "2026-10-01T00:00:00.000Z")]}
+        rows = {"row": [commit("older", "2026-10-01T00:00:00.000Z"), commit("newer", "2026-10-02T00:00:00.000Z", sha="b" * 64)]}
         self.assertEqual(pins(rows, {"row": "newer"}, collisions=listed)["row"][:2], ("newer".ljust(40, "0"), "b" * 64))
-        rows["row"].insert(0, commit("card", "2026-10-03T00:00:00.000Z", sha="b" * 64))
+        rows["row"].append(commit("card", "2026-10-03T00:00:00.000Z", sha="b" * 64))
         self.assertEqual(pins(rows, {"row": "card"}, collisions=listed)["row"][:2], ("card".ljust(40, "0"), "b" * 64))
 
     def test_a_collision_entry_for_a_row_with_one_file_is_stale(self):
@@ -365,6 +366,50 @@ class TheSelection(unittest.TestCase):
         listed = {("row", "earlier".ljust(40, "0")): "an old pin", ("row", "chosen".ljust(40, "0")): "the pin"}
         with self.assertRaisesRegex(SystemExit, rf"^OFF_HEAD lists row at {'earlier'.ljust(40, '0')}, but it is now pinned to {'chosen'.ljust(40, '0')}: stale"):
             pins(rows, {"row": "head"}, off_head=listed)
+
+
+class TheWalk(unittest.TestCase):
+    """`walk` over a fake Hugging Face API (#179's gate adversary): what it records is what `select` reads."""
+
+    def test_the_walk_records_every_eligible_lfs_file_across_pages(self):
+        dates = ["2026-10-25T00:00:00.000Z", "2026-10-20T00:00:00.000Z", "2026-10-10T00:00:00.000Z",
+                 "2026-10-01T00:00:00.000Z", "2026-09-01T00:00:00.000Z"]
+        commits = [{"id": f"c{i}".ljust(40, "0"), "date": d} for i, d in enumerate(dates)]
+        lfs = lambda sha: {"path": "f.gguf", "size": SIZE, "lfs": {"oid": sha}}
+        trees = {
+            "c0": [lfs("0" * 64)],                         # after the pin
+            "c1": [lfs("1" * 64), {"path": "README.md", "size": 10}],
+            "c2": [{"path": "f.gguf", "size": SIZE}],      # the file is not in LFS here
+            "c3": [{"path": "README.md", "size": 10}],     # the file is absent
+            "c4": [lfs("4" * 64)],
+        }
+        asked = []
+
+        def fake(path, attempts=3):
+            asked.append(path)
+            if "/commits/main?p=" in path:
+                page = int(path.rsplit("p=", 1)[1])
+                return commits[page * 2 : page * 2 + 2], {"X-Total-Count": str(len(commits))}
+            return trees[path.rsplit("/tree/", 1)[1][:2]], {}
+
+        with mock.patch.object(gen, "hf_json", fake), mock.patch("builtins.print"):
+            record = gen.walk([("row", "repo", "f.gguf")], "r" * 40, PIN)
+        self.assertEqual(record["heads"], {"repo": {"commit": commits[0]["id"], "date": dates[0]}})
+        self.assertEqual(
+            [(c["commit"][:2], c["sha256"][:1]) for c in record["rows"]["row"]],
+            [("c1", "1"), ("c4", "4")],
+            "the walk recorded other commits than the eligible ones holding the file in LFS",
+        )
+        self.assertEqual(sum("/commits/main" in p for p in asked), 3, "the walk did not read every page")
+        self.assertEqual((record["transcribe_cpp"], record["pin_date"]), ("r" * 40, PIN))
+
+    def test_a_record_walked_for_another_transcribe_cpp_is_refused(self):
+        entries = []
+        for record in RECORDS.values():
+            entries.extend(gen.entries_for(record))
+        revisions = dict(gen.load_revisions(), transcribe_cpp="0" * 40)
+        with self.assertRaisesRegex(SystemExit, r"was walked for transcribe\.cpp 0{40}, but Cargo\.lock pins"):
+            gen.pin_all(entries, RECORDS, revisions)
 
 
 class TheUnit(unittest.TestCase):
