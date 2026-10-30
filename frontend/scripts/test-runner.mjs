@@ -196,6 +196,8 @@ function killFile(run, procRoot) {
   }
   for (const g of groups) signal(-g, 'SIGKILL');
   if (!run.exited) signal(run.child.pid, 'SIGKILL');
+  // Redundant with the group kills above wherever a found process's group was killed; it is what
+  // remains for one whose group is excluded, which no test reaches.
   for (const pid of alive.keys()) signal(pid, 'SIGKILL');
   return alive;
 }
@@ -242,18 +244,19 @@ function runFile(file, index, opts, running) {
       run.dropped += gone.length;
     }
   };
-  child.stdout.on('data', collect);
-  child.stderr.on('data', collect);
+  // On EMFILE Node returns before it sets up the child's stdio: the streams are null, and `error`
+  // follows (#268's gate adversary, round 5, measured under `ulimit -n`).
+  child.stdout?.on('data', collect);
+  child.stderr?.on('data', collect);
   running.add(run);
   const timer = setTimeout(() => {
     run.timedOut = true;
     run.aimed = killFile(run, opts.procRoot);
   }, opts.fileTimeoutMs);
-  const closed = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once('close', r))));
+  const closed = Promise.all([child.stdout, child.stderr].filter(Boolean).map((s) => new Promise((r) => s.once('close', r))));
 
   return new Promise((resolve) => {
     let spawnError = null;
-    let finished = false;
     // A spawn that fails emits `error` and never `exit`: the file then ends here, as could not be
     // started. Before, it never ended, main never settled, and the run exited 0 (#268's gate
     // adversary, round 4, measured with a moved node binary and a task limit).
@@ -265,9 +268,8 @@ function runFile(file, index, opts, running) {
     // On `exit`, not on the pipes, so something the file left behind cannot hold the run open. Node's
     // inner runner owns the file's own pipes, so nothing reaches these in practice; this is defence.
     child.once('exit', (code, sig) => finish(code, sig));
+    // Once: `exit` fires only for a child that started, and `error` ends only one that did not.
     async function finish(code, sig) {
-      if (finished) return;
-      finished = true;
       run.exited = true;
       clearTimeout(timer);
       const reasons = [];
@@ -291,9 +293,9 @@ function runFile(file, index, opts, running) {
       if (alive.length) reasons.push(`${alive.length} process(es) it started survived the kill: ${alive.map((pid) => `${pid} ${commandOf(pid, opts.procRoot)}`).join('; ')}`);
       else if (run.timedOut) reasons.push('everything found of it was killed');
       await Promise.race([closed, sleep(DRAIN_MS)]);
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       running.delete(run);
       resolve({ file, ms: Date.now() - started, ok: reasons.length === 0, reasons, output: outputOf(run) });
     }
@@ -333,31 +335,52 @@ function report(result, write) {
 // own rejection.
 const active = { running: new Set(), procRoot: '/proc', aborting: false };
 
+let lastPoll = 0;
+/** Read every running file's process tree now. */
+function pollNow() {
+  lastPoll = Date.now();
+  const procs = snapshot(active.procRoot);
+  if (procs) for (const run of active.running) track(run, procs);
+}
+
+/**
+ * Write `text` in 64 KiB pieces, reading the running files' trees between them at the poll's pace.
+ * Node writes to a terminal synchronously, so one 16 MiB report held the event loop, and the poll with
+ * it, for as long as the terminal took to drain: an orphan made meanwhile was never seen (#268's gate
+ * adversary, round 5, measured on a pty). In pieces, a stalled reader also shows progress to the
+ * abort's 2 s rule, piece by piece rather than only once a whole report is out.
+ */
+function writeChunked(stream, text) {
+  const buf = Buffer.from(text);
+  for (let off = 0; off < buf.length; off += 64 * 1024) {
+    stream.write(buf.subarray(off, off + 64 * 1024));
+    if (Date.now() - lastPoll >= POLL_MS) pollNow();
+  }
+}
+
 /**
  * End this runner early. What it is running is killed first and reported after: a closed terminal
- * sends SIGHUP and then fails every write with EIO, a reader that went away (`| head -1`) fails it
- * with EPIPE, and a write placed before the kills threw and nothing was killed (round 2, measured
- * with a real pty). A SIGKILL cannot be handled here: each file's watchdog answers it.
+ * sends SIGHUP and then fails every write (EIO), and so does a reader that went away (`| head -1`,
+ * EPIPE). Through process.stdout those arrive as events, not throws, so nothing can skip the kills.
+ * A SIGKILL cannot be handled here: each file's watchdog answers it. No file is started after this:
+ * the queue stops (round 5 measured a queued file started while the abort drained, and its orphan
+ * survive).
  *
- * The report goes through the same streams as everything before it, so its lines keep their place,
- * and the runner exits once they have drained, or once nothing has moved for 2 s: a reader that has
- * stopped is waited for, one that is gone is not. Synchronous writes were tried and dropped: a 16 MiB
- * report written that way stopped the poll for as long as it took, and an orphan made meanwhile was
- * never seen (#268, round 5, measured).
+ * The files in flight are named first, then what each printed, in pieces, through the same streams
+ * as everything before, so the lines keep their place and a slow reader gets the names before the
+ * bulk. The runner exits once both streams have drained, or once nothing has moved for 2 s: a reader
+ * that is slow but reading is waited for, one that has stopped or gone is not.
  */
 function abort(why, code, error) {
   if (active.aborting) return;
   active.aborting = true;
   const running = active.running;
   for (const run of running) killFile(run, active.procRoot);
-  try {
-    for (const run of running) {
-      const text = body(outputOf(run));
-      process.stdout.write(`${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`);
-    }
-    if (error) process.stderr.write(`test-runner: ${error.stack ?? error}\n`);
-  } catch {
-    // the terminal or the reader is gone
+  process.stdout.write([...running].map((run) => `✖ ${run.file}: ${why}; what was found of it was killed\n`).join(''));
+  if (error) process.stderr.write(`test-runner: ${error.stack ?? error}\n`);
+  for (const run of running) {
+    const text = body(outputOf(run));
+    if (text) writeChunked(process.stdout, `--- what ${run.file} printed ---\n${text}\n`);
   }
   let pending = Infinity;
   let moved = Date.now();
@@ -373,7 +396,7 @@ function abort(why, code, error) {
   }, 20);
 }
 
-export async function main(argv, { cwd = process.cwd(), procRoot = process.env.BC_TEST_PROC_ROOT || '/proc', write = (s) => process.stdout.write(s) } = {}) {
+export async function main(argv, { cwd = process.cwd(), procRoot = process.env.BC_TEST_PROC_ROOT || '/proc', write = (s) => writeChunked(process.stdout, s) } = {}) {
   const opts = { ...parseArgs(argv), cwd, procRoot };
   const files = testFiles(opts.patterns, cwd);
   if (!files.length) {
@@ -386,13 +409,10 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
   const started = Date.now();
   const running = new Set();
   const results = [];
-  const poll = setInterval(() => {
-    const procs = snapshot(procRoot);
-    if (procs) for (const run of running) track(run, procs);
-  }, POLL_MS);
-  poll.unref();
   active.running = running;
   active.procRoot = procRoot;
+  const poll = setInterval(pollNow, POLL_MS);
+  poll.unref();
   // `on`, not `once`: a closed terminal sends SIGHUP twice, once from the terminal and once from its
   // shell, and with `once` the second took the default action halfway through the abort (#268's gate
   // adversary, round 3). A repeat while the abort runs is ignored by the abort itself.
@@ -409,7 +429,7 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
   // Files start in sorted order, as Node's runner starts them, so a hang's report time follows from
   // the order: the first file that never exits starts by the time a healthy run would end.
   const slot = async () => {
-    while (next < files.length) {
+    while (next < files.length && !active.aborting) {
       const index = next++;
       const result = await runFile(files[index], index, opts, running);
       results.push(result);
@@ -418,6 +438,8 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
   };
   await Promise.all(Array.from({ length: Math.min(opts.concurrency, files.length) }, slot));
   clearInterval(poll);
+  // An abort owns the end of the run: no summary, and no status but its own.
+  if (active.aborting) await new Promise(() => {});
 
   const failed = results.filter((r) => !r.ok);
   write(`ℹ files ${results.length}, passed ${results.length - failed.length}, failed ${failed.length}, ${((Date.now() - started) / 1000).toFixed(1)} s\n`);
