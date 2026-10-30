@@ -32,7 +32,7 @@ Every build fetched IBM Plex from Google through Next's font loader, and on 2026
 4. **No build reaches Google's font service.**
    - A test reads every frontend file git sees for the four strings that would bring it back.
    - CI reads the built `frontend/out` after the AppImage build, which covers a dependency's stylesheet. That step is in `stage2-artifact.yml`, which is not a required check: what fails a pull request is the test.
-5. **WebKit is asked what it draws.** Stage 2's `stage2-ui-check.sh` runs `scripts/lib/fonts-probe.js` in the built app: each of the ten faces must draw text from its shipped file, loaded, and no face may draw ✓ ❌ ◊ ⬎. The fonts were chosen from Chrome renders; this is the engine Linux ships.
+5. **WebKit is asked what it draws.** Stage 2's `stage2-ui-check.sh` runs `scripts/lib/fonts-probe.js` in the built app: each of the ten faces must load and draw text at its own weight and style, and no face may draw ✓ ❌ ◊ ⬎. Which file each face names is read from `fonts.css` by `fonts-ship-in-the-repository.test.mjs`: the probe sees that a face loaded, not which file it came from. The fonts were chosen from Chrome renders; this is the engine Linux ships.
 
 ## Consequences
 

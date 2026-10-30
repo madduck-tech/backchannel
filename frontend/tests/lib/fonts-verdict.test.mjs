@@ -30,7 +30,7 @@ test('the probe asks about the ten faces fonts.css declares, and the symbols the
 });
 
 test('the verdict: ok only when every face draws text, loaded, and none draws a symbol', () => {
-  assert.match(verdict(answer()), /^ok: 10 faces loaded from the shipped files, and none draws ✓ ❌ ◊ ⬎$/);
+  assert.match(verdict(answer()), /^ok: 10 faces loaded, each at its own weight and style, and none draws ✓ ❌ ◊ ⬎$/);
   assert.match(verdict(answer({ drawn: '✓' })), /^IBM Plex Sans 400 normal would draw ✓ with/);
   assert.match(verdict(answer({ status: 'error' })), /draws text with \["IBM Plex Sans\|400\|normal\|error"\]/);
   assert.match(verdict(answer({ only: 9 })), /reported 9 faces, not ten/);

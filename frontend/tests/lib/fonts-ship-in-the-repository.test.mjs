@@ -27,7 +27,8 @@ const css = fs.readFileSync(path.join(frontend, 'src', 'app', 'fonts.css'), 'utf
 const uncommented = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const unquote = (s) => s.replace(/^(['"])(.*)\1$/, '$2');
 function faces(text) {
-  return [...uncommented(text).matchAll(/@font-face\s*\{([^}]*)\}/g)].map(([, body]) => {
+  // Case-insensitive, as CSS is: an `@FONT-FACE` is drawn too (#264's gate adversary, round 3).
+  return [...uncommented(text).matchAll(/@font-face\s*\{([^}]*)\}/gi)].map(([, body]) => {
     const decl = {};
     for (const part of body.split(';').map((s) => s.trim()).filter(Boolean)) {
       const i = part.indexOf(':');
@@ -71,6 +72,12 @@ test('each face names its own file once, and the families keep their names and f
     const file = (d.src ?? '').match(/^url\((['"]?)\.\/fonts\/([^'")]+)\1\) format\((['"])woff2\3\)$/);
     return `${unquote(d['font-family'])} ${d['font-weight']} ${d['font-style']} → ${file ? file[2] : d.src}`;
   }).sort();
+  // Each face whole: a property added beside these five (size-adjust, font-feature-settings, another
+  // font-display) changes what is drawn and was passed (#264's gate adversary, round 3).
+  for (const d of all.filter((x) => PLEX.test(unquote(x['font-family'] ?? '')))) {
+    assert.deepEqual(Object.keys(d).sort(), ['font-display', 'font-family', 'font-style', 'font-weight', 'src', 'unicode-range'], `${unquote(d['font-family'])} ${d['font-weight']} ${d['font-style']} declares other properties than a face`);
+    assert.equal(d['font-display'], 'swap', `${unquote(d['font-family'])} ${d['font-weight']} ${d['font-style']}: font-display is ${d['font-display']}`);
+  }
   assert.deepEqual(got, [
     'IBM Plex Mono 400 normal → IBMPlexMono-Regular.woff2',
     'IBM Plex Mono 500 normal → IBMPlexMono-Medium.woff2',
@@ -99,7 +106,7 @@ test('each face names its own file once, and the families keep their names and f
     assert.deepEqual(found, [v], `fonts.css declares ${k} as ${JSON.stringify(found)}`);
   }
   const elsewhere = [];
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|scss|tsx?|jsx?|mdx|html)$/.test(e.name) && p !== path.join(frontend, 'src', 'app', 'fonts.css')) { const s = uncommented(fs.readFileSync(p, 'utf8')); if (/@font-face/.test(s) || /--font-(sans|serif|mono)\s*:/.test(s)) elsewhere.push(path.relative(frontend, p)); } } };
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|scss|tsx?|jsx?|mdx|html)$/.test(e.name) && p !== path.join(frontend, 'src', 'app', 'fonts.css')) { const s = uncommented(fs.readFileSync(p, 'utf8')); if (/@font-face/i.test(s) || /--font-(sans|serif|mono)\s*:/.test(s)) elsewhere.push(path.relative(frontend, p)); } } };
   for (const d of ['src', '.storybook']) walk(path.join(frontend, d));
   assert.deepEqual(elsewhere, [], 'a face or a --font-* variable is declared outside fonts.css');
   assert.match(fs.readFileSync(path.join(frontend, 'src', 'app', 'globals.css'), 'utf8'), /^@import "\.\/fonts\.css";$/m, 'globals.css does not bring fonts.css');

@@ -29,4 +29,4 @@ for f in faces:
     for sym, got in f['symbols'].items():
         if got:
             bad.append(f['face'] + ' would draw ' + sym + ' with ' + json.dumps(got, ensure_ascii=False))
-print('; '.join(bad) if bad else 'ok: %d faces loaded from the shipped files, and none draws %s' % (len(faces), ' '.join(faces[0]['symbols'])))
+print('; '.join(bad) if bad else 'ok: %d faces loaded, each at its own weight and style, and none draws %s' % (len(faces), ' '.join(faces[0]['symbols'])))

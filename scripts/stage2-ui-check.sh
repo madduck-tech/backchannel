@@ -207,7 +207,7 @@ done
 # of the ten faces: text must be drawn by exactly that face, loaded; each symbol by none of them.
 FONTS=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
     "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-probe.js" \
-  | curl -s -m 30 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
+  | { curl -s -m 30 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- || true; } \
   | python3 -c 'import json,sys
 try: v = json.load(sys.stdin).get("value")
 except Exception: v = None
@@ -286,4 +286,4 @@ say "stored preference: ${STORED:-<none>}"
   || die "selected '$FIRST' and the app stored '$STORED'; it must store exactly '$FIRST (output)'"
 
 PASSED=1
-say "PASS - the ten faces load from the shipped files and leave the symbols to the system, tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"
+say "PASS - the ten faces load, each at its own weight and style, and leave the symbols to the system, tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"
