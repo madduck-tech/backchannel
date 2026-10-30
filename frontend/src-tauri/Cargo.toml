@@ -207,6 +207,11 @@ tempfile = "3.3.0"
 # a real TOML reader (#212). Already in the build graph through tauri; MIT or Apache-2.0.
 toml = "0.8"
 
+# The cookie tests call the vendored client's lookup directly (#243, ADR 0034). The version is cpal's,
+# so it resolves to the fork the root Cargo.toml patches in, not to the registry.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+pulseaudio = "0.3.1"
+
 # NOTE: this file used to carry a [patch.crates-io] for cpal and esaxx-rs.
 # Cargo ignores [patch] outside the workspace root, so it never applied and
 # every build resolved both from the registry. It was dropped rather than
