@@ -29,7 +29,7 @@ import runcheck  # noqa: E402
 
 STATIC = {"/": ("page.html", "text/html"), "/page.js": ("page.js", "text/javascript"),
           "/worklet.js": ("worklet.js", "text/javascript")}
-TRACKS = ("pre_send", "side_b")
+TRACKS = ("pre_send", "side_b", "pre_send_mr", "side_b_mr")
 CHUNK_LOCK = threading.Lock()
 
 
@@ -78,7 +78,8 @@ def make_handler(run_dir, params):
                 parts = self.path.split("/")
                 if len(parts) != 4 or parts[2] not in TRACKS or not parts[3].isdigit():
                     return self.reply(404)
-                path = os.path.join(run_dir, f"{parts[2]}.f32")
+                ext = "webm" if parts[2].endswith("_mr") else "f32"
+                path = os.path.join(run_dir, f"{parts[2]}.{ext}")
                 with CHUNK_LOCK:
                     # Written at the offset the page sent, so chunks that arrive out of order
                     # land in order.

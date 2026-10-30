@@ -25,6 +25,10 @@
 #      markers' sync located in side A's recording (--schedule) to place the noise window, and the
 #      run judged by scripts/macos-loopback/runcheck.py.
 #
+# Tracks: pre_send_mr.wav and side_b_mr.wav are MediaRecorder's, straight from the tracks, and are
+# the measurement points for side A and side B. pre_send.wav and side_b.wav come through Web Audio
+# on the page's clock (for #292's timing); over an hour that path lost about 220 ppm (#291, L1).
+#
 # Exit: 0 when the run measured what it was asked to, 2 when it is void (the reasons are printed),
 # 1 on any other failure. A void run is rerun, never read as a pass or a red.
 set -euo pipefail
@@ -214,10 +218,17 @@ trap - EXIT
 for track in pre_send side_b; do
   [ -s "$RUN_DIR/$track.f32" ] && "$FFMPEG" -nostdin -loglevel error -y -f f32le -ar 48000 -ac 1 \
     -i "$RUN_DIR/$track.f32" -c:a pcm_s16le "$RUN_DIR/$track.wav" && rm -f "$RUN_DIR/$track.f32"
+  # MediaRecorder's WebM keeps its timestamps; aresample=async fills any gap they show with
+  # silence, so lost audio stays where it was lost instead of shortening the track.
+  [ -s "$RUN_DIR/${track}_mr.webm" ] && "$FFMPEG" -nostdin -loglevel error -y -i "$RUN_DIR/${track}_mr.webm" \
+    -af "aresample=async=1:first_pts=0,aresample=48000" -ac 1 -c:a pcm_s16le "$RUN_DIR/${track}_mr.wav" || true
 done
 
-if [ -n "$SCHEDULE" ] && [ -f "$RUN_DIR/pre_send.wav" ]; then
-  python3 -I "$LIB/markers.py" detect "$RUN_DIR/pre_send.wav" "$SCHEDULE" > "$RUN_DIR/det-pre_send.json" || true
+# Side A as MediaRecorder kept it places the noise window; the Web Audio tap can lose samples.
+SIDE_A=$RUN_DIR/pre_send_mr.wav
+[ -f "$SIDE_A" ] || SIDE_A=$RUN_DIR/pre_send.wav
+if [ -n "$SCHEDULE" ] && [ -f "$SIDE_A" ]; then
+  python3 -I "$LIB/markers.py" detect "$SIDE_A" "$SCHEDULE" > "$RUN_DIR/det-pre_send.json" || true
 fi
 ifconfig | awk '/inet6? /{print $2}' | sed 's/%.*//' > "$RUN_DIR/interfaces"
 python3 -I - "$RUN_DIR" "${SCHEDULE:-}" "${PLAY_START:-}" <<'PY'

@@ -138,6 +138,24 @@ async function main() {
   };
   tap(ctx.createMediaStreamSource(stream), 'pre_send');
   tap(ctx.createMediaStreamSource(received), 'side_b');
+  // The same two streams recorded by MediaRecorder, straight from the track and with no Web Audio
+  // in between: the Web Audio path lost about 220 ppm over an hour (#291, L1 second run).
+  const MR_TYPE = 'audio/webm;codecs=pcm';
+  record.applied.mediaRecorder = MediaRecorder.isTypeSupported(MR_TYPE) ? MR_TYPE : null;
+  const recorders = [];
+  if (record.applied.mediaRecorder) {
+    for (const [s, name] of [[stream, 'pre_send_mr'], [received, 'side_b_mr']]) {
+      const mr = new MediaRecorder(s, { mimeType: MR_TYPE });
+      let offset = 0;
+      mr.ondataavailable = async (e) => {
+        if (!e.data.size) return;
+        const at = offset; offset += e.data.size;
+        await post(`/chunk/${name}/${at}`, await e.data.arrayBuffer(), 'application/octet-stream');
+      };
+      mr.start(1000);
+      recorders.push(mr);
+    }
+  }
   await event({ type: 'tap-start' });
 
   const pollStats = async () => {
@@ -171,6 +189,7 @@ async function main() {
   await event({ type: 'ready', contextState: ctx.state });
   await new Promise((r) => setTimeout(r, params.seconds * 1000));
   clearInterval(statsTimer);
+  for (const mr of recorders) mr.stop();
   await pollStats();
   record.applied.contextState = ctx.state === 'running' ? record.applied.contextState : ctx.state;
   await new Promise((r) => setTimeout(r, 1500)); // let the last chunks post
