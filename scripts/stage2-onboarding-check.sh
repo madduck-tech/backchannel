@@ -917,8 +917,15 @@ DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
 if { [ "$MODE" = chooses ] || [ "$MODE" = catalogue ]; } && { [ -e "$APPDATA/models/$DEFAULT_FILE" ] || [ -e "$APPDATA/models/.partial-$DEFAULT_FILE" ]; }; then
   die "the default was fetched as well as the choice; the choice is not what drives the download"
 fi
-if [ "$MODE" = chooses ] && grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG"; then
-  die "the application started downloading the default as well as the choice; the choice is not what drives the download"
+if [ "$MODE" = chooses ]; then
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  # The default's absence from the log means something only beside the choice's line in the same log.
+  grep -qE "Downloading model file .+/$CHOSEN_FILE" "$LOG" \
+    || die "the log names no download of the chosen $CHOSEN_FILE, so it cannot say the default's did not start"
+  if grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG"; then
+    die "the application started downloading the default as well as the choice; the choice is not what drives the download"
+  fi
 fi
 
 # --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
@@ -993,6 +1000,12 @@ if [ "$MODE" = keeps ]; then
   # A re-fetch since #195 leaves the final file untouched until its rename, so its start is read from the
   # temporary file and the log line, written before the request.
   [ -e "$APPDATA/models/.partial-$PRESENT_FILE" ] && die "$PRESENT_FILE is being re-fetched: its temporary file exists"
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  # This mode downloads nothing, so the sentinel for the absence below is the audio check's load of
+  # the file that was there, from the same log.
+  grep -qE "Loading model [^ ]+ from .+/$PRESENT_FILE" "$LOG" \
+    || die "the log shows no load of $PRESENT_FILE, so it cannot say no re-fetch started"
   grep -nE "Downloading model file .+/$PRESENT_FILE" "$LOG" && die "the application started re-fetching $PRESENT_FILE, which was already there"
   say "the model that was already there was left alone: $PRESENT_AFTER"
 fi

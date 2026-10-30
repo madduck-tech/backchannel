@@ -109,7 +109,10 @@ pub struct TranscribeEngine {
     stale: Arc<RwLock<bool>>,
     /// Where catalogue files are fetched from: `TRANSCRIBE_MODEL_BASE_URL`, or a test's local server.
     base_url: String,
-    client: reqwest::Client,
+    /// A test's client, which reads no proxy. Production builds one per download, as before #195, so
+    /// the proxy settings are read each time and a client that cannot be built fails one download, not
+    /// the engine's construction under `TRANSCRIBE_ENGINE`'s lock.
+    client: Option<reqwest::Client>,
     #[cfg(test)]
     test_hooks: TestHooks,
 }
@@ -125,6 +128,10 @@ pub(crate) struct TestHooks {
     pub pause_loads: std::sync::atomic::AtomicBool,
     /// Raised by a replace just before its commit takes its locks.
     pub before_commit: Arc<tokio::sync::Notify>,
+    /// Raised by a replace between its rename and its unload; it then waits for `release_rename`.
+    pub rename_paused: Arc<tokio::sync::Notify>,
+    pub release_rename: Arc<tokio::sync::Notify>,
+    pub pause_after_rename: std::sync::atomic::AtomicBool,
 }
 
 /// A download in flight is written here, in the same directory as its final file, and renamed over
@@ -189,7 +196,7 @@ impl TranscribeEngine {
             load_lock: tokio::sync::Mutex::new(()),
             stale: Arc::new(RwLock::new(false)),
             base_url: TRANSCRIBE_MODEL_BASE_URL.to_string(),
-            client: reqwest::Client::new(),
+            client: None,
             #[cfg(test)]
             test_hooks: TestHooks::default(),
         })
@@ -200,7 +207,7 @@ impl TranscribeEngine {
     #[cfg(test)]
     pub(crate) fn with_base_url(mut self, base_url: &str) -> Self {
         self.base_url = base_url.to_string();
-        self.client = reqwest::Client::builder().no_proxy().build().expect("a client");
+        self.client = Some(reqwest::Client::builder().no_proxy().build().expect("a client"));
         self
     }
 
@@ -511,24 +518,51 @@ impl TranscribeEngine {
     /// it (the idle unloader's test: no recording, no batch job), and otherwise marked stale: a job in
     /// progress keeps its model, and the next use loads the new file. No download caller holds the
     /// lifecycle lock.
+    ///
+    /// The slot is marked stale before the rename, so no read that skips a load is offered the old
+    /// model while the new file is already in place; `usable_model` takes no lock.
     async fn commit_download(&self, model_name: &str, filename: &str) -> Result<()> {
         #[cfg(test)]
         self.test_hooks.before_commit.notify_one();
-        let _lifecycle = crate::audio::common::acquire_engine_lifecycle_lock().await;
+        // A recording's stop holds the lifecycle lock for its whole drain (#210), with no limit, so a
+        // cancel is answered while the commit waits for it, not only once it has it.
+        let lifecycle = crate::audio::common::acquire_engine_lifecycle_lock();
+        tokio::pin!(lifecycle);
+        let _lifecycle = loop {
+            tokio::select! {
+                guard = &mut lifecycle => break guard,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
+                        *self.cancel_download_flag.write().await = None;
+                        return Err(anyhow!("Download cancelled by user"));
+                    }
+                }
+            }
+        };
         let _load = self.load_lock.lock().await;
         // A cancel that came while the commit waited for its locks still cancels.
         if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
             *self.cancel_download_flag.write().await = None;
             return Err(anyhow!("Download cancelled by user"));
         }
-        fs::rename(self.partial_path(filename), self.models_dir.join(filename))
-            .await
-            .map_err(|e| anyhow!("Failed to put the downloaded {} in place: {}", filename, e))?;
         let replaced_in_slot = self.model.read().await.is_some()
             && self.current_model.read().await.as_deref() == Some(model_name);
+        let was_stale = *self.stale.read().await;
+        if replaced_in_slot {
+            *self.stale.write().await = true;
+        }
+        if let Err(e) = fs::rename(self.partial_path(filename), self.models_dir.join(filename)).await {
+            // The old file is still in place, so the slot is as usable as it was.
+            *self.stale.write().await = was_stale;
+            return Err(anyhow!("Failed to put the downloaded {} in place: {}", filename, e));
+        }
+        #[cfg(test)]
+        if self.test_hooks.pause_after_rename.load(std::sync::atomic::Ordering::SeqCst) {
+            self.test_hooks.rename_paused.notify_one();
+            self.test_hooks.release_rename.notified().await;
+        }
         if replaced_in_slot {
             if crate::audio::common::engine_in_use() {
-                *self.stale.write().await = true;
                 info!("Replaced {} while it is in use; the next use loads the new file", model_name);
             } else {
                 self.unload_model().await;
@@ -582,6 +616,8 @@ impl TranscribeEngine {
 
         let response = self
             .client
+            .clone()
+            .unwrap_or_default()
             .get(&url)
             .send()
             .await

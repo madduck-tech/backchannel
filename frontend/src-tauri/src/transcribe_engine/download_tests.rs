@@ -210,6 +210,49 @@ async fn a_cancel_while_the_commit_waits_still_cancels() {
     assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
 }
 
+/// A cancel ends a download whose commit is still waiting for the lifecycle lock, which a recording's
+/// stop holds for its whole drain (#195's gate adversary, round 2): the row must not sit at 99% with
+/// Cancel doing nothing until the drain ends.
+#[tokio::test]
+async fn a_cancel_ends_a_download_whose_commit_waits_for_the_lifecycle_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = original(dir.path());
+    let before = bytes(&path);
+    let s = stub(Reply::Body(vec![9u8; 10_000])).await;
+    let engine = engine_at(dir.path(), &s);
+    let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
+    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    engine.test_hooks().before_commit.notified().await;
+    engine.cancel_download(ROW).await.expect("the download is still in flight");
+    let ended = tokio::time::timeout(Duration::from_secs(2), running).await;
+    let in_flight = engine.downloads_in_flight().await.contains(ROW);
+    drop(held);
+    let e = ended.expect("the download still waits for the lifecycle lock after its cancel").unwrap().expect_err("the cancel was ignored");
+    assert_eq!(e.to_string(), "Download cancelled by user");
+    assert!(!in_flight, "the cancelled download still reads as in flight");
+    assert_eq!(bytes(&path), before, "the cancelled download replaced the file anyway");
+    assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
+}
+
+/// The row never reads Downloading 100% before its file is in place: every byte has arrived, and the
+/// commit waits for the lifecycle lock (#195's gate adversary, round 2).
+#[tokio::test]
+async fn the_row_never_reads_downloading_100_before_the_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = stub(Reply::Body(vec![9u8; 10_000])).await;
+    let engine = engine_at(dir.path(), &s);
+    let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
+    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    engine.test_hooks().before_commit.notified().await;
+    let status = engine.discover_models().await.unwrap().into_iter().find(|m| m.name == ROW).unwrap().status;
+    drop(held);
+    running.await.unwrap().expect("the download succeeds");
+    assert!(
+        matches!(status, ModelStatus::Downloading { progress } if progress <= 99),
+        "with every byte in and the file not yet in place, the row reads {status:?}"
+    );
+}
+
 /// Condition 2, a fresh download: a failure leaves neither a final nor a temporary file.
 #[tokio::test]
 async fn a_failed_fresh_download_leaves_nothing() {
@@ -333,9 +376,11 @@ async fn a_download_in_flight_reads_downloading() {
 /// one question, and none decides by `get_current_model()`.
 #[test]
 fn the_reads_that_skip_a_load_ask_whether_the_model_is_usable() {
-    let commands = include_str!("commands.rs");
-    let import = include_str!("../audio/import.rs");
-    let retranscription = include_str!("../audio/retranscription.rs");
+    // As LF: the Windows runner checks the sources out with CRLF, and one pattern below spans lines.
+    let lf = |s: &str| s.replace("\r\n", "\n");
+    let (commands, import, retranscription) =
+        (lf(include_str!("commands.rs")), lf(include_str!("../audio/import.rs")), lf(include_str!("../audio/retranscription.rs")));
+    let (commands, import, retranscription) = (commands.as_str(), import.as_str(), retranscription.as_str());
     assert_eq!(commands.matches("engine.usable_model().await").count(), 2, "the pre-flight and the preload's re-check");
     assert!(commands.contains("Ok(engine()?.usable_model().await)"), "transcribe_get_current_model");
     for (file, text) in [("commands.rs", commands), ("import.rs", import), ("retranscription.rs", retranscription)] {
@@ -349,12 +394,81 @@ fn the_reads_that_skip_a_load_ask_whether_the_model_is_usable() {
     assert!(commands.contains("TranscribeEngine::purge_legacy_models(&models_dir);\n    // And what a download left when the application stopped mid-way (#195), before any can start.\n    TranscribeEngine::sweep_partial_downloads(&models_dir);"), "set_models_directory does not sweep");
 }
 
-/// Condition 7, with real models: the old file is whisper-tiny's, the new one moonshine-tiny's, under
-/// one row's filename, and `arch()` tells which was installed.
+/// Every read of the engine's model slot, by file and method, each with why it may read the slot
+/// itself rather than ask `usable_model` (#195's gate adversary, round 2). Held as a set: a read added
+/// anywhere, or one removed, turns this red until it is listed here with its reason.
+#[test]
+fn every_read_of_the_model_slot_is_listed_with_its_reason() {
+    const METHODS: [&str; 7] =
+        ["get_current_model", "is_model_loaded", "usable_model", "model_languages", "open_session", "resolve_language", "transcribe_batch"];
+    let listed: &[(&str, &str, usize, &str)] = &[
+        ("audio/common.rs", "is_model_loaded", 1, "the idle unloader: it unloads the slot itself"),
+        ("audio/common.rs", "get_current_model", 1, "the idle unloader's log of what it unloads"),
+        ("audio/device_check.rs", "transcribe_batch", 1, "first run's audio check, after the frontend asked transcribe_get_current_model (usable_model) and loaded"),
+        ("audio/dictation_probe.rs", "is_model_loaded", 1, "a measuring instrument that requires a warm model. On a stale slot it times the old weights; an idle commit can unload between this and open_session, which then fails with its own error, as the idle unloader could already"),
+        ("audio/dictation_probe.rs", "resolve_language", 1, "the probe's session, as above"),
+        ("audio/dictation_probe.rs", "open_session", 1, "the probe's session, as above"),
+        ("audio/import.rs", "usable_model", 1, "import's read that skips a load"),
+        ("audio/import.rs", "transcribe_batch", 1, "import decodes on the model it loaded or found usable, under its in-progress flag"),
+        ("audio/retranscription.rs", "usable_model", 1, "retranscription's read that skips a load"),
+        ("audio/retranscription.rs", "transcribe_batch", 1, "retranscription decodes on the model it loaded or found usable, under its in-progress flag"),
+        ("audio/transcription/mod.rs", "is_model_loaded", 1, "recording, after the pre-flight under the lifecycle lock loaded what was not usable"),
+        ("audio/transcription/mod.rs", "get_current_model", 1, "recording's record of the model it streams with"),
+        ("audio/transcription/mod.rs", "resolve_language", 1, "recording's session"),
+        ("audio/transcription/mod.rs", "open_session", 1, "recording's session"),
+        ("transcribe_engine/commands.rs", "usable_model", 3, "the pre-flight, the preload's re-check, and transcribe_get_current_model"),
+        ("transcribe_engine/commands.rs", "is_model_loaded", 1, "transcribe_is_model_loaded answers for the slot; its frontend wrapper has no caller"),
+        ("transcribe_engine/commands.rs", "model_languages", 1, "transcribe_model_languages lists what the loaded model decodes. On a stale slot that is the old weights' list until the next load"),
+        ("transcribe_engine/commands.rs", "transcribe_batch", 1, "transcribe_transcribe_audio, which no frontend code calls"),
+        ("transcribe_engine/engine.rs", "get_current_model", 2, "transcribe_batch's log line, and delete_model, which unloads the slot when it holds the deleted model"),
+        ("transcribe_engine/engine.rs", "model_languages", 1, "resolve_language, inside the engine"),
+        ("transcribe_engine/engine.rs", "resolve_language", 1, "transcribe_batch, inside the engine"),
+        ("transcribe_engine/engine.rs", "open_session", 1, "transcribe_batch, inside the engine"),
+        ("transcribe_engine/measurements.rs", "transcribe_batch", 1, "an ignored measurement over models it loads itself"),
+        ("transcribe_engine/measurements.rs", "open_session", 1, "an ignored measurement over models it loads itself"),
+    ];
+    fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rust_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    assert!(files.len() > 50, "the walk found {} files under {}", files.len(), src.display());
+    let mut found = std::collections::BTreeMap::new();
+    for f in &files {
+        let rel = f.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+        if rel == "transcribe_engine/download_tests.rs" {
+            continue;
+        }
+        let text = std::fs::read_to_string(f).unwrap();
+        for m in METHODS {
+            let n = text.matches(&format!(".{m}(")).count();
+            if n > 0 {
+                found.insert((rel.clone(), m.to_string()), n);
+            }
+        }
+    }
+    let expected: std::collections::BTreeMap<_, _> =
+        listed.iter().map(|(f, m, n, _)| ((f.to_string(), m.to_string()), *n)).collect();
+    assert_eq!(found, expected, "a read of the model slot is not listed with its reason, or a listed one is gone");
+}
+
+/// Condition 7, with real models: the old file is moonshine-tiny's, the new one whisper-tiny's, under
+/// moonshine-tiny's filename, and `arch()` tells which was installed. This way round the new file is
+/// above the row's Available floor, so after a stale mark the pre-flight answers NeedsLoad, not
+/// Damaged: whisper-tiny's 35 MB-floor row would read Damaged with moonshine's bytes (#195's gate
+/// adversary, round 2).
 mod replace_against_load {
     use super::*;
 
-    const WHISPER: &str = "whisper-tiny-q8";
+    const OLD_ROW: &str = "moonshine-tiny-q8";
 
     async fn arch(engine: &TranscribeEngine) -> String {
         engine.open_session().await.expect("a model is loaded").model().arch()
@@ -363,9 +477,9 @@ mod replace_against_load {
     /// The old file at the row's path, and a stub that serves the new one.
     async fn setup() -> (tempfile::TempDir, Stub, Arc<TranscribeEngine>) {
         let dir = tempfile::tempdir().unwrap();
-        let row = crate::config::transcribe_model(WHISPER).unwrap();
-        std::fs::copy(crate::measure::measure_model("whisper-tiny-Q8_0.gguf"), dir.path().join(row.filename)).unwrap();
-        let new = std::fs::read(crate::measure::measure_model("moonshine-tiny-Q8_0.gguf")).unwrap();
+        let row = crate::config::transcribe_model(OLD_ROW).unwrap();
+        std::fs::copy(crate::measure::measure_model("moonshine-tiny-Q8_0.gguf"), dir.path().join(row.filename)).unwrap();
+        let new = std::fs::read(crate::measure::measure_model("whisper-tiny-Q8_0.gguf")).unwrap();
         let s = stub(Reply::Body(new)).await;
         let engine = engine_at(dir.path(), &s);
         (dir, s, engine)
@@ -382,10 +496,10 @@ mod replace_against_load {
         let (_dir, _s, engine) = setup().await;
         let hooks = engine.test_hooks();
         hooks.pause_loads.store(true, Ordering::SeqCst);
-        let load = tokio::spawn({ let e = engine.clone(); async move { e.load_model(WHISPER).await } });
+        let load = tokio::spawn({ let e = engine.clone(); async move { e.load_model(OLD_ROW).await } });
         hooks.load_paused.notified().await;
         hooks.pause_loads.store(false, Ordering::SeqCst);
-        let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(WHISPER, None).await } });
+        let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
         hooks.before_commit.notified().await;
         // Bounded: long enough for a commit that took no engine lock to finish its rename.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -394,35 +508,53 @@ mod replace_against_load {
         load.await.unwrap().expect("the load succeeds");
         download.await.unwrap().expect("the download succeeds");
         check(engine.usable_model().await.is_none(), "7a: the old file stays installed after a replace");
-        engine.load_model(WHISPER).await.unwrap();
-        check(arch(&engine).await == "moonshine", "7a: the next load does not read the new file");
-        check(engine.usable_model().await.as_deref() == Some(WHISPER), "7a: a fresh load is not offered as usable");
+        engine.load_model(OLD_ROW).await.unwrap();
+        check(arch(&engine).await == "whisper", "7a: the next load does not read the new file");
+        check(engine.usable_model().await.as_deref() == Some(OLD_ROW), "7a: a fresh load is not offered as usable");
 
         // 7b: a replace with the old model loaded and idle unloads it.
         let (_dir, _s, engine) = setup().await;
-        engine.load_model(WHISPER).await.unwrap();
-        check(arch(&engine).await == "whisper", "7b: the fixture's old model is not whisper");
-        engine.download_model(WHISPER, None).await.unwrap();
+        engine.load_model(OLD_ROW).await.unwrap();
+        check(arch(&engine).await == "moonshine", "7b: the fixture's old model is not moonshine");
+        engine.download_model(OLD_ROW, None).await.unwrap();
         check(!engine.is_model_loaded().await, "7b: an idle replace leaves the old model loaded");
+
+        // 7e: between the rename and the unload, no read that skips a load is offered the old model,
+        // though the new file is already in place.
+        let (dir, _s, engine) = setup().await;
+        engine.load_model(OLD_ROW).await.unwrap();
+        let hooks = engine.test_hooks();
+        hooks.pause_after_rename.store(true, Ordering::SeqCst);
+        let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
+        hooks.rename_paused.notified().await;
+        let renamed = !dir.path().join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(OLD_ROW).unwrap().filename)).exists();
+        check(renamed, "7e: the pause is not after the rename");
+        check(engine.usable_model().await.is_none(), "7e: the old model is offered between the rename and the unload");
+        hooks.release_rename.notify_one();
+        download.await.unwrap().expect("the download succeeds");
 
         // 7c: a replace while a job holds the engine leaves the job its model.
         let (_dir, _s, engine) = setup().await;
-        engine.load_model(WHISPER).await.unwrap();
+        engine.load_model(OLD_ROW).await.unwrap();
         let job = crate::audio::common::DeviceCheckHoldsEngine::take();
-        engine.download_model(WHISPER, None).await.unwrap();
+        engine.download_model(OLD_ROW, None).await.unwrap();
         check(engine.transcribe_batch(vec![0.0; 16_000], None).await.is_ok(), "7c: the job lost its model");
         if engine.is_model_loaded().await {
-            check(arch(&engine).await == "whisper", "7c: the job's model changed under it");
+            check(arch(&engine).await == "moonshine", "7c: the job's model changed under it");
         }
 
-        // 7d: once the job is done, the slot is not offered again, and the next load reads the new file.
+        // 7d: once the job is done, the slot is not offered again, the pre-flight asks for a load, and
+        // the next load reads the new file.
         drop(job);
         check(engine.usable_model().await.is_none(), "7d: the replaced model is offered again");
-        let resolution = super::super::commands::resolve_with_engine(&engine, Some("local"), Some(WHISPER)).await.unwrap();
-        check(!matches!(resolution, super::super::commands::Resolution::Ready(_)), "7d: the pre-flight answers Ready on the old weights");
-        engine.load_model(WHISPER).await.unwrap();
-        check(arch(&engine).await == "moonshine", "7d: the next load does not read the new file");
-        check(engine.usable_model().await.as_deref() == Some(WHISPER), "7d: a fresh load is not offered as usable");
+        let resolution = super::super::commands::resolve_with_engine(&engine, Some("local"), Some(OLD_ROW)).await.unwrap();
+        check(
+            matches!(&resolution, super::super::commands::Resolution::NeedsLoad(m) if m == OLD_ROW),
+            "7d: the pre-flight does not ask for a load of the replaced model",
+        );
+        engine.load_model(OLD_ROW).await.unwrap();
+        check(arch(&engine).await == "whisper", "7d: the next load does not read the new file");
+        check(engine.usable_model().await.as_deref() == Some(OLD_ROW), "7d: a fresh load is not offered as usable");
 
         assert!(fails.is_empty(), "condition 7 failed: {fails:#?}");
     }
