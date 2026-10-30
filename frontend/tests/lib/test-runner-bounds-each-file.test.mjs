@@ -61,11 +61,11 @@ const kill = (pid) => {
 
 /** Fresh sleep arguments for one case, from this test's pid, so no other run can find or kill them. */
 function marksFor(n) {
-  return Object.fromEntries(['A', 'C', 'D', 'E', 'F'].map((k, i) => [k, `9${process.pid}${n}${i}`]));
+  return Object.fromEntries(['A', 'C', 'D', 'E', 'F', 'H'].map((k, i) => [k, `9${process.pid}${n}${i}`]));
 }
-const ALL_CASES = [1, 2, 3, 4, 5, 6, 7];
+const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signalAt } = {}) {
+async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signalAt, prefix = [], closeStdoutAt } = {}) {
   const marks = marksFor(n);
   const stamp = path.join(tmp, `stamp-${n}`);
   for (const m of Object.values(marks)) check(sleepsWith(m).length === 0, `${name}: a process already carries ${m} before the run`);
@@ -79,7 +79,8 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
     ...extra,
   };
   const started = Date.now();
-  const child = spawn(process.execPath, [runner, `--file-timeout=${fileTimeout}`, '--concurrency=4', ...files], { cwd: frontend, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const command = [process.execPath, runner, `--file-timeout=${fileTimeout}`, '--concurrency=4', ...files];
+  const child = spawn(prefix[0] ?? command[0], [...prefix.slice(1), ...(prefix.length ? command : command.slice(1))], { cwd: frontend, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.on('data', (d) => (out += d));
   child.stderr.on('data', (d) => (out += d));
@@ -93,9 +94,12 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
       aIsOwn: a.length > 0 && a.every((p) => own.has(p)),
       c: sleepsWith(marks.C).length,
       f: sleepsWith(marks.F).length,
+      h: sleepsWith(marks.H).length,
       stamp: fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : '',
     };
   });
+  // A reader that goes away: the runner's next write fails with EPIPE.
+  if (closeStdoutAt) setTimeout(() => child.stdout.destroy(), closeStdoutAt).unref();
   if (signalAt) {
     setTimeout(() => {
       try {
@@ -145,7 +149,7 @@ try {
     check(r.ms <= S + 30_000, `all: the run took ${r.ms} ms, more than S + 30 s`);
     check(r.code !== 0, `all: the run exited ${r.code}, with four files that never end`);
     for (const f of HUNG) {
-      check(line(fixture(f), `still running after the ${S} ms bound for one file; everything it started was killed$`).test(r.out), `all: no ✖ line names ${f} at its bound, everything killed`);
+      check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `all: no ✖ line names ${f} at its bound, everything killed`);
     }
     check(line(fixture('e-leaves-a-process.mjs'), 'exited and left 1 process\\(es\\) running').test(r.out), 'all: no ✖ line names e for the process it left');
     check(new RegExp(`^✔ ${FIX}/g-ends-its-child-soon\\.mjs — `, 'm').test(r.out), 'all: g failed, though its child ended inside the grace');
@@ -153,13 +157,21 @@ try {
     for (const [k, m] of Object.entries(r.marks)) check(sleepsWith(m).length === 0, `all: ${k}'s sleep ${m} is still running after the run`);
   }
 
-  // 1b. Chrome's shape, alone so that it starts at once: only the process tree finds it. In run 1 it
-  //     would wait for a slot, since the runner starts files in sorted order, four at a time.
+  // 1b. The shapes run 1 would start late, since the runner starts files in sorted order, four at a
+  //     time: Chrome's (only the tree finds it), an orphan only the poll saw, a file whose runner is
+  //     ended by a signal, and one with more output than is kept.
   {
-    const r = await nested('f', 7, [fixture('f-hides-its-marker.mjs')]);
-    check(r.mid.f > 0, "f: f's sleep was not running at S/2, so its absence later would mean nothing");
-    check(line(fixture('f-hides-its-marker.mjs'), `still running after the ${S} ms bound for one file; everything it started was killed$`).test(r.out), 'f: no ✖ line names f at its bound, everything killed');
-    check(sleepsWith(r.marks.F).length === 0, "f: f's sleep is still running after the run");
+    const r = await nested('f-j', 7, ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs', 'i-kills-its-runner.mjs', 'j-prints-a-lot.mjs'].map(fixture));
+    check(r.mid.f > 0, "f-j: f's sleep was not running at S/2, so its absence later would mean nothing");
+    check(r.mid.h > 0, "f-j: h's sleep was not running at S/2, so its absence later would mean nothing");
+    for (const f of ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs']) {
+      check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `f-j: no ✖ line names ${f} at its bound, everything killed`);
+    }
+    check(sleepsWith(r.marks.F).length === 0, "f-j: f's sleep is still running after the run");
+    check(sleepsWith(r.marks.H).length === 0, "f-j: h's sleep is still running after the run");
+    check(line(fixture('i-kills-its-runner.mjs'), 'exited 137').test(r.out), "f-j: no ✖ line names i for its runner's SIGKILL");
+    check(/^… the first [0-9]+ bytes of its output were dropped$/m.test(r.out), "f-j: j's report does not say its output was cut");
+    check(new RegExp(`^✔ ${FIX}/j-prints-a-lot\\.mjs — `, 'm').test(r.out), 'f-j: j did not pass');
   }
 
   // 2. Where there is no /proc to read (macOS), a file's process group is all the runner can kill.
@@ -189,21 +201,47 @@ try {
   // 4. SIGHUP, which a closed terminal or a dropped session sends.
   {
     const r = await nested('SIGHUP', 4, [fixture('a-blocks-in-spawnsync.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGHUP', ms: S / 2 + 500 } });
+    check(r.mid.a > 0, "SIGHUP: a's sleep was not running at S/2");
     check(r.code === 129, `SIGHUP: the runner exited ${r.code} (${r.sig}), not 129`);
     check(new RegExp(`^✖ ${FIX}/a-blocks-in-spawnsync\\.mjs: the runner received SIGHUP`, 'm').test(r.out), 'SIGHUP: no ✖ line names the file in flight');
     check(r.leftAtExit.A === 0, "SIGHUP: a's sleep was still running when the runner exited");
   }
 
-  // 5. SIGKILL, which nothing can handle: each file's watchdog kills its own group once the runner is gone.
+  // 5. SIGKILL, which nothing can handle: each file's watchdog kills what its file started once the
+  //    runner is gone, inside the group (a) and outside it with no marker (f).
   {
-    const r = await nested('SIGKILL', 5, [fixture('a-blocks-in-spawnsync.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGKILL', ms: S / 2 + 500 } });
-    check(r.mid.a > 0, "SIGKILL: a's sleep was not running at S/2");
-    let left = sleepsWith(r.marks.A).length;
-    for (let i = 0; i < 30 && left; i++) {
-      await sleep(100);
-      left = sleepsWith(r.marks.A).length;
+    const r = await nested('SIGKILL', 5, ['a-blocks-in-spawnsync.mjs', 'f-hides-its-marker.mjs'].map(fixture), { fileTimeout: 60_000, signalAt: { sig: 'SIGKILL', ms: S / 2 + 500 } });
+    check(r.mid.a > 0 && r.mid.f > 0, "SIGKILL: a's or f's sleep was not running at S/2");
+    const gone = async (mark) => {
+      for (let i = 0; i < 30 && sleepsWith(mark).length; i++) await sleep(100);
+      return sleepsWith(mark).length === 0;
+    };
+    check(await gone(r.marks.A), "SIGKILL: a's sleep is still running 3 s after the runner was killed");
+    check(await gone(r.marks.F), "SIGKILL: f's sleep is still running 3 s after the runner was killed");
+  }
+
+  // 8. A closed terminal: SIGHUP, and every write after it fails with EIO. Run on a real pseudo-terminal.
+  {
+    const r = await nested('closed terminal', 8, ['c-detached-child.mjs', 'f-hides-its-marker.mjs'].map(fixture), {
+      fileTimeout: 60_000,
+      prefix: ['python3', path.join(frontend, FIX, 'close-the-terminal.py'), String((S / 2 + 500) / 1000)],
+    });
+    check(r.mid.c > 0 && r.mid.f > 0, "closed terminal: c's or f's sleep was not running at S/2");
+    check(r.code !== 99, 'closed terminal: the runner was still running 20 s after its terminal closed');
+    for (const k of ['C', 'F']) {
+      for (let i = 0; i < 20 && sleepsWith(r.marks[k]).length; i++) await sleep(100);
+      check(sleepsWith(r.marks[k]).length === 0, `closed terminal: ${k.toLowerCase()}'s sleep is still running after the terminal closed`);
     }
-    check(left === 0, "SIGKILL: a's sleep is still running 3 s after the runner was killed");
+  }
+
+  // 9. A reader that goes away (`pnpm test | head -1`): the runner's next write fails with EPIPE, and
+  //    what it is running goes with it, long before the bound.
+  {
+    const r = await nested('EPIPE', 9, ['f-hides-its-marker.mjs', 'passes.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
+    check(r.ms < 15_000, `EPIPE: the runner ran on for ${r.ms} ms after its reader went away`);
+    check(r.code !== 0, `EPIPE: the runner exited ${r.code}`);
+    for (let i = 0; i < 20 && sleepsWith(r.marks.F).length; i++) await sleep(100);
+    check(sleepsWith(r.marks.F).length === 0, "EPIPE: f's sleep is still running after the runner ended");
   }
 
   // 6. Run from a path with a space and one with a non-ASCII letter: it runs, and a failing file fails.

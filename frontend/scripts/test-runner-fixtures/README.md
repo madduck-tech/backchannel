@@ -4,7 +4,7 @@ Files that never exit, in each shape `scripts/test-runner.mjs` must bound, and o
 live outside `tests/`, so `pnpm test` never globs them; `tests/lib/test-runner-bounds-each-file.test.mjs`
 runs them through the runner with a short bound.
 
-Each `sleep` takes its argument from the environment (`BC_HANG_MARK_A`, `_C`, `_D`, `_E`, `_F`), and d writes
+Each `sleep` takes its argument from the environment (`BC_HANG_MARK_A`, `_C`, `_D`, `_E`, `_F`, `_H`), and d writes
 its `sleep`'s pid to `BC_HANG_STAMP_D`. A fixture started without its variable exits before it spawns
 anything, so no run can fall back to a marker another run uses.
 
@@ -17,4 +17,9 @@ anything, so no run can fall back to a marker another run uses.
 | `e-leaves-a-process.mjs` | no `node:test`; `sh -c 'sleep … &'` orphans a `sleep` at once, then the file returns. Only its marker finds it |
 | `f-hides-its-marker.mjs` | a `test()` that starts a detached `sleep` under `env -i`, so no marker, and awaits forever (Chrome's shape). Only the process tree finds it |
 | `g-ends-its-child-soon.mjs` | no `node:test`; a child that outlives the file by 0.5 s, inside the runner's grace, so the file passes |
+| `h-orphans-a-hidden-child.mjs` | a `test()` whose helper starts a marker-less `sleep` and exits 2 s later, then awaits forever. Only the runner's poll of the tree finds it |
+| `i-kills-its-runner.mjs` | no `node:test`; ends its own `node --test` with SIGKILL, then exits 0. The watchdog reports 137 |
+| `j-prints-a-lot.mjs` | no `node:test`; 20 MiB of output, past the runner's 16 MiB cap |
+
+`close-the-terminal.py` is not a fixture: it runs a command on a pseudo-terminal and closes it, for the test's closed-terminal case.
 | `passes.mjs` | ends by itself after about a second |

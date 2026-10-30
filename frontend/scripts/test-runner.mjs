@@ -33,6 +33,8 @@ const LEFTOVER_GRACE_MS = 2000;
 const DRAIN_MS = 500;
 /** How often each running file's process tree is read. */
 const POLL_MS = 500;
+/** The most of one file's output kept: past it the oldest is dropped, and the report says how much. */
+const OUTPUT_CAP = 16 * 1024 * 1024;
 // The summary block each `node --test <file>` prints. This runner prints one for the whole run.
 const NODE_SUMMARY = /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/;
 const WATCHDOG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'test-runner-watchdog.mjs');
@@ -89,7 +91,7 @@ export function snapshot(procRoot = '/proc') {
   return procs;
 }
 
-function descendants(procs, root) {
+export function descendants(procs, root) {
   const children = new Map();
   for (const [pid, p] of procs) {
     if (!children.has(p.ppid)) children.set(p.ppid, []);
@@ -174,13 +176,15 @@ function startedBy(run, procRoot) {
  */
 function killFile(run, procRoot) {
   const { procs, alive } = startedBy(run, procRoot);
-  const groups = new Set([run.child.pid]);
+  // The file's own pid and group only while it runs: once it has exited and been reaped, that number
+  // may be another process's. Its group is still reached through any member found alive.
+  const groups = new Set(run.exited ? [] : [run.child.pid]);
   for (const pid of alive.keys()) {
     const g = procs.get(pid).pgid;
     if (g > 1 && g !== OWN_PGID) groups.add(g);
   }
   for (const g of groups) signal(-g, 'SIGKILL');
-  signal(run.child.pid, 'SIGKILL');
+  if (!run.exited) signal(run.child.pid, 'SIGKILL');
   for (const pid of alive.keys()) signal(pid, 'SIGKILL');
   return alive;
 }
@@ -210,9 +214,20 @@ function runFile(file, index, opts, running) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const output = [];
-  child.stdout.on('data', (d) => output.push(d));
-  child.stderr.on('data', (d) => output.push(d));
-  const run = { file, token, child, output, seen: new Map(), timedOut: false, aimed: null };
+  const run = { file, token, child, output, bytes: 0, dropped: 0, seen: new Map(), timedOut: false, aimed: null };
+  // Held whole until the file ends, so a file's lines are never interleaved with another's. Capped:
+  // past 512 MiB the joined string cannot be built, and a hung file was then named nowhere.
+  const collect = (d) => {
+    output.push(d);
+    run.bytes += d.length;
+    while (run.bytes > OUTPUT_CAP && output.length > 1) {
+      const gone = output.shift();
+      run.bytes -= gone.length;
+      run.dropped += gone.length;
+    }
+  };
+  child.stdout.on('data', collect);
+  child.stderr.on('data', collect);
   running.add(run);
   const timer = setTimeout(() => {
     run.timedOut = true;
@@ -246,15 +261,20 @@ function runFile(file, index, opts, running) {
       }
       const alive = await survivors(aimed, opts.procRoot, 1000);
       if (alive.length) reasons.push(`${alive.length} process(es) it started survived the kill: ${alive.map((pid) => `${pid} ${commandOf(pid, opts.procRoot)}`).join('; ')}`);
-      else if (run.timedOut) reasons.push('everything it started was killed');
+      else if (run.timedOut) reasons.push('everything found of it was killed');
       await Promise.race([closed, sleep(DRAIN_MS)]);
       child.stdin.destroy();
       child.stdout.destroy();
       child.stderr.destroy();
       running.delete(run);
-      resolve({ file, ms: Date.now() - started, ok: reasons.length === 0, reasons, output: Buffer.concat(output).toString('utf8') });
+      resolve({ file, ms: Date.now() - started, ok: reasons.length === 0, reasons, output: outputOf(run) });
     });
   });
+}
+
+function outputOf(run) {
+  const kept = Buffer.concat(run.output).toString('utf8');
+  return run.dropped ? `… the first ${run.dropped} bytes of its output were dropped\n${kept}` : kept;
 }
 
 function body(output) {
@@ -289,19 +309,28 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
     if (procs) for (const run of running) track(run, procs);
   }, POLL_MS);
   poll.unref();
-  // A terminal closed or a session dropped sends SIGHUP; Ctrl-C SIGINT. Each file in flight is named,
-  // with what it printed, and killed. Written synchronously: on macOS a piped stdout is asynchronous,
-  // and process.exit would drop it. A SIGKILL cannot be handled; each file's watchdog answers that.
-  const interrupt = (sig) => {
+  // However this runner ends early, what it is running is killed first and reported after. A closed
+  // terminal sends SIGHUP and then fails every write with EIO; a reader that went away (`| head -1`)
+  // fails it with EPIPE; anything else is an exception. In each, a write placed before the kills
+  // threw and nothing was killed (#268's gate adversary, round 2, measured with a real pty). Written
+  // synchronously, because on macOS a piped stdout is asynchronous and process.exit would drop it.
+  // A SIGKILL cannot be handled here: each file's watchdog answers it.
+  const abort = (why, code) => {
     running.interrupted = true;
+    for (const run of running) killFile(run, procRoot);
     for (const run of running) {
-      const text = body(Buffer.concat(run.output).toString('utf8'));
-      fs.writeSync(1, `${text ? `${text}\n` : ''}✖ ${run.file}: the runner received ${sig}; its processes were killed\n`);
-      killFile(run, procRoot);
+      try {
+        const text = body(outputOf(run));
+        fs.writeSync(1, `${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`);
+      } catch {
+        // the terminal or the reader is gone
+      }
     }
-    process.exit({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[sig]);
+    process.exit(code);
   };
-  for (const sig of ['SIGHUP', 'SIGINT', 'SIGTERM']) process.once(sig, interrupt);
+  for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) process.once(sig, () => abort(`the runner received ${sig}`, code));
+  process.stdout.on('error', (e) => abort(`the runner's output failed (${e.code})`, 1));
+  process.on('uncaughtException', (e) => abort(`the runner failed: ${e.message}`, 1));
 
   let next = 0;
   // Files start in sorted order, as Node's runner starts them, so a hang's report time follows from
