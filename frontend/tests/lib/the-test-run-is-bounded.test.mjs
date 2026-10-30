@@ -8,9 +8,10 @@
 // starts by then. So it is named by T + B, and the 30 s is for the report and the kill. The ceiling
 // is twice the floor: `timeout-minutes: 360` clears the floor and is the platform's limit renamed.
 //
-// T is the slowest "Frontend unit tests" step of the runs #268's verdict names: 25 successful Tests
-// runs from 40870763866 (2026-10-29 12:07Z) to 41063826941 (2026-10-30 13:30Z), slowest 40885884340
-// at 220 s, and the pull request's own runs under this runner. Raise it with a slower cited run.
+// T is at least the slowest "Frontend unit tests" step of every run #268 cites: its own sample of 25
+// successful Tests runs from 40870763866 (2026-10-29 12:07Z) to 41063826941 (2026-10-30 13:30Z),
+// slowest 40885884340 at 220 s; the issue's sample, slowest 40563250823 at 221 s; and the pull
+// request's own runs under this runner. Raise it with a slower cited run.
 // B is not a second constant: it is read from the script.
 
 import assert from 'node:assert/strict';
@@ -19,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readWorkflow } from './workflow-yaml.mjs';
 
-const T_SECONDS = 220;
+const T_SECONDS = 230;
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const script = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts.test;

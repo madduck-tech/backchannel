@@ -4,7 +4,7 @@ Files that never exit, in each shape `scripts/test-runner.mjs` must bound, and o
 live outside `tests/`, so `pnpm test` never globs them; `tests/lib/test-runner-bounds-each-file.test.mjs`
 runs them through the runner with a short bound.
 
-Each `sleep` takes its argument from the environment (`BC_HANG_MARK_A`, `_C`, `_D`, `_E`), and d writes
+Each `sleep` takes its argument from the environment (`BC_HANG_MARK_A`, `_C`, `_D`, `_E`, `_F`), and d writes
 its `sleep`'s pid to `BC_HANG_STAMP_D`. A fixture started without its variable exits before it spawns
 anything, so no run can fall back to a marker another run uses.
 
@@ -14,5 +14,7 @@ anything, so no run can fall back to a marker another run uses.
 | `b-awaits-forever.mjs` | a `test()` awaiting a promise that never settles, a timer keeping the loop alive |
 | `c-detached-child.mjs` | a `test()` that starts a detached `sleep`, keeps it ref'ed and awaits forever (`browser.mjs`'s shape) |
 | `d-holds-the-output.mjs` | no `node:test`; a `sleep` holding the file's output, `unref()`'d, then the file returns |
-| `e-leaves-a-process.mjs` | no `node:test`; a detached `sleep` with no stdio, `unref()`'d, then the file returns |
+| `e-leaves-a-process.mjs` | no `node:test`; `sh -c 'sleep … &'` orphans a `sleep` at once, then the file returns. Only its marker finds it |
+| `f-hides-its-marker.mjs` | a `test()` that starts a detached `sleep` under `env -i`, so no marker, and awaits forever (Chrome's shape). Only the process tree finds it |
+| `g-ends-its-child-soon.mjs` | no `node:test`; a child that outlives the file by 0.5 s, inside the runner's grace, so the file passes |
 | `passes.mjs` | ends by itself after about a second |
