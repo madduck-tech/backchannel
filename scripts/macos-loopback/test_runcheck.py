@@ -127,10 +127,6 @@ class TheVoidRules(unittest.TestCase):
              "void_before_capture": "no audioinput labelled 'No Such Device'"}
         self.assertEqual(runcheck.void_reasons(r), ["before capture: no audioinput labelled 'No Such Device'"])
 
-    def test_a_page_recording_with_a_context_gap_is_void(self):
-        r = with_(["applied", "contextGaps"], {"pre_send": {"gaps": 0, "frames": 0}, "side_b": {"gaps": 2, "frames": 7168}})
-        self.assertEqual(runcheck.void_reasons(r), ["side_b recording not continuous: 2 gaps, 7168 frames"])
-
     def test_a_connection_that_never_connected_is_void(self):
         reasons = runcheck.void_reasons(with_(["ice", "connectionState"], "failed"))
         self.assertEqual(reasons, ["connection 'failed', not connected"])

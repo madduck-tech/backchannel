@@ -116,6 +116,8 @@ async function main() {
     record.applied.contextGaps[name] = { gaps: 0, frames: 0 };
     node.port.onmessage = (m) => {
       const { frame, data } = m.data;
+      // Informational: currentFrame always advances by 128, so this cannot see what the
+      // MediaStream lost before Web Audio (L1: 0 here while the tap lost over 100 ms).
       if (expected !== null && frame !== expected) {
         record.applied.contextGaps[name].gaps += 1;
         record.applied.contextGaps[name].frames += frame - expected;

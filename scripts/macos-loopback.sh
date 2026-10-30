@@ -72,6 +72,8 @@ PIDS=()
 CHROME_PIDS=
 cleanup() {
   local p
+  # The recorder first, with TERM, so it writes its gap count; an early exit left it recording.
+  if [ -n "${RECORD_PID:-}" ]; then kill -TERM "$RECORD_PID" 2>/dev/null || true; wait "$RECORD_PID" 2>/dev/null || true; RECORD_PID=; fi
   for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
   # Every process of this profile, and nothing else: the user's own Chrome has another profile.
   pkill -f -- "--user-data-dir=$PROFILE" 2>/dev/null || true
@@ -211,17 +213,18 @@ wait_event ready 180 || true
 SECS_INT=$(python3 -I -c "import math; print(math.ceil($SECONDS_))")
 wait_event done $((SECS_INT + 120)) || true
 sleep 1
-if [ -n "${RECORD_PID:-}" ]; then kill -TERM "$RECORD_PID" 2>/dev/null || true; wait "$RECORD_PID" 2>/dev/null || true; fi
 cleanup
 trap - EXIT
 
 for track in pre_send side_b; do
   [ -s "$RUN_DIR/$track.f32" ] && "$FFMPEG" -nostdin -loglevel error -y -f f32le -ar 48000 -ac 1 \
     -i "$RUN_DIR/$track.f32" -c:a pcm_s16le "$RUN_DIR/$track.wav" && rm -f "$RUN_DIR/$track.f32"
-  # MediaRecorder's WebM keeps its timestamps; aresample=async fills any gap they show with
-  # silence, so lost audio stays where it was lost instead of shortening the track.
+  # MediaRecorder's WebM keeps its timestamps; aresample fills any gap over 5 ms with silence, so
+  # lost audio stays where it was lost and shows as a step in steps.py. The default
+  # (min_hard_comp 0.1 s) dropped gaps under 100 ms silently: L1's 37 ms loss at 1628 s vanished
+  # (the gate's adversary, #291).
   [ -s "$RUN_DIR/${track}_mr.webm" ] && "$FFMPEG" -nostdin -loglevel error -y -i "$RUN_DIR/${track}_mr.webm" \
-    -af "aresample=async=1:first_pts=0,aresample=48000" -ac 1 -c:a pcm_s16le "$RUN_DIR/${track}_mr.wav" || true
+    -af "aresample=async=1:min_hard_comp=0.005:first_pts=0,aresample=48000" -ac 1 -c:a pcm_s16le "$RUN_DIR/${track}_mr.wav" || true
 done
 
 # Side A as MediaRecorder kept it places the noise window; the Web Audio tap can lose samples.
