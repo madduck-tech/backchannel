@@ -98,6 +98,50 @@ pub struct TranscribeEngine {
     available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
     cancel_download_flag: Arc<RwLock<Option<String>>>,
     active_downloads: Arc<RwLock<HashSet<String>>>,
+    /// Held by `load_model` from opening the file to installing the model, and by a replace's commit
+    /// from the rename until it has unloaded or marked the slot (#195). So a load never installs the
+    /// file a replace has just renamed away. Not re-entrant, and taken after `ENGINE_LIFECYCLE_LOCK`
+    /// wherever both are held.
+    load_lock: tokio::sync::Mutex<()>,
+    /// The slot holds a model whose file a download has since replaced, while a job still used it
+    /// (#195). The slot keeps serving `open_session`; `usable_model` answers no model, so the next use
+    /// loads the new file.
+    stale: Arc<RwLock<bool>>,
+    /// Where catalogue files are fetched from: `TRANSCRIBE_MODEL_BASE_URL`, or a test's local server.
+    base_url: String,
+    /// A test's client, which reads no proxy. Production builds one per download, as before #195, so
+    /// the proxy settings are read each time, and a client that cannot be built fails that download
+    /// with an error rather than the engine's construction under `TRANSCRIBE_ENGINE`'s lock.
+    client: Option<reqwest::Client>,
+    #[cfg(test)]
+    test_hooks: TestHooks,
+}
+
+/// The pause points a test drives to interleave a load with a replace (#195 condition 7).
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TestHooks {
+    /// Raised by `load_model` between opening the file and installing the model; it then waits for
+    /// `release_load`.
+    pub load_paused: Arc<tokio::sync::Notify>,
+    pub release_load: Arc<tokio::sync::Notify>,
+    pub pause_loads: std::sync::atomic::AtomicBool,
+    /// Raised by a replace just before its commit takes its locks.
+    pub before_commit: Arc<tokio::sync::Notify>,
+    /// Raised by a replace between its rename and its unload; it then waits for `release_rename`.
+    pub rename_paused: Arc<tokio::sync::Notify>,
+    pub release_rename: Arc<tokio::sync::Notify>,
+    pub pause_after_rename: std::sync::atomic::AtomicBool,
+}
+
+/// A download in flight is written here, in the same directory as its final file, and renamed over
+/// it only once it is whole (#195). No catalogue filename starts with this, and the startup sweep
+/// removes what a crash left.
+pub const PARTIAL_PREFIX: &str = ".partial-";
+
+/// The URL of a catalogue file under a base URL.
+pub fn file_url(base_url: &str, repo: &str, filename: &str) -> String {
+    format!("{}/{}/resolve/main/{}", base_url, repo, filename)
 }
 
 impl TranscribeEngine {
@@ -149,7 +193,27 @@ impl TranscribeEngine {
             available_models: Arc::new(RwLock::new(HashMap::new())),
             cancel_download_flag: Arc::new(RwLock::new(None)),
             active_downloads: Arc::new(RwLock::new(HashSet::new())),
+            load_lock: tokio::sync::Mutex::new(()),
+            stale: Arc::new(RwLock::new(false)),
+            base_url: TRANSCRIBE_MODEL_BASE_URL.to_string(),
+            client: None,
+            #[cfg(test)]
+            test_hooks: TestHooks::default(),
         })
+    }
+
+    /// The engine fetching from a local server, with a client that reads no proxy from the
+    /// environment.
+    #[cfg(test)]
+    pub(crate) fn with_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.to_string();
+        self.client = Some(reqwest::Client::builder().no_proxy().build().expect("a client"));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_hooks(&self) -> &TestHooks {
+        &self.test_hooks
     }
 
     pub async fn get_models_directory(&self) -> PathBuf {
@@ -168,24 +232,25 @@ impl TranscribeEngine {
 
     pub async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
         let mut models = Vec::new();
+        // A download in flight writes its temporary file, so the final one is absent for a fresh
+        // download and whole for a re-download: either way the row reads Downloading (#195).
+        let in_flight = self.active_downloads.read().await.clone();
 
         for entry in TRANSCRIBE_MODEL_CATALOG {
             let (name, filename, size_mb) = (entry.name, entry.filename, entry.size_mb);
             let path = self.models_dir.join(filename);
-            let status = if path.exists() {
+            let status = if in_flight.contains(name) {
+                match self.available_models.read().await.get(name).map(|m| m.status.clone()) {
+                    Some(ModelStatus::Downloading { progress }) => ModelStatus::Downloading { progress },
+                    _ => ModelStatus::Downloading { progress: 0 },
+                }
+            } else if path.exists() {
+                // Not the cached status: a download that failed over a damaged file leaves that file,
+                // and a cached Downloading would hold the row there until a restart (#195's adversary).
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 let expected_min = Self::available_floor_bytes(size_mb);
                 if file_size >= expected_min {
                     ModelStatus::Available
-                } else if let ModelStatus::Downloading { progress } = self
-                    .available_models
-                    .read()
-                    .await
-                    .get(name)
-                    .map(|m| m.status.clone())
-                    .unwrap_or(ModelStatus::Missing)
-                {
-                    ModelStatus::Downloading { progress }
                 } else {
                     warn!(
                         "Model {} is {} bytes, expected at least {}",
@@ -234,6 +299,8 @@ impl TranscribeEngine {
             ));
         }
 
+        // From opening the file to installing the model, so a replace cannot rename it away between.
+        let _load = self.load_lock.lock().await;
         info!("Loading model {} from {}", model_name, path.display());
         let started = std::time::Instant::now();
         // A load does GPU init and is blocking; keep it off the async
@@ -261,15 +328,34 @@ impl TranscribeEngine {
             caps.supports_streaming
         );
 
+        #[cfg(test)]
+        if self.test_hooks.pause_loads.load(std::sync::atomic::Ordering::SeqCst) {
+            self.test_hooks.load_paused.notify_one();
+            self.test_hooks.release_load.notified().await;
+        }
+
         *self.model.write().await = Some(model);
         *self.current_model.write().await = Some(model_name.to_string());
+        *self.stale.write().await = false;
         Ok(())
     }
 
     pub async fn unload_model(&self) -> bool {
         let had = self.model.write().await.take().is_some();
         *self.current_model.write().await = None;
+        *self.stale.write().await = false;
         had
+    }
+
+    /// The model a caller may use without loading it again: the one in the slot, unless a download
+    /// has replaced its file since (#195). Every read that skips a load asks this, and nothing else;
+    /// `get_current_model` and `is_model_loaded` keep answering for the slot itself, which a job in
+    /// progress still uses.
+    pub async fn usable_model(&self) -> Option<String> {
+        if *self.stale.read().await || self.model.read().await.is_none() {
+            return None;
+        }
+        self.current_model.read().await.clone()
     }
 
     pub async fn is_model_loaded(&self) -> bool {
@@ -278,9 +364,9 @@ impl TranscribeEngine {
 
     /// The models a download is in flight for right now. (#182)
     ///
-    /// Read rather than the cached `ModelStatus`, which `discover_models` rebuilds from the file on
-    /// disk: between a download's start and its first bytes the file is absent (`Missing`), and a
-    /// short one reads `Corrupted` until the next progress tick.
+    /// `discover_models` reads it too since #195: a download writes its temporary file, so the final
+    /// one is absent for a fresh download and whole for a re-download, and only this set says either is
+    /// on its way.
     pub async fn downloads_in_flight(&self) -> HashSet<String> {
         self.active_downloads.read().await.clone()
     }
@@ -414,11 +500,98 @@ impl TranscribeEngine {
 
         self.active_downloads.write().await.remove(model_name);
         if result.is_err() {
-            // Never leave a partial file behind: discover_models would report it
-            // as Corrupted and the user would have to delete it by hand.
-            let _ = fs::remove_file(self.models_dir.join(filename)).await;
+            // Only the temporary file: the one already at the final path, if any, is untouched by a
+            // download that failed or was cancelled (#195).
+            let _ = fs::remove_file(self.partial_path(filename)).await;
         }
         result
+    }
+
+    fn partial_path(&self, filename: &str) -> PathBuf {
+        self.models_dir.join(format!("{}{}", PARTIAL_PREFIX, filename))
+    }
+
+    /// Put a whole download at its final path, and make sure no use reads the file it replaced.
+    ///
+    /// Under `ENGINE_LIFECYCLE_LOCK` and then the engine's own lock, the order recording start takes
+    /// them. When the slot holds the model whose file this replaces, it is unloaded if nothing uses
+    /// it (the idle unloader's test: no recording, no batch job), and otherwise marked stale: a job in
+    /// progress keeps its model, and the next use loads the new file. No download caller holds the
+    /// lifecycle lock.
+    ///
+    /// The slot is marked stale before the rename, so no read that skips a load is offered the old
+    /// model while the new file is already in place; `usable_model` takes no lock.
+    async fn commit_download(&self, model_name: &str, filename: &str) -> Result<()> {
+        #[cfg(test)]
+        self.test_hooks.before_commit.notify_one();
+        // A recording's stop holds the lifecycle lock for its whole drain (#210), with no limit, so a
+        // cancel is answered while the commit waits for it, not only once it has it.
+        let lifecycle = crate::audio::common::acquire_engine_lifecycle_lock();
+        tokio::pin!(lifecycle);
+        let _lifecycle = loop {
+            tokio::select! {
+                guard = &mut lifecycle => break guard,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
+                        *self.cancel_download_flag.write().await = None;
+                        return Err(anyhow!("Download cancelled by user"));
+                    }
+                }
+            }
+        };
+        let _load = self.load_lock.lock().await;
+        // A cancel that came while the commit waited for its locks still cancels.
+        if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
+            *self.cancel_download_flag.write().await = None;
+            return Err(anyhow!("Download cancelled by user"));
+        }
+        let replaced_in_slot = self.model.read().await.is_some()
+            && self.current_model.read().await.as_deref() == Some(model_name);
+        let was_stale = *self.stale.read().await;
+        if replaced_in_slot {
+            *self.stale.write().await = true;
+        }
+        if let Err(e) = fs::rename(self.partial_path(filename), self.models_dir.join(filename)).await {
+            // The old file is still in place, so the slot is as usable as it was.
+            *self.stale.write().await = was_stale;
+            return Err(anyhow!("Failed to put the downloaded {} in place: {}", filename, e));
+        }
+        #[cfg(test)]
+        if self.test_hooks.pause_after_rename.load(std::sync::atomic::Ordering::SeqCst) {
+            self.test_hooks.rename_paused.notify_one();
+            self.test_hooks.release_rename.notified().await;
+        }
+        if replaced_in_slot {
+            if crate::audio::common::engine_in_use() {
+                info!("Replaced {} while it is in use; the next use loads the new file", model_name);
+            } else {
+                self.unload_model().await;
+                info!("Replaced {}; unloaded the old copy", model_name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove the temporary files a download left when the application stopped mid-way. Only files at
+    /// the top of `models/` whose name starts with [`PARTIAL_PREFIX`]: the catalogue's, the diarizer's
+    /// and everything in `summary/` stay. Runs once at startup, before any download can start.
+    pub fn sweep_partial_downloads(models_dir: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(models_dir) else { return 0 };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(PARTIAL_PREFIX) || !entry.path().is_file() {
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => {
+                    info!("Removed {}, left by a download that did not finish", name);
+                    removed += 1;
+                }
+                Err(e) => warn!("Could not remove {}: {}", name, e),
+            }
+        }
+        removed
     }
 
     async fn download_inner(
@@ -428,10 +601,7 @@ impl TranscribeEngine {
         filename: &str,
         progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
     ) -> Result<()> {
-        let url = format!(
-            "{}/{}/resolve/main/{}",
-            TRANSCRIBE_MODEL_BASE_URL, repo, filename
-        );
+        let url = file_url(&self.base_url, repo, filename);
         let file_path = self.models_dir.join(filename);
         // A name only this line carries: the onboarding pass reads its order in the log, and the census
         // (`a-gate-oracle-reads-a-line-the-app-writes.test.mjs`) can hold a pattern only by its literal
@@ -444,7 +614,14 @@ impl TranscribeEngine {
         self.set_status(model_name, ModelStatus::Downloading { progress: 0 })
             .await;
 
-        let response = reqwest::Client::new()
+        let client = match &self.client {
+            Some(client) => client.clone(),
+            // `Client::new()` is this builder with an `expect`; the error is returned instead.
+            None => reqwest::Client::builder()
+                .build()
+                .map_err(|e| anyhow!("Failed to build the HTTP client: {}", e))?,
+        };
+        let response = client
             .get(&url)
             .send()
             .await
@@ -454,7 +631,8 @@ impl TranscribeEngine {
         }
 
         let total_size = response.content_length().unwrap_or(0);
-        let mut file = fs::File::create(&file_path).await?;
+        // Into the temporary file: the final path keeps whatever it holds until this one is whole.
+        let mut file = fs::File::create(self.partial_path(filename)).await?;
 
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
@@ -493,19 +671,27 @@ impl TranscribeEngine {
                     last_report_time = std::time::Instant::now();
                     bytes_since_report = 0;
 
+                    // Never 100 here: "completed" is said once the file is at its final path, below.
+                    let progress = progress.min(99);
                     self.set_status(model_name, ModelStatus::Downloading { progress })
                         .await;
                     if let Some(ref cb) = progress_callback {
-                        cb(DownloadProgress::new(downloaded, total_size, speed_mbps));
+                        cb(DownloadProgress::new(downloaded.min(total_size - 1), total_size, speed_mbps));
                     }
                 }
             }
         }
 
         file.flush().await?;
+        file.sync_all().await?;
         drop(file);
+        self.commit_download(model_name, filename).await?;
 
         self.set_status(model_name, ModelStatus::Available).await;
+        if let Some(ref cb) = progress_callback {
+            let whole = total_size.max(downloaded);
+            cb(DownloadProgress::new(whole, whole, 0.0));
+        }
         info!(
             "Downloaded {} ({:.1} MB)",
             model_name,

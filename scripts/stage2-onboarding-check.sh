@@ -601,8 +601,9 @@ fi
 # chose is on this device." and call the chosen row "Already here from an earlier install", for a
 # file still on its way. "Is SOME model on disk" set the flag. So, from the moment the screen is up,
 # the button is read and then the chosen file is measured, as often as the driver answers. A sample is
-# *in flight* when the file is absent or under 90% of its final size after the read; no file exists
-# until the HTTP response arrives (`engine.rs:430`). Every in-flight sample must read disabled.
+# *in flight* when the file is absent or under 90% of its final size after the read; since #195 the
+# download writes a temporary file and renames it into place whole, so the final path is absent for the
+# whole of a fresh download. Every in-flight sample must read disabled.
 # An absence is not a result: zero in-flight samples fails as unobserved, and the count is printed.
 if [ "$MODE" = keeps ]; then
   # False on the summariser screen, which has no download rows. The attribute value is unquoted, as the
@@ -879,7 +880,11 @@ except Exception as e:
   # Guards with no control: at a step-4 resume the unfixed build fetches neither.
   SUMMARY_BYTES=$( [ -d "$APPDATA/models/summary" ] && du -sb "$APPDATA/models/summary" | cut -f1 || echo 0 )
   [ "${SUMMARY_BYTES:-0}" -gt 1000000 ] && FAILS+=("models/summary holds $SUMMARY_BYTES bytes with Claude chosen")
+  # Since #195 a download writes .partial-<file> and renames it whole, so the final path appears only at
+  # the end; the temporary file and the log line, written before the request, show a fetch begun.
   [ -e "$APPDATA/models/$DEFAULT_FILE" ] && FAILS+=("the default's file appeared")
+  [ -e "$APPDATA/models/.partial-$DEFAULT_FILE" ] && FAILS+=("the default's temporary file appeared")
+  grep -qE "Downloading model file .+/$DEFAULT_FILE" "$LOG" && FAILS+=("the application started downloading the default")
 
   [ ${#FAILS[@]} -eq 0 ] || die "the resumed first run lost its choices: $(printf '%s | ' "${FAILS[@]}")"
   PASSED=1
@@ -909,8 +914,18 @@ if OUT=$( (probe_stays_out) 2>&1 ); then say "${OUT#stage2-onboarding-check: }";
 $FAILED_167"
 
 DEFAULT_FILE="parakeet-tdt-0.6b-v3-Q8_0.gguf"
-if { [ "$MODE" = chooses ] || [ "$MODE" = catalogue ]; } && [ -e "$APPDATA/models/$DEFAULT_FILE" ]; then
+if { [ "$MODE" = chooses ] || [ "$MODE" = catalogue ]; } && { [ -e "$APPDATA/models/$DEFAULT_FILE" ] || [ -e "$APPDATA/models/.partial-$DEFAULT_FILE" ]; }; then
   die "the default was fetched as well as the choice; the choice is not what drives the download"
+fi
+if [ "$MODE" = chooses ]; then
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  # The default's absence from the log means something only beside the choice's line in the same log.
+  grep -qE "Downloading model file .+/$CHOSEN_FILE" "$LOG" \
+    || die "the log names no download of the chosen $CHOSEN_FILE, so it cannot say the default's did not start"
+  if grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG"; then
+    die "the application started downloading the default as well as the choice; the choice is not what drives the download"
+  fi
 fi
 
 # --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
@@ -948,9 +963,9 @@ except Exception:
   # fetched the default (#166's gate).
   [ -e "$APPDATA/models/$DEFAULT_FILE" ] && die "finishing first run fetched the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
   sleep 5
-  # The log too, after the wait: the file exists only once the HTTP response has arrived, and the
-  # `catalogue` mode's own C3 control started a download that left models/ unchanged for the whole
-  # walk. The line is written before the request (#166's gate, round 2).
+  # The log too, after the wait: since #195 the final file exists only once a download is whole and
+  # renamed into place, and the `catalogue` mode's own C3 control started a download that left models/
+  # unchanged for the whole walk. The line is written before the request (#166's gate, round 2).
   grep -nE "Downloading model file .+/$DEFAULT_FILE" "$LOG" \
     && die "finishing first run started a download of the default, $DEFAULT_FILE, as well as $CHOSEN_ID"
   say "first run finished and transcript_settings.model is $STORED; the default's file is still absent, and nothing started fetching it"
@@ -982,6 +997,16 @@ if [ "$MODE" = keeps ]; then
   PRESENT_AFTER=$(stat -c '%Y %s' "$APPDATA/models/$PRESENT_FILE")
   [ "$PRESENT_BEFORE" = "$PRESENT_AFTER" ] \
     || die "$PRESENT_FILE was re-fetched: $PRESENT_BEFORE -> $PRESENT_AFTER"
+  # A re-fetch since #195 leaves the final file untouched until its rename, so its start is read from the
+  # temporary file and the log line, written before the request.
+  [ -e "$APPDATA/models/.partial-$PRESENT_FILE" ] && die "$PRESENT_FILE is being re-fetched: its temporary file exists"
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
+  [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
+  # The absence below means something only beside the downloader's own line in the same log: this mode
+  # downloads the chosen model, and its line is the sentinel.
+  grep -qE "Downloading model file .+/$CHOSEN_FILE" "$LOG" \
+    || die "the log names no download of the chosen $CHOSEN_FILE, so it cannot say no re-fetch of $PRESENT_FILE started"
+  grep -nE "Downloading model file .+/$PRESENT_FILE" "$LOG" && die "the application started re-fetching $PRESENT_FILE, which was already there"
   say "the model that was already there was left alone: $PRESENT_AFTER"
 fi
 

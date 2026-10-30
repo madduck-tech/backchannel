@@ -34,6 +34,8 @@ pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
     // Files from the whisper-rs / ONNX engines can never be loaded again, so
     // clear them here rather than leaving GBs of dead weight on disk.
     TranscribeEngine::purge_legacy_models(&models_dir);
+    // And what a download left when the application stopped mid-way (#195), before any can start.
+    TranscribeEngine::sweep_partial_downloads(&models_dir);
 
     *MODELS_DIR.lock().unwrap() = Some(models_dir);
 }
@@ -139,8 +141,10 @@ pub async fn transcribe_is_model_loaded() -> Result<bool, String> {
 }
 
 #[command]
+/// The model first run's audio check would use: none when a download has replaced the loaded file
+/// (#195), so the check loads the new one.
 pub async fn transcribe_get_current_model() -> Result<Option<String>, String> {
-    Ok(engine()?.get_current_model().await)
+    Ok(engine()?.usable_model().await)
 }
 
 /// What `model-download-progress` carries for a catalogue download. The MB figures are decimal, the
@@ -373,7 +377,7 @@ pub(crate) async fn resolve_with_engine(
     provider: Option<&str>,
     configured: Option<&str>,
 ) -> Result<Resolution, String> {
-    let loaded = if engine.is_model_loaded().await { engine.get_current_model().await } else { None };
+    let loaded = engine.usable_model().await;
     let catalogue: Vec<(String, ModelStatus)> = engine
         .discover_models()
         .await
@@ -513,9 +517,7 @@ pub(crate) async fn preload_configured_model<R: Runtime>(app: AppHandle<R>) {
     if crate::audio::recording_commands::is_recording_now() {
         return;
     }
-    if engine.get_current_model().await.as_deref() == Some(model.as_str())
-        && engine.is_model_loaded().await
-    {
+    if engine.usable_model().await.as_deref() == Some(model.as_str()) {
         return;
     }
 
