@@ -25,11 +25,14 @@ FLOOR_RANGE = (-85.0, -45.0)
 MARGIN_DB = 15.0
 
 
-def band(x, rate):
-    spec = np.fft.rfft(x)
-    f = np.fft.rfftfreq(x.size, 1 / rate)
-    spec[(f < markers.BAND[0]) | (f > markers.BAND[1])] = 0
-    return np.fft.irfft(spec, x.size)
+def band(x, rate, taps=255):
+    """300-3400 Hz by a windowed-sinc FIR, so a loud passage rings for 8 ms either side and no
+    further. The first version zeroed bins of one FFT over the whole recording: its ringing spread
+    the stream into the silence before it and measured a -100 dBFS floor as -58.8 (#302)."""
+    n = np.arange(taps) - (taps - 1) / 2
+    lo, hi = markers.BAND[0] / rate, markers.BAND[1] / rate
+    h = (2 * hi * np.sinc(2 * hi * n) - 2 * lo * np.sinc(2 * lo * n)) * np.hamming(taps)
+    return np.convolve(x, h, mode="same")
 
 
 def dbfs(x):
