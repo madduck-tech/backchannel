@@ -87,8 +87,8 @@ def word(direction, seq):
 def decode_block(E, pos):
     """(direction, seq, corrected) for the block at pos, or None. When the check fails, the CRC is
     used as the code: each of the 2 least confident symbols is tried at all 15 other values, then
-    each pair of the 4 least confident at their second choices; 36 trials at most, so the false
-    accept cost is 36 x 2^-24 per failing block, and anchoring guards it. F0 left one block in
+    both together at every pair of other values; 255 trials at most, so the false-accept cost is
+    255 x 2^-24 per failing block (1.5e-5), and anchoring guards it. F0 left one block in
     20 000 undecodable through the 16 kHz chain: Opus had replaced one symbol's tone outright (the
     true tone kept 6.6 % of the winner's energy), so a second-choice trial could not restore it."""
     idx = pos + SYM * np.arange(SYMS)
@@ -111,10 +111,15 @@ def decode_block(E, pos):
             r = parse(syms)
             if r:
                 return r[0], r[1], 1
-    for k, i in enumerate(weak[:4]):
-        for j in weak[k + 1:4]:
+    # Both of the 2 weakest at every value: Opus also breaks two adjacent symbols together
+    # (C1 at 433e3f2: symbols 5 and 6 both became 1400 Hz, the true tones ranked third and fifth).
+    i, j = weak[0], weak[1]
+    for v in range(M):
+        for w in range(M):
+            if v == first[i] or w == first[j]:
+                continue
             syms = first.copy()
-            syms[i], syms[j] = second[i], second[j]
+            syms[i], syms[j] = v, w
             r = parse(syms)
             if r:
                 return r[0], r[1], 2

@@ -159,6 +159,21 @@ class TheDecoderReportsEachMutation(Fixture):
         self.assertEqual((d["missing"], d["undecodable"], d["unexpected"]), ([], [], []))
         self.assertEqual(d["corrected"], 1)
 
+    def test_two_adjacent_symbols_broken_together_are_corrected(self):
+        # As C1 at 433e3f2: symbols 5 and 6 both turned into one wrong tone, the true tones weak.
+        syms = self.b.symbols_of(self.b.word(0, self.sched["first"] + 100))
+        n = 48000 * self.b.SYM // self.b.RATE
+        wrong = (syms[5] + 9) % 16
+        if wrong == syms[6]:
+            wrong = (wrong + 1) % 16
+        x = self.clean.copy()
+        for k in (5, 6):
+            s0 = self.at(100) + k * n
+            x[s0:s0 + n] = 0.7 * self.b.synth([wrong])[0] + 0.2 * self.b.synth([syms[k]])[0]
+        d = self.decode("burst", x)
+        self.assertEqual((d["missing"], d["undecodable"], d["unexpected"]), ([], [], []))
+        self.assertEqual(d["corrected"], 1)
+
     def test_b6a_the_wrong_direction_is_reported(self):
         d = self.decode("b6a", self.clean, "--direction", "1")
         self.assertEqual(len(d["wrong_direction"]), N)
