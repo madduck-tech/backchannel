@@ -241,6 +241,9 @@ async fn the_row_never_reads_downloading_100_before_the_rename() {
     let dir = tempfile::tempdir().unwrap();
     let s = stub(Reply::Body(vec![9u8; 10_000])).await;
     let engine = engine_at(dir.path(), &s);
+    // As the app does before any download: the progress a download reports is kept only for a row the
+    // engine has listed, so without this the row reads Downloading 0 whatever the loop reports.
+    engine.discover_models().await.unwrap();
     let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
     let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
     engine.test_hooks().before_commit.notified().await;
