@@ -139,9 +139,19 @@ pub(crate) struct TestHooks {
 /// removes what a crash left.
 pub const PARTIAL_PREFIX: &str = ".partial-";
 
-/// The URL of a catalogue file under a base URL.
-pub fn file_url(base_url: &str, repo: &str, filename: &str) -> String {
-    format!("{}/{}/resolve/main/{}", base_url, repo, filename)
+/// The URL of a catalogue file under a base URL, at the commit it is pinned to (#179). `main` would
+/// serve whatever was uploaded last, which for 14 rows is no longer the file the catalogue describes.
+pub fn file_url(base_url: &str, repo: &str, revision: &str, filename: &str) -> String {
+    format!("{}/{}/resolve/{}/{}", base_url, repo, revision, filename)
+}
+
+/// What a download must be: the commit it is fetched at, and the exact length and sha256 its file has
+/// there. A download that differs in either is not kept.
+#[derive(Debug, Clone, Copy)]
+pub struct FilePin<'a> {
+    pub revision: &'a str,
+    pub size_bytes: u64,
+    pub sha256: &'a str,
 }
 
 impl TranscribeEngine {
@@ -463,21 +473,34 @@ impl TranscribeEngine {
     ) -> Result<()> {
         let entry = transcribe_model(model_name)
             .ok_or_else(|| anyhow!("Unknown model: {}", model_name))?;
-        self.download_file(model_name, entry.hf_repo, entry.filename, progress_callback)
+        let pin = FilePin { revision: entry.revision, size_bytes: entry.size_bytes, sha256: entry.sha256 };
+        self.download_file(model_name, entry.hf_repo, entry.filename, pin, progress_callback)
             .await
     }
 
-    /// Download a GGUF by repo and filename, with no catalog lookup.
+    /// Download the speaker diarizer at its pin. Not a catalog row: it is not a transcription model
+    /// and must never reach the picker, but it wants this path's cancellation, progress reporting, the
+    /// temporary-file cleanup and the check of its bytes.
+    pub async fn download_diarizer(
+        &self,
+        progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
+    ) -> Result<()> {
+        let diarizer = &crate::config::SPEAKER_DIARIZER;
+        let pin = FilePin { revision: diarizer.revision, size_bytes: diarizer.size_bytes, sha256: diarizer.sha256 };
+        self.download_file(crate::config::SPEAKER_DIARIZER_NAME, diarizer.hf_repo, diarizer.filename, pin, progress_callback)
+            .await
+    }
+
+    /// Download a GGUF by repo and filename at its pin, with no catalog lookup.
     ///
-    /// The speaker diarizer is the only caller that is not a catalog row: it is
-    /// not a transcription model and must never reach the picker, but it still
-    /// wants this path's cancellation, progress reporting and — the part worth
-    /// not reimplementing — the partial-file cleanup below.
-    pub async fn download_file(
+    /// Private to the engine, so the only ways to the network are `download_model` and
+    /// `download_diarizer`, each passing its own pin (#179).
+    pub(in crate::transcribe_engine) async fn download_file(
         &self,
         model_name: &str,
         repo: &str,
         filename: &str,
+        pin: FilePin<'_>,
         progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
     ) -> Result<()> {
         {
@@ -495,7 +518,7 @@ impl TranscribeEngine {
         }
 
         let result = self
-            .download_inner(model_name, repo, filename, progress_callback)
+            .download_inner(model_name, repo, filename, pin, progress_callback)
             .await;
 
         self.active_downloads.write().await.remove(model_name);
@@ -599,9 +622,10 @@ impl TranscribeEngine {
         model_name: &str,
         repo: &str,
         filename: &str,
+        pin: FilePin<'_>,
         progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
     ) -> Result<()> {
-        let url = file_url(&self.base_url, repo, filename);
+        let url = file_url(&self.base_url, repo, pin.revision, filename);
         let file_path = self.models_dir.join(filename);
         // A name only this line carries: the onboarding pass reads its order in the log, and the census
         // (`a-gate-oracle-reads-a-line-the-app-writes.test.mjs`) can hold a pattern only by its literal
@@ -635,7 +659,9 @@ impl TranscribeEngine {
         let mut file = fs::File::create(self.partial_path(filename)).await?;
 
         use futures_util::StreamExt;
+        use sha2::Digest;
         let mut stream = response.bytes_stream();
+        let mut hasher = sha2::Sha256::new();
         let mut downloaded = 0u64;
         let mut last_reported = 0u8;
         let mut last_report_time = std::time::Instant::now();
@@ -653,6 +679,7 @@ impl TranscribeEngine {
 
             let chunk = chunk.map_err(|e| anyhow!("Failed to read chunk: {}", e))?;
             file.write_all(&chunk).await?;
+            hasher.update(&chunk);
             downloaded += chunk.len() as u64;
             bytes_since_report += chunk.len() as u64;
 
@@ -685,6 +712,21 @@ impl TranscribeEngine {
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
+        // The bytes, before they replace anything: the length first, so a short file reports its length,
+        // then the hash. A failure here leaves the final path as it was, and `download_file` removes the
+        // temporary file (#179).
+        if downloaded != pin.size_bytes {
+            return Err(anyhow!(
+                "{} is {} bytes, not the {} its pin expects",
+                filename,
+                downloaded,
+                pin.size_bytes
+            ));
+        }
+        let sha256 = format!("{:x}", hasher.finalize());
+        if sha256 != pin.sha256 {
+            return Err(anyhow!("{} hashes to {}, not the pinned {}", filename, sha256, pin.sha256));
+        }
         self.commit_download(model_name, filename).await?;
 
         self.set_status(model_name, ModelStatus::Available).await;
