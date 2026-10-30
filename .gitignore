@@ -75,6 +75,9 @@ node_modules/
 experiments/
 .cursor/
 target/
+# A worktree's `target` is often a symlink to the main checkout's, and `target/` matches only a
+# directory (#257).
+/target
 
 frontend/src-tauri/binaries/
 .hallmark/
