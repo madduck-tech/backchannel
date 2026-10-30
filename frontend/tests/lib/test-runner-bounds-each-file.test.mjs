@@ -321,6 +321,8 @@ try {
     check(new RegExp(`^✖ ${FIX}/l-prints-then-hangs\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'slow reader: no ✖ line names l after the pipe filled');
     const named = r.out.search(/^✖ .*l-prints-then-hangs/m);
     check(named >= 0 && named < r.out.indexOf('l: yyy'), "slow reader: l's 400 KiB came before the line naming it");
+    // The names are small and get out at once; what l printed is what the drain is waited for.
+    check(r.out.includes(`l: ${'y'.repeat(400 * 1024)}`), "slow reader: l's 400 KiB did not all arrive");
   }
 
   // 12 and 13. The runner's own failure, inside main and outside it: what it runs is killed, h's
@@ -356,19 +358,21 @@ try {
     check(r.ms < S / 2 + 500 + 8000, `stopped reader: the runner took ${r.ms} ms to end after SIGTERM with its reader stopped`);
   }
 
-  // 16. The queue stops at an abort: with one slot, a, then h waiting. SIGTERM while a runs, the reader
-  //     paused so the abort is still draining when a's slot frees: h must never start.
+  // 16. The queue stops at an abort: with one slot, l first and h waiting. SIGTERM while l runs, the
+  //     reader paused, so the abort is still draining l's 400 KiB when l's slot frees: h must never
+  //     start. l's copy has an absolute path, which sorts before the fixtures' relative ones.
   {
-    const r = await nested('queue', 17, ['a-blocks-in-spawnsync.mjs', 'h-orphans-a-hidden-child.mjs'].map(fixture), {
+    const first = path.join(tmp, 'l-first.mjs');
+    fs.copyFileSync(path.join(frontend, FIX, 'l-prints-then-hangs.mjs'), first);
+    const r = await nested('queue', 17, [first, fixture('h-orphans-a-hidden-child.mjs')], {
       fileTimeout: 60_000,
       concurrency: 1,
       signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }],
       pauseStdout: { from: S / 2, to: S / 2 + 1500 },
       watchMarks: ['H'],
     });
-    check(r.mid.a > 0, "queue: a's sleep was not running at S/2");
     check(r.code === 143, `queue: the runner exited ${r.code} (${r.sig}), not 143`);
-    check(!r.seen.H, 'queue: h, waiting behind a, started after the abort');
+    check(!r.seen.H, 'queue: h, waiting behind l, started after the abort');
     check(!/h-orphans-a-hidden-child/.test(r.out), 'queue: a line names h, which should never have started');
   }
 
