@@ -96,9 +96,14 @@ function signal(pid, sig) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Kill a file's process group, then every process carrying its marker. */
+/**
+ * Kill a file's process group, then every process carrying its marker. The file's own process is
+ * also killed by its pid: Windows has no process groups, and without that the runner would wait
+ * there forever on the file it had just timed out.
+ */
 function killFile(run, procRoot) {
   signal(-run.child.pid, 'SIGKILL');
+  signal(run.child.pid, 'SIGKILL');
   for (const pid of markedPids(run.token, procRoot) ?? []) signal(pid, 'SIGKILL');
 }
 
