@@ -1,0 +1,11 @@
+{
+  "floor": 0.026247934341430666,
+  "tau": 12,
+  "seed_tuning": 100,
+  "blocks": 20000,
+  "tau_blocks": 39999,
+  "min_true_quality": 1.3418492078781128,
+  "free_quality_p999": 468833.84375,
+  "max_consecutive_delta": 6,
+  "rule": "floor: weakest true block -30 dB; tau: 2 x max consecutive delta (samples at 16 kHz), at least 1; no quality gate"
+}

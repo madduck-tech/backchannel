@@ -84,6 +84,43 @@ def word(direction, seq):
     return (head << 24) | crc24(head)
 
 
+def decode_block(E, pos):
+    """(direction, seq, corrected) for the block at pos, or None. When the check fails, the CRC is
+    used as the code: each of the 2 least confident symbols is tried at all 15 other values, then
+    each pair of the 4 least confident at their second choices; 36 trials at most, so the false
+    accept cost is 36 x 2^-24 per failing block, and anchoring guards it. F0 left one block in
+    20 000 undecodable through the 16 kHz chain: Opus had replaced one symbol's tone outright (the
+    true tone kept 6.6 % of the winner's energy), so a second-choice trial could not restore it."""
+    idx = pos + SYM * np.arange(SYMS)
+    if pos < 0 or idx[-1] >= E.shape[0]:
+        return None
+    e = E[idx]
+    order = np.argsort(e, axis=1)
+    first, second = order[:, -1], order[:, -2]
+    r = parse(first)
+    if r:
+        return r[0], r[1], 0
+    conf = e[np.arange(SYMS), first] / np.maximum(e[np.arange(SYMS), second], 1e-12)
+    weak = list(np.argsort(conf))
+    for i in weak[:2]:
+        for v in range(M):
+            if v == first[i]:
+                continue
+            syms = first.copy()
+            syms[i] = v
+            r = parse(syms)
+            if r:
+                return r[0], r[1], 1
+    for k, i in enumerate(weak[:4]):
+        for j in weak[k + 1:4]:
+            syms = first.copy()
+            syms[i], syms[j] = second[i], second[j]
+            r = parse(syms)
+            if r:
+                return r[0], r[1], 2
+    return None
+
+
 def symbols_of(w):
     return [(w >> (44 - 4 * i)) & 0xF for i in range(SYMS)]
 
@@ -192,6 +229,15 @@ class Energy:
         return self.chunk(c)[idx - c * CHUNK]
 
 
+def silent(E, pos, floor):
+    """A block more than half of whose symbols are below the floor: a partial block at the edge of
+    silence, not a damaged one (a block with 10 ms zeroed has 2 of 12 silent, B4)."""
+    idx = pos + SYM * np.arange(SYMS)
+    if pos < 0 or idx[-1] >= E.shape[0]:
+        return True
+    return int((E[idx].max(1) < floor).sum()) > SYMS // 2
+
+
 def read_block(E, pos):
     """(symbols, quality, energy) of the block starting at pos; None past the end."""
     idx = pos + SYM * np.arange(SYMS)
@@ -240,49 +286,56 @@ def scan(E, th, start, end):
                 # CRC and the anchor rule, not by a quality gate.
                 ok = np.flatnonzero(en >= floor)
                 for i in ok[np.argsort(-q[ok])][:64]:
-                    r = parse(e[i].argmax(1))
+                    r = decode_block(E, int(cand[i]))
                     if r:
                         found = (int(cand[i]), r)
                         break
             if found is None:
-                rb = read_block(E, pos)
-                kind = "no_signal" if rb is None or rb[2] < floor else "undecodable"
+                kind = "no_signal" if silent(E, pos, floor) else "undecodable"
                 out.append((pos, kind, None, None))
                 pos += L
                 continue
-            p, (d, n) = found
+            p, (d, n, corr) = found
             if p > pos:
                 # The search window holds a gap before the found block: one position, unread.
-                rb = read_block(E, pos)
-                kind = "no_signal" if rb is None or rb[2] < floor else "undecodable"
+                kind = "no_signal" if silent(E, pos, floor) else "undecodable"
                 if p - pos >= L // 2:
                     out.append((pos, kind, None, None))
-            out.append((p, "decoded", d, n))
+            out.append((p, "decoded", d, n, corr))
             pos = p + L
             searching = False
             continue
-        # Tracking: refine within +/- FINE of the stride prediction.
+        # Tracking. The block is decoded where the stride predicts it, which is exact while
+        # nothing is lost; if its check fails, at the measured position, then at the positions
+        # nearest to it. Its position for steps is always the measured one (the energy peak within
+        # +/- FINE), so a shift that still decodes is seen. Decoding at the measured position
+        # alone failed about 3e-4 of blocks through the 16 kHz chain (#302 F0, first run).
         lo, hi = max(pos - FINE, 0), min(pos + FINE, last_start - 1)
         if hi < lo:
             break
-        best = max(range(lo, hi + 1), key=lambda p: block_score(E, p))
-        rb = read_block(E, best)
+        meas = max(range(lo, hi + 1), key=lambda p: block_score(E, p))
+        rb = read_block(E, meas)
         if rb is None:
             break
-        syms, q, en = rb
-        if en < floor:
+        if silent(E, meas, floor):
             out.append((pos, "no_signal", None, None))
             searching = True
             pos += L
             continue
-        r = parse(syms)
-        if r is None:
-            out.append((best, "undecodable", None, None))
+        found = None
+        for p in [pos, meas] + sorted(range(lo, hi + 1), key=lambda q: abs(q - meas)):
+            r = decode_block(E, p)
+            if r:
+                found = (p, r)
+                break
+        if found is None:
+            out.append((meas, "undecodable", None, None))
             searching = True
-            pos = best + L
+            pos = meas + L
             continue
-        out.append((best, "decoded", r[0], r[1]))
-        pos = best + L
+        p, r = found
+        out.append((meas, "decoded", r[0], r[1], r[2]))
+        pos = p + L
     return out
 
 
@@ -296,7 +349,7 @@ def anchor_and_count(rows, tau):
     for r in rows:
         if r[1] != "decoded":
             continue
-        pos, _, d, n = r
+        pos, _, d, n = r[:4]
         if anchor is not None and not pending:
             expect = anchor[1] + round((pos - anchor[0]) / L)
             if abs(n - expect) <= 1:
@@ -315,11 +368,28 @@ def anchor_and_count(rows, tau):
             pending = []
     for r in pending:
         (unexpected if anchor is not None else unanchored).append(r)
-    for a, b in zip(counted, counted[1:]):
-        delta = (b[0] - L * b[3]) - (a[0] - L * a[3])
+    # A cut inside a block that still decodes moves that block's measured position halfway: two
+    # adjacent changes (+96 then -222 for a 128-sample cut). Changes on blocks within two numbers
+    # of each other are one step, and its size is the median offset of the 3 counted blocks after
+    # it minus that of the 3 before it, so the damaged block's own position does not enter.
+    offs = [r[0] - L * r[3] for r in counted]
+    raw = [i for i in range(1, len(counted)) if abs(offs[i] - offs[i - 1]) > tau]
+    groups = []
+    for i in raw:
+        if groups and counted[i - 1][3] - counted[groups[-1][1]][3] <= 2:
+            groups[-1][1] = i
+        else:
+            groups.append([i, i])
+    for first_i, last_i in groups:
+        before = offs[max(first_i - 3, 0):first_i]
+        after = offs[last_i:last_i + 3]
+        if not before or not after:
+            continue
+        delta = float(np.median(after) - np.median(before))
         if abs(delta) > tau:
-            steps.append({"after": a[3], "at": b[3], "samples_48k": int(round(delta * PLAY_RATE / RATE)),
-                          "pos_s": round(b[0] / RATE, 4)})
+            steps.append({"after": counted[first_i - 1][3], "at": counted[last_i][3],
+                          "samples_48k": int(round(delta * PLAY_RATE / RATE)),
+                          "pos_s": round(counted[last_i][0] / RATE, 4)})
     return counted, unexpected, unanchored, steps
 
 
@@ -359,7 +429,11 @@ def cmd_decode(a):
         "unanchored": len(unanchored),
         "wrong_direction": sorted({r[3] - first for r in counted if r[2] != direction}),
         "undecodable": [round(r[0] / RATE, 4) for r in rows if r[1] == "undecodable"],
-        "no_signal": [round(r[0] / RATE, 4) for r in rows if r[1] == "no_signal"],
+        # Inside the window only: the silence before the first block and after the last is the
+        # recording's edge, not a loss (tail loss is reported apart).
+        "no_signal": [round(r[0] / RATE, 4) for r in rows if r[1] == "no_signal"
+                      and counted and counted[0][0] < r[0] < counted[-1][0]],
+        "corrected": sum(1 for r in counted if len(r) > 4 and r[4]),
         "steps": steps, "tail_loss": len(tail),
         "positions": [[r[3] - first, r[0]] for r in counted],
         "tau": tau, "header": sched["header"],
@@ -400,7 +474,8 @@ def cmd_gen(a):
     rng = np.random.default_rng(a.seed)
     N = int(round(a.minutes * 60 * 1000 / 60))
     first = int(rng.integers(0, (1 << SEQ_BITS) - N))
-    x = stream(a.direction, first, N)
+    pad = np.zeros(PLAY_RATE)       # 1 s before and after: a codec's start-up is not a block
+    x = np.concatenate([pad, stream(a.direction, first, N), pad])
     os.makedirs(a.out, exist_ok=True)
     markers.write_wav(os.path.join(a.out, "blocks.wav"), x)
     sched = {"N": N, "first": first, "direction": a.direction, "L_ms": 60, "rate": PLAY_RATE, "header": header}

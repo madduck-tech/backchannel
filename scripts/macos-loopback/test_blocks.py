@@ -18,6 +18,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 B48 = 2880                     # one 60 ms block at 48 kHz
 N = 400                        # 24 s
+LEAD = 48000                   # gen's 1 s of silence before the stream
 
 
 def run(repo, *args):
@@ -70,7 +71,7 @@ class Fixture(unittest.TestCase):
         return json.loads(r.stdout)
 
     def at(self, k):
-        return k * B48
+        return LEAD + k * B48     # gen puts 1 s of silence before the stream
 
     def block(self, n_rel, direction=0, forge=None):
         w = self.b.word(direction, self.sched["first"] + n_rel) if forge is None else forge
@@ -131,14 +132,32 @@ class TheDecoderReportsEachMutation(Fixture):
         self.assertEqual((d["unexpected"], d["duplicated"], d["out_of_order"], d["wrong_direction"]), ([], [], [], []))
         self.assertTrue(d["missing"] in ([], [100]), d["missing"])
 
-    def test_b5_a_flipped_payload_bit_with_the_original_check_is_undecodable(self):
+    def test_b5_a_flipped_payload_bit_with_the_original_check_is_never_another_number(self):
         w = self.b.word(0, self.sched["first"] + 100) ^ (1 << 30)
         x = self.clean.copy()
         x[self.at(100):self.at(101)] = self.block(100, forge=w)
         d = self.decode("b5", x)
-        self.assertEqual(d["missing"], [100])
-        self.assertEqual(len(d["undecodable"]), 1)
-        self.assertEqual(d["unexpected"], [])
+        # The issue: undecodable, or corrected to its own number; never another number.
+        self.assertEqual((d["unexpected"], d["duplicated"], d["out_of_order"]), ([], [], []))
+        if d["missing"]:
+            self.assertEqual((d["missing"], len(d["undecodable"])), ([100], 1))
+        else:
+            self.assertGreaterEqual(d["corrected"], 1)
+            self.assertIn(100, {n for n, _ in d["positions"]})
+
+    def test_a_symbol_whose_true_tone_is_second_is_corrected_to_its_own_number(self):
+        # Symbol 5 of block 100: a wrong tone at 0.6 over the true tone at 0.45, as a codec error
+        # leaves it; the plain decision fails the check, the second choice restores it.
+        syms = self.b.symbols_of(self.b.word(0, self.sched["first"] + 100))
+        n = 48000 * self.b.SYM // self.b.RATE
+        true_wave = self.b.synth([syms[5]])[0]
+        wrong_wave = self.b.synth([(syms[5] + 7) % 16])[0]
+        x = self.clean.copy()
+        s0 = self.at(100) + 5 * n
+        x[s0:s0 + n] = 0.6 * wrong_wave + 0.45 * true_wave
+        d = self.decode("chase", x)
+        self.assertEqual((d["missing"], d["undecodable"], d["unexpected"]), ([], [], []))
+        self.assertEqual(d["corrected"], 1)
 
     def test_b6a_the_wrong_direction_is_reported(self):
         d = self.decode("b6a", self.clean, "--direction", "1")
