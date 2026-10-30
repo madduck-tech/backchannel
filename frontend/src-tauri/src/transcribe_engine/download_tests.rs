@@ -364,12 +364,14 @@ async fn a_download_in_flight_reads_downloading() {
         let s = stub(slow()).await;
         let engine = engine_at(dir.path(), &s);
         let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
-        wait_until("the stub to send bytes", || s.sent.load(Ordering::SeqCst) > 0).await;
+        // Beside the final file, so the rename stays on one file system. Waited for, not read once: the
+        // stub's first chunk can be on the wire before the engine has read the headers and created the
+        // file, which lost the race once under `cargo test --workspace` (#195's gate at eff88f6).
+        let partial = dir.path().join(format!("{PARTIAL_PREFIX}{}", final_path(dir.path()).file_name().unwrap().to_string_lossy()));
+        wait_until("the temporary file beside the final one, mid-body", || partial.is_file() && s.sent.load(Ordering::SeqCst) > 0).await;
+        assert!(s.sent.load(Ordering::SeqCst) < 200_000, "{what}: the body was whole before it could be read mid-body");
         let status = engine.discover_models().await.unwrap().into_iter().find(|m| m.name == ROW).unwrap().status;
         assert!(matches!(status, ModelStatus::Downloading { .. }), "{what}: the row reads {status:?} mid-body");
-        // Beside the final file, so the rename stays on one file system.
-        let partial = dir.path().join(format!("{PARTIAL_PREFIX}{}", final_path(dir.path()).file_name().unwrap().to_string_lossy()));
-        assert!(partial.is_file(), "{what}: no temporary file beside the final one mid-body");
         engine.cancel_download(ROW).await.unwrap();
         let _ = running.await;
     }
