@@ -65,14 +65,18 @@ function marksFor(n) {
 }
 const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signalAt, prefix = [], closeStdoutAt } = {}) {
+const outputs = [];
+
+async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt } = {}) {
   const marks = marksFor(n);
   const stamp = path.join(tmp, `stamp-${n}`);
+  const stampH = path.join(tmp, `stamp-h-${n}`);
   for (const m of Object.values(marks)) check(sleepsWith(m).length === 0, `${name}: a process already carries ${m} before the run`);
   const env = {
     ...process.env,
     ...Object.fromEntries(Object.entries(marks).map(([k, m]) => [`BC_HANG_MARK_${k}`, m])),
     BC_HANG_STAMP_D: stamp,
+    BC_HANG_STAMP_H: stampH,
     BC_TEST_MARKS: [process.env.BC_TEST_MARKS, OWN].filter(Boolean).join(' '),
     // As a run under `pnpm test` has it, so the runner's dropping it is what lets the files run.
     NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || 'child-v8',
@@ -84,7 +88,11 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   let out = '';
   child.stdout.on('data', (d) => (out += d));
   child.stderr.on('data', (d) => (out += d));
-  const ended = new Promise((resolve) => child.once('exit', (code, sig) => resolve({ code, sig })));
+  const ended = new Promise((resolve) => {
+    child.once('exit', (code, sig) => resolve({ code, sig }));
+    // Without this, a missing python3 threw past the `finally` and left the temp dir behind.
+    child.once('error', (error) => resolve({ code: null, sig: null, error }));
+  });
   const mid = sleep(S / 2).then(() => {
     const a = sleepsWith(marks.A);
     const own = new Set(ownPids());
@@ -95,19 +103,20 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
       c: sleepsWith(marks.C).length,
       f: sleepsWith(marks.F).length,
       h: sleepsWith(marks.H).length,
+      hOrphaned: fs.existsSync(stampH),
       stamp: fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : '',
     };
   });
   // A reader that goes away: the runner's next write fails with EPIPE.
   if (closeStdoutAt) setTimeout(() => child.stdout.destroy(), closeStdoutAt).unref();
-  if (signalAt) {
+  for (const { sig, ms } of signals) {
     setTimeout(() => {
       try {
-        process.kill(child.pid, signalAt.sig);
+        process.kill(child.pid, sig);
       } catch {
         // gone
       }
-    }, signalAt.ms).unref();
+    }, ms).unref();
   }
   let deadlineFired = false;
   const deadline = setTimeout(() => {
@@ -120,7 +129,8 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
     ownPids().forEach(kill);
   }, DEADLINE_MS);
   // On `exit`, not on the pipes: a holder this test does not know of could keep them open.
-  const { code, sig } = await ended;
+  const { code, sig, error } = await ended;
+  check(!error, `${name}: the nested run could not be started: ${error?.message}`);
   // Read at once: a kill the runner made before it exited has taken effect by now, and a process
   // killed later (by a file's watchdog, up to 500 ms on) has not.
   const leftAtExit = Object.fromEntries(Object.entries(marks).map(([k, m]) => [k, sleepsWith(m).length]));
@@ -129,6 +139,7 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   child.stdout.destroy();
   child.stderr.destroy();
   check(!deadlineFired, `${name}: the nested run was still going at ${DEADLINE_MS} ms and this test's deadline ended it`);
+  outputs.push({ name, out });
   return { code, sig, ms, out, mid: await mid, marks, leftAtExit };
 }
 
@@ -170,7 +181,10 @@ try {
     check(sleepsWith(r.marks.F).length === 0, "f-j: f's sleep is still running after the run");
     check(sleepsWith(r.marks.H).length === 0, "f-j: h's sleep is still running after the run");
     check(line(fixture('i-kills-its-runner.mjs'), 'exited 137').test(r.out), "f-j: no ✖ line names i for its runner's SIGKILL");
-    check(/^… the first [0-9]+ bytes of its output were dropped$/m.test(r.out), "f-j: j's report does not say its output was cut");
+    check(/^… [0-9]+ bytes of its output were dropped here$/m.test(r.out), "f-j: j's report does not say its output was cut");
+    check(/^j: the first line$/m.test(r.out), "f-j: j's first line was dropped, where an early error would be");
+    // Last, after j's 16 MiB report: a runner that exits with output still queued for its pipe loses it.
+    check(/^ℹ files 4, passed 1, failed 3, /m.test(r.out), 'f-j: the run\'s summary line did not arrive');
     check(new RegExp(`^✔ ${FIX}/j-prints-a-lot\\.mjs — `, 'm').test(r.out), 'f-j: j did not pass');
   }
 
@@ -187,8 +201,9 @@ try {
   //    its orphan is made: only the runner's poll knows that orphan, so the file's watchdog, which
   //    also kills on the runner's death, cannot stand in for the runner's own kill.
   {
-    const r = await nested('SIGTERM', 3, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGTERM', ms: S / 2 + 500 } });
+    const r = await nested('SIGTERM', 3, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }] });
     check(r.mid.h > 0, "SIGTERM: h's sleep was not running at S/2");
+    check(r.mid.hOrphaned, "SIGTERM: h's helper had not exited by S/2, so its sleep was not yet an orphan");
     check(r.code === 143, `SIGTERM: the runner exited ${r.code} (${r.sig}), not 143`);
     check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'SIGTERM: no ✖ line names the file in flight');
     let left = sleepsWith(r.marks.H).length;
@@ -199,19 +214,25 @@ try {
     check(left === 0, "SIGTERM: h's sleep is still running 1 s after the runner exited");
   }
 
-  // 4. SIGHUP, which a closed terminal or a dropped session sends.
+  // 4. SIGHUP twice, 5 ms apart, as a closed terminal and then its shell send it: the second lands
+  //    while the first abort is killing. With h, after its orphan is made.
   {
-    const r = await nested('SIGHUP', 4, [fixture('a-blocks-in-spawnsync.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGHUP', ms: S / 2 + 500 } });
-    check(r.mid.a > 0, "SIGHUP: a's sleep was not running at S/2");
+    const r = await nested('SIGHUP', 4, [fixture('h-orphans-a-hidden-child.mjs')], {
+      fileTimeout: 60_000,
+      signals: [{ sig: 'SIGHUP', ms: S / 2 + 500 }, { sig: 'SIGHUP', ms: S / 2 + 505 }],
+    });
+    check(r.mid.h > 0, "SIGHUP: h's sleep was not running at S/2");
+    check(r.mid.hOrphaned, "SIGHUP: h's helper had not exited by S/2, so its sleep was not yet an orphan");
     check(r.code === 129, `SIGHUP: the runner exited ${r.code} (${r.sig}), not 129`);
-    check(new RegExp(`^✖ ${FIX}/a-blocks-in-spawnsync\\.mjs: the runner received SIGHUP`, 'm').test(r.out), 'SIGHUP: no ✖ line names the file in flight');
-    check(r.leftAtExit.A === 0, "SIGHUP: a's sleep was still running when the runner exited");
+    check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner received SIGHUP`, 'm').test(r.out), 'SIGHUP: no ✖ line names the file in flight');
+    for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
+    check(sleepsWith(r.marks.H).length === 0, "SIGHUP: h's sleep is still running 1 s after the runner exited");
   }
 
   // 5. SIGKILL, which nothing can handle: each file's watchdog kills what its file started once the
   //    runner is gone, inside the group (a) and outside it with no marker (f).
   {
-    const r = await nested('SIGKILL', 5, ['a-blocks-in-spawnsync.mjs', 'f-hides-its-marker.mjs'].map(fixture), { fileTimeout: 60_000, signalAt: { sig: 'SIGKILL', ms: S / 2 + 500 } });
+    const r = await nested('SIGKILL', 5, ['a-blocks-in-spawnsync.mjs', 'f-hides-its-marker.mjs'].map(fixture), { fileTimeout: 60_000, signals: [{ sig: 'SIGKILL', ms: S / 2 + 500 }] });
     check(r.mid.a > 0 && r.mid.f > 0, "SIGKILL: a's or f's sleep was not running at S/2");
     const gone = async (mark) => {
       for (let i = 0; i < 30 && sleepsWith(mark).length; i++) await sleep(100);
@@ -229,6 +250,7 @@ try {
       prefix: ['python3', path.join(frontend, FIX, 'close-the-terminal.py'), String((S / 2 + 500) / 1000)],
     });
     check(r.mid.c > 0 && r.mid.h > 0, "closed terminal: c's or h's sleep was not running at S/2");
+    check(r.mid.hOrphaned, "closed terminal: h's helper had not exited by S/2, so its sleep was not yet an orphan");
     check(r.code !== 99, 'closed terminal: the runner was still running 20 s after its terminal closed');
     for (const k of ['C', 'H']) {
       for (let i = 0; i < 20 && sleepsWith(r.marks[k]).length; i++) await sleep(100);
@@ -242,6 +264,7 @@ try {
   {
     const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
     check(r.mid.h > 0, "EPIPE: h's sleep was not running at S/2");
+    check(r.mid.hOrphaned, "EPIPE: h's helper had not exited by S/2, so its sleep was not yet an orphan");
     check(r.ms < 15_000, `EPIPE: the runner ran on for ${r.ms} ms after its reader went away`);
     check(r.code !== 0, `EPIPE: the runner exited ${r.code}`);
     for (let i = 0; i < 20 && sleepsWith(r.marks.H).length; i++) await sleep(100);
@@ -267,4 +290,6 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// On a failure, what each nested run printed, its last 4 KB: on CI that is all there is to go on.
+if (fails.length) for (const { name, out } of outputs) process.stderr.write(`\n--- ${name} ---\n${out.slice(-4096)}\n`);
 assert.deepEqual(fails, [], 'the runner did not bound every file');

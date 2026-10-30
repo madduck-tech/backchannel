@@ -13,6 +13,7 @@
 //   node scripts/test-runner-watchdog.mjs <node flags…> --test <file>
 
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { MARKS, descendants, markedPids, snapshot } from './test-runner.mjs';
 
 const signal = (pid, sig) => {
@@ -50,4 +51,4 @@ child.once('error', (e) => {
   process.exit(1);
 });
 // A `node --test` ended by a signal reads as 128 + its number, never as the 0 process.exit(null) gives.
-child.once('exit', (code, sig) => process.exit(sig ? 128 + ({ SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGTERM: 15 }[sig] ?? 0) : code));
+child.once('exit', (code, sig) => process.exit(sig ? 128 + (os.constants.signals[sig] ?? 0) : code));

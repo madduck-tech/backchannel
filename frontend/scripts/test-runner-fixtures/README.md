@@ -17,7 +17,7 @@ anything, so no run can fall back to a marker another run uses.
 | `e-leaves-a-process.mjs` | no `node:test`; `sh -c 'sleep … &'` orphans a `sleep` at once, then the file returns. Only its marker finds it |
 | `f-hides-its-marker.mjs` | a `test()` that starts a detached `sleep` under `env -i`, so no marker, and awaits forever (Chrome's shape). Only the process tree finds it |
 | `g-ends-its-child-soon.mjs` | no `node:test`; a child that outlives the file by 0.5 s, inside the runner's grace, so the file passes |
-| `h-orphans-a-hidden-child.mjs` | a `test()` whose helper starts a marker-less `sleep` and exits 2 s later, then awaits forever. Only the runner's poll of the tree finds it |
+| `h-orphans-a-hidden-child.mjs` | a `test()` whose helper starts a marker-less `sleep` and exits 1.2 s later, writing `BC_HANG_STAMP_H`, then awaits forever. Only the runner's poll of the tree finds it |
 | `i-kills-its-runner.mjs` | no `node:test`; ends its own `node --test` with SIGKILL, then exits 0. The watchdog reports 137 |
 | `j-prints-a-lot.mjs` | no `node:test`; 20 MiB of output, past the runner's 16 MiB cap |
 | `k-passes-late.mjs` | no `node:test`; passes after 3 s, so its report is written once h's orphan exists |

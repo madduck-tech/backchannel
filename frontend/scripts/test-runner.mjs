@@ -33,8 +33,13 @@ const LEFTOVER_GRACE_MS = 2000;
 const DRAIN_MS = 500;
 /** How often each running file's process tree is read. */
 const POLL_MS = 500;
-/** The most of one file's output kept: past it the oldest is dropped, and the report says how much. */
+/**
+ * The most of one file's output kept: its first OUTPUT_HEAD bytes, where an early error is, and its
+ * last bytes up to OUTPUT_CAP, where a summary is. What lies between is dropped, and the report says
+ * how much and where.
+ */
 const OUTPUT_CAP = 16 * 1024 * 1024;
+const OUTPUT_HEAD = 1024 * 1024;
 // The summary block each `node --test <file>` prints. This runner prints one for the whole run.
 const NODE_SUMMARY = /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/;
 const WATCHDOG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'test-runner-watchdog.mjs');
@@ -214,13 +219,18 @@ function runFile(file, index, opts, running) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const output = [];
-  const run = { file, token, child, output, bytes: 0, dropped: 0, seen: new Map(), timedOut: false, aimed: null };
-  // Held whole until the file ends, so a file's lines are never interleaved with another's. Capped:
-  // past 512 MiB the joined string cannot be built, and a hung file was then named nowhere.
+  const run = { file, token, child, head: [], headBytes: 0, output, bytes: 0, dropped: 0, seen: new Map(), timedOut: false, aimed: null };
+  // Held until the file ends, so a file's lines are never interleaved with another's. Capped: past
+  // 512 MiB the joined string cannot be built, and a hung file was then named nowhere.
   const collect = (d) => {
+    if (run.headBytes < OUTPUT_HEAD) {
+      run.head.push(d);
+      run.headBytes += d.length;
+      return;
+    }
     output.push(d);
     run.bytes += d.length;
-    while (run.bytes > OUTPUT_CAP && output.length > 1) {
+    while (run.headBytes + run.bytes > OUTPUT_CAP && output.length > 1) {
       const gone = output.shift();
       run.bytes -= gone.length;
       run.dropped += gone.length;
@@ -273,8 +283,9 @@ function runFile(file, index, opts, running) {
 }
 
 function outputOf(run) {
-  const kept = Buffer.concat(run.output).toString('utf8');
-  return run.dropped ? `… the first ${run.dropped} bytes of its output were dropped\n${kept}` : kept;
+  const head = Buffer.concat(run.head).toString('utf8');
+  const tail = Buffer.concat(run.output).toString('utf8');
+  return run.dropped ? `${head}\n… ${run.dropped} bytes of its output were dropped here\n${tail}` : head + tail;
 }
 
 function body(output) {
@@ -289,6 +300,48 @@ function report(result, write) {
   const text = body(result.output);
   if (text) write(`${text}\n`);
   write(result.ok ? `✔ ${result.file} — ${result.ms} ms\n` : `✖ ${result.file} — ${result.ms} ms: ${result.reasons.join('; ')}\n`);
+}
+
+/**
+ * Write all of `text` to `fd`. A full non-blocking pipe throws EAGAIN, which is not a reader gone:
+ * it is waited out for up to 2 s. Returns false once the reader or the terminal is gone.
+ */
+function writeAll(fd, text) {
+  const buf = Buffer.from(text);
+  const until = Date.now() + 2000;
+  for (let off = 0; off < buf.length; ) {
+    try {
+      off += fs.writeSync(fd, buf, off);
+    } catch (e) {
+      if (e.code !== 'EAGAIN' || Date.now() > until) return false;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  return true;
+}
+
+// What an abort needs, whichever path reaches it: a signal, an output error, an exception, or main's
+// own rejection.
+const active = { running: new Set(), procRoot: '/proc', aborting: false };
+
+/**
+ * End this runner early. What it is running is killed first and reported after: a closed terminal
+ * sends SIGHUP and then fails every write with EIO, a reader that went away (`| head -1`) fails it
+ * with EPIPE, and a write placed before the kills threw and nothing was killed (round 2, measured
+ * with a real pty). A SIGKILL cannot be handled here: each file's watchdog answers it.
+ */
+function abort(why, code, error) {
+  if (active.aborting) return;
+  active.aborting = true;
+  const running = active.running;
+  running.interrupted = true;
+  for (const run of running) killFile(run, active.procRoot);
+  for (const run of running) {
+    const text = body(outputOf(run));
+    if (!writeAll(1, `${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`)) break;
+  }
+  if (error) writeAll(2, `test-runner: ${error.stack ?? error}\n`);
+  process.exit(code);
 }
 
 export async function main(argv, { cwd = process.cwd(), procRoot = process.env.BC_TEST_PROC_ROOT || '/proc', write = (s) => process.stdout.write(s) } = {}) {
@@ -309,28 +362,14 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
     if (procs) for (const run of running) track(run, procs);
   }, POLL_MS);
   poll.unref();
-  // However this runner ends early, what it is running is killed first and reported after. A closed
-  // terminal sends SIGHUP and then fails every write with EIO; a reader that went away (`| head -1`)
-  // fails it with EPIPE; anything else is an exception. In each, a write placed before the kills
-  // threw and nothing was killed (#268's gate adversary, round 2, measured with a real pty). Written
-  // synchronously, because on macOS a piped stdout is asynchronous and process.exit would drop it.
-  // A SIGKILL cannot be handled here: each file's watchdog answers it.
-  const abort = (why, code) => {
-    running.interrupted = true;
-    for (const run of running) killFile(run, procRoot);
-    for (const run of running) {
-      try {
-        const text = body(outputOf(run));
-        fs.writeSync(1, `${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`);
-      } catch {
-        // the terminal or the reader is gone
-      }
-    }
-    process.exit(code);
-  };
-  for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) process.once(sig, () => abort(`the runner received ${sig}`, code));
+  active.running = running;
+  active.procRoot = procRoot;
+  // `on`, not `once`: a closed terminal sends SIGHUP twice, once from the terminal and once from its
+  // shell, and with `once` the second took the default action halfway through the abort (#268's gate
+  // adversary, round 3). A repeat while the abort runs is ignored by the abort itself.
+  for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) process.on(sig, () => abort(`the runner received ${sig}`, code));
   process.stdout.on('error', (e) => abort(`the runner's output failed (${e.code})`, 1));
-  process.on('uncaughtException', (e) => abort(`the runner failed: ${e.message}`, 1));
+  process.on('uncaughtException', (e) => abort('the runner failed while this file ran', 1, e));
 
   let next = 0;
   // Files start in sorted order, as Node's runner starts them, so a hang's report time follows from
@@ -355,12 +394,15 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
 // Run when invoked as a script. The two sides are compared as resolved paths: `import.meta.url` is
 // percent-encoded, so against a raw `argv[1]` a path with a space or a non-ASCII letter never matched,
 // and `pnpm test` exited 0 having run nothing (#268's gate adversary, measured).
+//
+// The status is set, not exited with: process.exit dropped what was still queued for a pipe, so a
+// last report over 64 KiB lost the summary (round 3, measured with `| cat`). A rejection goes through
+// the abort, so a bug in the runner still kills what is running.
 if (process.argv[1] && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (e) => {
-      process.stderr.write(`${e.message}\n`);
-      process.exit(2);
-    }
+    (code) => {
+      process.exitCode = code;
+    },
+    (e) => abort('the runner failed while this file ran', 2, e)
   );
 }
