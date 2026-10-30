@@ -110,8 +110,8 @@ pub struct TranscribeEngine {
     /// Where catalogue files are fetched from: `TRANSCRIBE_MODEL_BASE_URL`, or a test's local server.
     base_url: String,
     /// A test's client, which reads no proxy. Production builds one per download, as before #195, so
-    /// the proxy settings are read each time and a client that cannot be built fails one download, not
-    /// the engine's construction under `TRANSCRIBE_ENGINE`'s lock.
+    /// the proxy settings are read each time, and a client that cannot be built fails that download
+    /// with an error rather than the engine's construction under `TRANSCRIBE_ENGINE`'s lock.
     client: Option<reqwest::Client>,
     #[cfg(test)]
     test_hooks: TestHooks,
@@ -614,10 +614,14 @@ impl TranscribeEngine {
         self.set_status(model_name, ModelStatus::Downloading { progress: 0 })
             .await;
 
-        let response = self
-            .client
-            .clone()
-            .unwrap_or_default()
+        let client = match &self.client {
+            Some(client) => client.clone(),
+            // `Client::new()` is this builder with an `expect`; the error is returned instead.
+            None => reqwest::Client::builder()
+                .build()
+                .map_err(|e| anyhow!("Failed to build the HTTP client: {}", e))?,
+        };
+        let response = client
             .get(&url)
             .send()
             .await

@@ -251,7 +251,7 @@ async fn the_row_never_reads_downloading_100_before_the_rename() {
     drop(held);
     running.await.unwrap().expect("the download succeeds");
     assert!(
-        matches!(status, ModelStatus::Downloading { progress } if progress <= 99),
+        matches!(status, ModelStatus::Downloading { progress: 99 }),
         "with every byte in and the file not yet in place, the row reads {status:?}"
     );
 }
@@ -423,7 +423,7 @@ fn every_read_of_the_model_slot_is_listed_with_its_reason() {
         ("transcribe_engine/commands.rs", "is_model_loaded", 1, "transcribe_is_model_loaded answers for the slot; its frontend wrapper has no caller"),
         ("transcribe_engine/commands.rs", "model_languages", 1, "transcribe_model_languages lists what the loaded model decodes. On a stale slot that is the old weights' list until the next load"),
         ("transcribe_engine/commands.rs", "transcribe_batch", 1, "transcribe_transcribe_audio, which no frontend code calls"),
-        ("transcribe_engine/engine.rs", "get_current_model", 2, "transcribe_batch's log line, and delete_model, which unloads the slot when it holds the deleted model"),
+        ("transcribe_engine/engine.rs", "get_current_model", 2, "transcribe_batch's diarization decision for the model it decodes with, and delete_model, which unloads the slot when it holds the deleted model"),
         ("transcribe_engine/engine.rs", "model_languages", 1, "resolve_language, inside the engine"),
         ("transcribe_engine/engine.rs", "resolve_language", 1, "transcribe_batch, inside the engine"),
         ("transcribe_engine/engine.rs", "open_session", 1, "transcribe_batch, inside the engine"),
@@ -558,6 +558,34 @@ mod replace_against_load {
         engine.load_model(OLD_ROW).await.unwrap();
         check(arch(&engine).await == "whisper", "7d: the next load does not read the new file");
         check(engine.usable_model().await.as_deref() == Some(OLD_ROW), "7d: a fresh load is not offered as usable");
+
+        // 7f: a rename that fails puts the stale mark back as it was. Idle, so the old model is still
+        // usable; and with a job holding an earlier replace's mark, it stays not usable.
+        let failed_rename = |engine: Arc<TranscribeEngine>, dir: std::path::PathBuf| async move {
+            // A finished replace on this engine left a stored `before_commit` permit; drop it, or the wait
+            // below returns before this download has written its temporary file.
+            let _ = tokio::time::timeout(Duration::from_millis(50), engine.test_hooks().before_commit.notified()).await;
+            let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
+            let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
+            engine.test_hooks().before_commit.notified().await;
+            let partial = dir.join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(OLD_ROW).unwrap().filename));
+            std::fs::remove_file(&partial).expect("the temporary file to remove, so the rename fails");
+            drop(held);
+            download.await.unwrap()
+        };
+        let (dir, _s, engine) = setup().await;
+        engine.load_model(OLD_ROW).await.unwrap();
+        let r = failed_rename(engine.clone(), dir.path().to_path_buf()).await;
+        check(r.as_ref().is_err_and(|e| e.to_string().contains("Failed to put")), "7f: the rename did not fail as arranged");
+        check(engine.usable_model().await.as_deref() == Some(OLD_ROW), "7f: an idle model whose replace failed is no longer usable");
+        let (dir, _s, engine) = setup().await;
+        engine.load_model(OLD_ROW).await.unwrap();
+        let job = crate::audio::common::DeviceCheckHoldsEngine::take();
+        engine.download_model(OLD_ROW, None).await.unwrap();
+        let r = failed_rename(engine.clone(), dir.path().to_path_buf()).await;
+        check(r.is_err(), "7f: the second rename did not fail as arranged");
+        check(engine.usable_model().await.is_none(), "7f: a failed second replace offers the replaced model again");
+        drop(job);
 
         assert!(fails.is_empty(), "condition 7 failed: {fails:#?}");
     }

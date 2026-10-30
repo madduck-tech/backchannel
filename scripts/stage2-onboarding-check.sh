@@ -918,7 +918,7 @@ if { [ "$MODE" = chooses ] || [ "$MODE" = catalogue ]; } && { [ -e "$APPDATA/mod
   die "the default was fetched as well as the choice; the choice is not what drives the download"
 fi
 if [ "$MODE" = chooses ]; then
-  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
   [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
   # The default's absence from the log means something only beside the choice's line in the same log.
   grep -qE "Downloading model file .+/$CHOSEN_FILE" "$LOG" \
@@ -1000,7 +1000,7 @@ if [ "$MODE" = keeps ]; then
   # A re-fetch since #195 leaves the final file untouched until its rename, so its start is read from the
   # temporary file and the log line, written before the request.
   [ -e "$APPDATA/models/.partial-$PRESENT_FILE" ] && die "$PRESENT_FILE is being re-fetched: its temporary file exists"
-  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1)
+  LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
   [ -n "$LOG" ] || die "the application wrote no log under $APPDATA/logs"
   # The absence below means something only beside the downloader's own line in the same log: this mode
   # downloads the chosen model, and its line is the sentinel.
