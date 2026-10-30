@@ -106,6 +106,8 @@ tokio = { version = "1.32.0", features = ["full", "tracing"] }
 tokio-util = "0.7"  # Utilities for tokio including CancellationToken
 
 reqwest = { version = "0.13", features = ["blocking", "multipart", "json", "stream"] }
+# A model download is kept only if it hashes to its row's pinned sha256 (#179).
+sha2 = "0.10"
 
 # Directories
 dirs = "6.0"

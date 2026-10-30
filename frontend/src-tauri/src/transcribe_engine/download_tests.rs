@@ -1,6 +1,7 @@
 // A model download writes a temporary file and renames it over the final one, so a failed or
 // cancelled re-download leaves the file that was there, and a replace never leaves a stale model in
-// use (#195). Each test downloads from a local HTTP/1.1 stub on tokio's `TcpListener`, through an
+// use (#195). It is fetched at its pinned revision and kept only if it is exactly its pin's length and
+// hash (#179). Each test downloads from a local HTTP/1.1 stub on tokio's `TcpListener`, through an
 // engine whose client reads no proxy from the environment.
 use super::engine::*;
 use std::path::Path;
@@ -10,7 +11,9 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// A small catalogue row. Its bytes do not matter here: the stub serves whatever a test gives it.
+/// A small catalogue row. A test that must complete a download serves its own bytes through
+/// `download_body`, with a pin made from them; one that fails before the body is whole uses
+/// `download_model`, whose pin no stub here satisfies.
 const ROW: &str = "moonshine-tiny-q8";
 
 #[derive(Clone)]
@@ -21,6 +24,8 @@ enum Reply {
     CloseMidBody { sent: Vec<u8>, claimed: usize },
     /// The body in `chunk`-byte writes, `delay` apart.
     Slow { body: Vec<u8>, chunk: usize, delay: Duration },
+    /// `len` copies of `byte`, written without holding them all: the diarizer's 139 MB.
+    Fill { byte: u8, len: usize },
 }
 
 struct Stub {
@@ -62,6 +67,19 @@ async fn stub(reply: Reply) -> Stub {
                         let _ = sock.write_all(&part).await;
                         sent.fetch_add(part.len(), Ordering::SeqCst);
                     }
+                    Reply::Fill { byte, len } => {
+                        let _ = sock.write_all(head(len).as_bytes()).await;
+                        let block = vec![byte; 1 << 16];
+                        let mut left = len;
+                        while left > 0 {
+                            let n = left.min(block.len());
+                            if sock.write_all(&block[..n]).await.is_err() {
+                                return;
+                            }
+                            sent.fetch_add(n, Ordering::SeqCst);
+                            left -= n;
+                        }
+                    }
                     Reply::Slow { body, chunk, delay } => {
                         let _ = sock.write_all(head(body.len()).as_bytes()).await;
                         for c in body.chunks(chunk) {
@@ -82,6 +100,26 @@ async fn stub(reply: Reply) -> Stub {
 
 fn engine_at(dir: &Path, stub: &Stub) -> Arc<TranscribeEngine> {
     Arc::new(TranscribeEngine::new_with_models_dir(Some(dir.to_path_buf())).unwrap().with_base_url(&stub.base))
+}
+
+fn sha256_of(body: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(body))
+}
+
+/// Download `row` through the engine's own path, with a pin that `body` satisfies: for a test whose
+/// stub serves bytes other than the row's and whose claim needs the download to complete (#179). The
+/// revision is the row's.
+async fn download_body(
+    engine: &TranscribeEngine,
+    row: &str,
+    body: &[u8],
+    progress: Option<Box<dyn Fn(DownloadProgress) + Send>>,
+) -> anyhow::Result<()> {
+    let r = crate::config::transcribe_model(row).unwrap();
+    let sha256 = sha256_of(body);
+    let pin = FilePin { revision: r.revision, size_bytes: body.len() as u64, sha256: &sha256 };
+    engine.download_file(row, r.hf_repo, r.filename, pin, progress).await
 }
 
 fn final_path(dir: &Path) -> std::path::PathBuf {
@@ -116,7 +154,7 @@ async fn a_completed_redownload_replaces_the_file() {
     let path = original(dir.path());
     let fresh = vec![9u8; 10_000];
     let s = stub(Reply::Body(fresh.clone())).await;
-    engine_at(dir.path(), &s).download_model(ROW, None).await.expect("the download succeeds");
+    download_body(&engine_at(dir.path(), &s), ROW, &fresh, None).await.expect("the download succeeds");
     assert_eq!(std::fs::read(&path).unwrap(), fresh, "the path does not hold the downloaded bytes");
     assert_eq!(partials(dir.path()), Vec::<String>::new(), "a temporary file is left after a success");
 }
@@ -131,7 +169,7 @@ async fn a_redownload_leaves_a_held_handle_reading_the_original() {
     let path = original(dir.path());
     let mut held = std::fs::File::open(&path).unwrap();
     let s = stub(Reply::Body(vec![9u8; 10_000])).await;
-    engine_at(dir.path(), &s).download_model(ROW, None).await.expect("the download succeeds");
+    download_body(&engine_at(dir.path(), &s), ROW, &[9u8; 10_000], None).await.expect("the download succeeds");
     let mut through_handle = Vec::new();
     held.read_to_end(&mut through_handle).unwrap();
     assert_eq!(through_handle, vec![7u8; 4096], "the held handle reads other bytes: the original was rewritten in place");
@@ -187,7 +225,7 @@ async fn completed_is_reported_once_the_file_is_in_place() {
             seen.lock().unwrap().push(path.exists());
         }
     });
-    engine_at(dir.path(), &s).download_model(ROW, Some(cb)).await.unwrap();
+    download_body(&engine_at(dir.path(), &s), ROW, &[9u8; 10_000], Some(cb)).await.unwrap();
     assert_eq!(*at_100.lock().unwrap(), vec![true], "a 100% event came while the final file was absent, or none came");
 }
 
@@ -200,7 +238,7 @@ async fn a_cancel_while_the_commit_waits_still_cancels() {
     let s = stub(Reply::Body(vec![9u8; 10_000])).await;
     let engine = engine_at(dir.path(), &s);
     let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
-    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    let running = tokio::spawn({ let e = engine.clone(); async move { download_body(&e, ROW, &[9u8; 10_000], None).await } });
     engine.test_hooks().before_commit.notified().await;
     engine.cancel_download(ROW).await.expect("the download is still in flight");
     drop(held);
@@ -221,7 +259,7 @@ async fn a_cancel_ends_a_download_whose_commit_waits_for_the_lifecycle_lock() {
     let s = stub(Reply::Body(vec![9u8; 10_000])).await;
     let engine = engine_at(dir.path(), &s);
     let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
-    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    let running = tokio::spawn({ let e = engine.clone(); async move { download_body(&e, ROW, &[9u8; 10_000], None).await } });
     engine.test_hooks().before_commit.notified().await;
     engine.cancel_download(ROW).await.expect("the download is still in flight");
     let ended = tokio::time::timeout(Duration::from_secs(2), running).await;
@@ -245,7 +283,7 @@ async fn the_row_never_reads_downloading_100_before_the_rename() {
     // engine has listed, so without this the row reads Downloading 0 whatever the loop reports.
     engine.discover_models().await.unwrap();
     let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
-    let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+    let running = tokio::spawn({ let e = engine.clone(); async move { download_body(&e, ROW, &[9u8; 10_000], None).await } });
     engine.test_hooks().before_commit.notified().await;
     let status = engine.discover_models().await.unwrap().into_iter().find(|m| m.name == ROW).unwrap().status;
     drop(held);
@@ -465,6 +503,138 @@ fn every_read_of_the_model_slot_is_listed_with_its_reason() {
     assert_eq!(found, expected, "a read of the model slot is not listed with its reason, or a listed one is gone");
 }
 
+/// #179 condition 1: the list the generator writes is what the engine requests, line for line, with the
+/// row's size and sha256, and the diarizer last. `test_every_download_url_resolves` checks only this
+/// list against Hugging Face, so a URL the engine builds that is not in it would go unchecked.
+#[test]
+fn the_download_list_is_what_the_engine_requests() {
+    let list = include_str!("../../scripts/download_urls.tsv");
+    let lines: Vec<&str> = list.lines().collect();
+    let catalogue = crate::config::TRANSCRIBE_MODEL_CATALOG;
+    assert_eq!(
+        lines.len(),
+        catalogue.len() + 1,
+        "download_urls.tsv has {} lines, but the engine downloads {} files: every catalogue row and the diarizer",
+        lines.len(),
+        catalogue.len() + 1
+    );
+    let base = crate::config::TRANSCRIBE_MODEL_BASE_URL;
+    let d = &crate::config::SPEAKER_DIARIZER;
+    let expected = catalogue
+        .iter()
+        .map(|r| (r.name, file_url(base, r.hf_repo, r.revision, r.filename), r.size_bytes, r.sha256))
+        .chain([(crate::config::SPEAKER_DIARIZER_NAME, file_url(base, d.hf_repo, d.revision, d.filename), d.size_bytes, d.sha256)]);
+    let wrong: Vec<String> = expected
+        .zip(&lines)
+        .filter(|((_, url, size, sha), line)| **line != format!("{url}\t{size}\t{sha}"))
+        .map(|((name, url, size, sha), line)| format!("{name}: the list says {line:?}, the engine requests {url}\t{size}\t{sha}"))
+        .collect();
+    assert_eq!(wrong, Vec::<String>::new(), "download_urls.tsv is not what the engine requests");
+}
+
+/// #179 condition 3: every URL the engine builds names a full 40-hex commit, which also excludes
+/// `resolve/main`. Hugging Face resolves a short revision, so only this catches a truncated one.
+#[test]
+fn every_download_url_is_pinned_to_a_full_commit() {
+    let base = crate::config::TRANSCRIBE_MODEL_BASE_URL;
+    let d = &crate::config::SPEAKER_DIARIZER;
+    let urls = crate::config::TRANSCRIBE_MODEL_CATALOG
+        .iter()
+        .map(|r| (r.name, file_url(base, r.hf_repo, r.revision, r.filename)))
+        .chain([(crate::config::SPEAKER_DIARIZER_NAME, file_url(base, d.hf_repo, d.revision, d.filename))]);
+    let full = |segment: &str| segment.len() == 40 && segment.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let unpinned: Vec<String> = urls
+        .filter(|(_, url)| !url.split("/resolve/").nth(1).and_then(|rest| rest.split('/').next()).is_some_and(full))
+        .map(|(name, url)| format!("{name}: {url}"))
+        .collect();
+    assert_eq!(unpinned, Vec::<String>::new(), "these URLs do not name a 40-hex commit after /resolve/");
+}
+
+/// The line a stub was asked for by a download of `repo`'s `filename` at `revision`.
+fn request_line(repo: &str, revision: &str, filename: &str) -> String {
+    format!("GET /{repo}/resolve/{revision}/{filename} HTTP/1.1")
+}
+
+/// #179 condition 4, the size: a download one byte short or one byte long is refused with the size
+/// error, before the hash is read, and leaves the final path as it was: the original on a re-download,
+/// nothing on a fresh one. No temporary file is left either way.
+#[tokio::test]
+async fn a_download_of_another_length_is_refused_and_replaces_nothing() {
+    let body = vec![9u8; 10_000];
+    let mut long = body.clone();
+    long.push(9);
+    for (what, served) in [("one byte short", body[..body.len() - 1].to_vec()), ("one byte long", long)] {
+        for fresh in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let before = (!fresh).then(|| bytes(&original(dir.path())));
+            let s = stub(Reply::Body(served.clone())).await;
+            let e = download_body(&engine_at(dir.path(), &s), ROW, &body, None).await.expect_err(what);
+            let expected = format!("is {} bytes, not the 10000 its pin expects", served.len());
+            assert!(e.to_string().contains(&expected), "{what}: not the size error: {e}");
+            match before {
+                Some(before) => assert_eq!(bytes(&final_path(dir.path())), before, "{what}: the file that was there changed"),
+                None => assert!(!final_path(dir.path()).exists(), "{what}: a refused fresh download left a file at the final path"),
+            }
+            assert_eq!(partials(dir.path()), Vec::<String>::new(), "{what}: a refused download left a temporary file");
+        }
+    }
+}
+
+/// #179 condition 4, the hash: the right length with one byte flipped is refused with the hash error,
+/// naming what arrived and what the pin expects, and replaces nothing.
+#[tokio::test]
+async fn a_download_with_one_flipped_byte_is_refused_and_replaces_nothing() {
+    let body = vec![9u8; 10_000];
+    let mut flipped = body.clone();
+    flipped[5_000] ^= 1;
+    let dir = tempfile::tempdir().unwrap();
+    let before = bytes(&original(dir.path()));
+    let s = stub(Reply::Body(flipped.clone())).await;
+    let e = download_body(&engine_at(dir.path(), &s), ROW, &body, None).await.expect_err("a flipped byte is kept");
+    let expected = format!("hashes to {}, not the pinned {}", sha256_of(&flipped), sha256_of(&body));
+    assert!(e.to_string().contains(&expected), "not the hash error: {e}");
+    assert_eq!(bytes(&final_path(dir.path())), before, "the file that was there changed");
+    assert_eq!(partials(dir.path()), Vec::<String>::new(), "a refused download left a temporary file");
+}
+
+/// #179 condition 4, the caller: `download_model` asks for its row's file at the row's revision, and
+/// checks it against the row's size. The stub's 1000 bytes are no row's length.
+#[tokio::test]
+async fn download_model_requests_its_rows_pin() {
+    let row = crate::config::transcribe_model(ROW).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let s = stub(Reply::Body(vec![5u8; 1000])).await;
+    let e = engine_at(dir.path(), &s).download_model(ROW, None).await.expect_err("1000 bytes are not the row's file");
+    assert_eq!(
+        *s.requests.lock().unwrap(),
+        vec![request_line(row.hf_repo, row.revision, row.filename)],
+        "{ROW}: not the request line its pin gives"
+    );
+    let expected = format!("is 1000 bytes, not the {} its pin expects", row.size_bytes);
+    assert!(e.to_string().contains(&expected), "{ROW}: not the size error naming the row's size_bytes: {e}");
+}
+
+/// #179 condition 4, the diarizer: its method asks for its own file at its own revision, and checks it
+/// against its own size and sha256. The stub streams exactly its length in zeros, so the size passes
+/// and the hash error names the diarizer's sha256. No gate downloads the diarizer, so this is all that
+/// holds the values the method passes.
+#[tokio::test]
+async fn the_diarizers_download_requests_its_own_pin() {
+    let d = &crate::config::SPEAKER_DIARIZER;
+    let dir = tempfile::tempdir().unwrap();
+    let s = stub(Reply::Fill { byte: 0, len: d.size_bytes as usize }).await;
+    let e = engine_at(dir.path(), &s).download_diarizer(None).await.expect_err("zeros are not the diarizer");
+    assert_eq!(
+        *s.requests.lock().unwrap(),
+        vec![request_line(d.hf_repo, d.revision, d.filename)],
+        "the diarizer: not the request line its pin gives"
+    );
+    assert!(!e.to_string().contains("its pin expects"), "the diarizer: the size error, not the hash error: {e}");
+    assert!(e.to_string().contains(&format!("not the pinned {}", d.sha256)), "the diarizer: not the hash error naming its sha256: {e}");
+    assert!(!dir.path().join(d.filename).exists(), "the refused diarizer was put in place");
+    assert_eq!(partials(dir.path()), Vec::<String>::new(), "the refused diarizer left a temporary file");
+}
+
 /// Condition 7, with real models: the old file is moonshine-tiny's, the new one whisper-tiny's, under
 /// moonshine-tiny's filename, and `arch()` tells which was installed. This way round the new file is
 /// above the row's Available floor, so after a stale mark the pre-flight answers NeedsLoad, not
@@ -484,10 +654,19 @@ mod replace_against_load {
         let dir = tempfile::tempdir().unwrap();
         let row = crate::config::transcribe_model(OLD_ROW).unwrap();
         std::fs::copy(crate::measure::measure_model("moonshine-tiny-Q8_0.gguf"), dir.path().join(row.filename)).unwrap();
-        let new = std::fs::read(crate::measure::measure_model("whisper-tiny-Q8_0.gguf")).unwrap();
-        let s = stub(Reply::Body(new)).await;
+        let s = stub(Reply::Body(new_file())).await;
         let engine = engine_at(dir.path(), &s);
         (dir, s, engine)
+    }
+
+    /// whisper-tiny's bytes, which the stub serves under moonshine-tiny's filename.
+    fn new_file() -> Vec<u8> {
+        std::fs::read(crate::measure::measure_model("whisper-tiny-Q8_0.gguf")).unwrap()
+    }
+
+    /// The replace, with a pin the new file satisfies (#179).
+    async fn replace(engine: &TranscribeEngine) -> anyhow::Result<()> {
+        download_body(engine, OLD_ROW, &new_file(), None).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -504,7 +683,7 @@ mod replace_against_load {
         let load = tokio::spawn({ let e = engine.clone(); async move { e.load_model(OLD_ROW).await } });
         hooks.load_paused.notified().await;
         hooks.pause_loads.store(false, Ordering::SeqCst);
-        let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
+        let download = tokio::spawn({ let e = engine.clone(); async move { replace(&e).await } });
         hooks.before_commit.notified().await;
         // Bounded: long enough for a commit that took no engine lock to finish its rename.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -521,7 +700,7 @@ mod replace_against_load {
         let (_dir, _s, engine) = setup().await;
         engine.load_model(OLD_ROW).await.unwrap();
         check(arch(&engine).await == "moonshine", "7b: the fixture's old model is not moonshine");
-        engine.download_model(OLD_ROW, None).await.unwrap();
+        replace(&engine).await.unwrap();
         check(!engine.is_model_loaded().await, "7b: an idle replace leaves the old model loaded");
 
         // 7e: between the rename and the unload, no read that skips a load is offered the old model,
@@ -530,7 +709,7 @@ mod replace_against_load {
         engine.load_model(OLD_ROW).await.unwrap();
         let hooks = engine.test_hooks();
         hooks.pause_after_rename.store(true, Ordering::SeqCst);
-        let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
+        let download = tokio::spawn({ let e = engine.clone(); async move { replace(&e).await } });
         hooks.rename_paused.notified().await;
         let renamed = !dir.path().join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(OLD_ROW).unwrap().filename)).exists();
         check(renamed, "7e: the pause is not after the rename");
@@ -542,7 +721,7 @@ mod replace_against_load {
         let (_dir, _s, engine) = setup().await;
         engine.load_model(OLD_ROW).await.unwrap();
         let job = crate::audio::common::DeviceCheckHoldsEngine::take();
-        engine.download_model(OLD_ROW, None).await.unwrap();
+        replace(&engine).await.unwrap();
         check(engine.transcribe_batch(vec![0.0; 16_000], None).await.is_ok(), "7c: the job lost its model");
         if engine.is_model_loaded().await {
             check(arch(&engine).await == "moonshine", "7c: the job's model changed under it");
@@ -568,7 +747,7 @@ mod replace_against_load {
             // below returns before this download has written its temporary file.
             let _ = tokio::time::timeout(Duration::from_millis(50), engine.test_hooks().before_commit.notified()).await;
             let held = crate::audio::common::acquire_engine_lifecycle_lock().await;
-            let download = tokio::spawn({ let e = engine.clone(); async move { e.download_model(OLD_ROW, None).await } });
+            let download = tokio::spawn({ let e = engine.clone(); async move { replace(&e).await } });
             engine.test_hooks().before_commit.notified().await;
             let partial = dir.join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(OLD_ROW).unwrap().filename));
             std::fs::remove_file(&partial).expect("the temporary file to remove, so the rename fails");
@@ -583,7 +762,7 @@ mod replace_against_load {
         let (dir, _s, engine) = setup().await;
         engine.load_model(OLD_ROW).await.unwrap();
         let job = crate::audio::common::DeviceCheckHoldsEngine::take();
-        engine.download_model(OLD_ROW, None).await.unwrap();
+        replace(&engine).await.unwrap();
         let r = failed_rename(engine.clone(), dir.path().to_path_buf()).await;
         check(r.is_err(), "7f: the second rename did not fail as arranged");
         check(engine.usable_model().await.is_none(), "7f: a failed second replace offers the replaced model again");

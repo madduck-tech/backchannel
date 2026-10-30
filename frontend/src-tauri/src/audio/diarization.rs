@@ -504,8 +504,8 @@ pub fn diarizer_size_mb() -> u64 {
     crate::config::SPEAKER_DIARIZER.size_mb
 }
 
-/// Fetch the diarizer weights. Reuses the catalog downloader's cancellation and
-/// partial-file cleanup without putting the diarizer in the catalog.
+/// Fetch the diarizer weights at their pin, through the engine's own method: the
+/// engine's `download_file` is private to it (#179).
 #[tauri::command]
 pub async fn download_diarizer_command() -> Result<(), String> {
     let engine = {
@@ -516,16 +516,7 @@ pub async fn download_diarizer_command() -> Result<(), String> {
     };
     let engine = engine.ok_or_else(|| "Transcription engine not initialized".to_string())?;
 
-    let diarizer = &crate::config::SPEAKER_DIARIZER;
-    engine
-        .download_file(
-            crate::config::SPEAKER_DIARIZER_NAME,
-            diarizer.hf_repo,
-            diarizer.filename,
-            None,
-        )
-        .await
-        .map_err(|e| e.to_string())
+    engine.download_diarizer(None).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
