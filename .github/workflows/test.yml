@@ -87,8 +87,12 @@ jobs:
       - name: Browser for the story tests
         run: google-chrome --version
 
+      # Each file is bounded by the runner's --file-timeout (#268). This is the backstop behind it, at
+      # T + B + 30 s rounded up, and held there by `the-test-run-is-bounded.test.mjs`: before #268 a
+      # file that never exited held this step for 79 min in silence.
       - name: Frontend unit tests
         working-directory: frontend
+        timeout-minutes: 15
         run: pnpm test
 
       - name: Frontend typecheck
