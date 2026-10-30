@@ -17,23 +17,33 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'assert-no-avx512-'));
 process.on('exit', () => fs.rmSync(base, { recursive: true, force: true }));
 
 const GOOD = { GGML_NATIVE: 'OFF', GGML_AVX2: 'ON', GGML_AVX: 'ON', GGML_FMA: 'ON', GGML_AVX512: 'OFF', GGML_AVX_VNNI: 'OFF', GGML_AMX_TILE: 'OFF' };
+// The compile flags ggml-cpu's flags.make carries on a build at the floor, as this laptop's showed.
+const FLOOR_FLAGS = 'C_FLAGS = -O3 -DNDEBUG -m64 -mavx -mavx2 -mbmi2 -mf16c -mfma -msse4.2\nCXX_FLAGS = -O3 -DNDEBUG -m64 -mavx -mavx2 -mbmi2 -mf16c -mfma -msse4.2\n';
 // A fixture repository with one tree per entry of `trees`; an entry is a cache's options, `null` for
-// a tree with no CMakeCache.txt, or a string for a cache with no GGML_NATIVE at all.
-function fixture(name, trees) {
+// a tree with no CMakeCache.txt, or a string for a cache with no GGML_NATIVE at all. An option's value
+// may carry its own type, `STRING=TRUE`; otherwise it is written as cmake writes an option, `BOOL`.
+// `flags` is the flags.make beside each cache, `null` for none; `tree` is where under target/ the
+// trees sit.
+function fixture(name, trees, { flags = FLOOR_FLAGS, tree = ['release'] } = {}) {
   const root = path.join(base, name);
   fs.mkdirSync(root, { recursive: true });
   execFileSync('git', ['init', '-q', root]);
   trees.forEach((opts, i) => {
-    const out = path.join(root, 'target', 'release', 'build', `transcribe-cpp-sys-${i}abc`, 'out', 'build');
+    const out = path.join(root, 'target', ...tree, 'build', `transcribe-cpp-sys-${i}abc`, 'out', 'build');
     fs.mkdirSync(out, { recursive: true });
     if (opts === null) return;
-    const body = typeof opts === 'string' ? opts : Object.entries(opts).map(([k, v]) => `${k}:BOOL=${v}`).join('\n');
+    const entry = ([k, v]) => (v.includes('=') ? `${k}:${v}` : `${k}:BOOL=${v}`);
+    const body = typeof opts === 'string' ? opts : Object.entries(opts).map(entry).join('\n');
     fs.writeFileSync(path.join(out, 'CMakeCache.txt'), `# This is the CMakeCache file.\nCMAKE_BUILD_TYPE:STRING=Release\n${body}\n`);
+    if (flags === null) return;
+    const dir = path.join(out, 'ggml', 'src', 'CMakeFiles', 'ggml-cpu.dir');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'flags.make'), flags);
   });
   return root;
 }
-const run = (root) => {
-  const r = spawnSync('bash', [script], { cwd: path.join(root), encoding: 'utf8' });
+const run = (root, cwd = root) => {
+  const r = spawnSync('bash', [script], { cwd, encoding: 'utf8' });
   return { status: r.status, out: r.stdout + r.stderr };
 };
 
@@ -69,6 +79,51 @@ for (const option of ['GGML_AVX512', 'GGML_AVX512_VNNI', 'GGML_AVX_VNNI', 'GGML_
     assert.doesNotMatch(r.out, /NATIVE: |AVX2: /);
   });
 }
+
+// CMake caches -DGGML_AVX512=1 as `:BOOL=1`, and a -D with a type of its own keeps it, and if() takes the
+// branch for every value that is not a false constant (#289's gate adversary, measured with cmake).
+for (const [option, value] of [['GGML_AVX512', '1'], ['GGML_AVX512', 'STRING=ON'], ['GGML_AMX_TILE', 'STRING=TRUE'], ['GGML_AVX_VNNI', 'BOOL=YES']]) {
+  test(`${option}:${value.includes('=') ? value : 'BOOL=' + value} counts as on`, () => {
+    const r = run(fixture(`spelled-${option}-${value.replace(/\W/g, '')}`, [{ ...GOOD, [option]: value }]));
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, new RegExp(`ABOVE THE FLOOR: .*${option}:`));
+  });
+}
+
+test("CMake's false constants, in any type and case, are off", () => {
+  const r = run(fixture('false-constants', [{ ...GOOD, GGML_AVX512: '0', GGML_AVX512_VNNI: 'STRING=no', GGML_AVX_VNNI: 'BOOL=False', GGML_AMX_TILE: 'STRING=AMX-NOTFOUND' }]));
+  assert.equal(r.status, 0, r.out);
+});
+
+test('compile flags above the floor are red, whatever the options say', () => {
+  for (const [name, flag] of [['native', '-march=native'], ['avx512f', '-mavx512f'], ['skylake', '-march=skylake-avx512']]) {
+    const r = run(fixture(`flags-${name}`, [GOOD], { flags: FLOOR_FLAGS.replace('-msse4.2\n', `-msse4.2 ${flag}\n`) }));
+    assert.equal(r.status, 1, `${flag}: ${r.out}`);
+    assert.match(r.out, new RegExp(`COMPILE FLAGS: .*${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  }
+  const plain = run(fixture('flags-x86-64-v3', [GOOD], { flags: FLOOR_FLAGS.replace('-m64', '-m64 -march=x86-64-v3') }));
+  assert.equal(plain.status, 0, plain.out);
+});
+
+test('a cache with no flags.make beside it is red: its flags were not read', () => {
+  const r = run(fixture('no-flags', [GOOD], { flags: null }));
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /COMPILE FLAGS: no ggml-cpu flags\.make beside/);
+});
+
+test('a tree under target/<triple>/release is read, as a --target build writes it', () => {
+  const r = run(fixture('triple', [{ ...GOOD, GGML_AVX2: 'OFF' }], { tree: ['x86_64-unknown-linux-gnu', 'release'] }));
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /AVX2: target\/x86_64-unknown-linux-gnu\/release\/build\/transcribe-cpp-sys-0abc/);
+});
+
+test('run from a subdirectory, as gate entry 3 runs it from frontend/, it reads the root target/', () => {
+  const root = fixture('from-frontend', [GOOD]);
+  fs.mkdirSync(path.join(root, 'frontend'), { recursive: true });
+  const r = run(root, path.join(root, 'frontend'));
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /OK: 1 cache\(s\)/);
+});
 
 test('no CMakeCache.txt, and caches that define no GGML_NATIVE, verify nothing and fail', () => {
   const none = run(fixture('no-cache', [null]));

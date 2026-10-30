@@ -130,7 +130,7 @@ for (const [needle, what] of [
     `gate entry 3 runs assert-no-avx512.sh at position ${check}, not between the build (${build}) and .built-from (${provenance})`);
   const deb = workflowStep('tauri build --bundles deb').keys.run;
   assert.match(String(deb), /TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF \.\/node_modules\/\.bin\/tauri build --bundles deb/,
-    'the .deb is built without the flag, so it reconfigures ggml for the runner');
+    'the .deb step does not carry the flag itself: it would then build at the floor only because the AppImage step configured the tree first, and CMake kept that cache');
 }
 
 // --- 4. the job cannot be quietly switched off ------------------------------------------
