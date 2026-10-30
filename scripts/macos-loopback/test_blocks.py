@@ -174,6 +174,15 @@ class TheDecoderReportsEachMutation(Fixture):
         self.assertEqual((d["missing"], d["undecodable"], d["unexpected"]), ([], [], []))
         self.assertEqual(d["corrected"], 1)
 
+    def test_audio_before_the_stream_is_outside_the_window(self):
+        # A preamble that is signal but not blocks (as #291's markers before L1's stream): its
+        # failed positions are reported apart, not as undecodable blocks of the stream.
+        rng = np.random.default_rng(4)
+        pre = np.concatenate([self.mk.pink_noise(5 * 48000, rng), np.zeros(48000)])
+        d = self.decode("preamble", np.concatenate([pre, self.clean]))
+        self.assertEqual((d["undecodable"], d["missing"], d["counted"]), ([], [], N))
+        self.assertGreater(d["undecodable_outside"], 0)
+
     def test_b6a_the_wrong_direction_is_reported(self):
         d = self.decode("b6a", self.clean, "--direction", "1")
         self.assertEqual(len(d["wrong_direction"]), N)

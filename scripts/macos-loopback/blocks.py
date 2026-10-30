@@ -433,7 +433,12 @@ def cmd_decode(a):
         "unexpected": [{"n": r[3] - first, "pos_s": round(r[0] / RATE, 4)} for r in unexpected],
         "unanchored": len(unanchored),
         "wrong_direction": sorted({r[3] - first for r in counted if r[2] != direction}),
-        "undecodable": [round(r[0] / RATE, 4) for r in rows if r[1] == "undecodable"],
+        # Inside the window: positions before the first counted block or after the last are not
+        # the stream's (L1 at e8a6880 counted 520 in a marker preamble, and 0 inside the window).
+        "undecodable": [round(r[0] / RATE, 4) for r in rows if r[1] == "undecodable"
+                        and counted and counted[0][0] < r[0] < counted[-1][0]],
+        "undecodable_outside": sum(1 for r in rows if r[1] == "undecodable"
+                                   and not (counted and counted[0][0] < r[0] < counted[-1][0])),
         # Inside the window only: the silence before the first block and after the last is the
         # recording's edge, not a loss (tail loss is reported apart).
         "no_signal": [round(r[0] / RATE, 4) for r in rows if r[1] == "no_signal"
