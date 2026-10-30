@@ -18,6 +18,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -271,10 +272,97 @@ class TheSource(unittest.TestCase):
         self.assertEqual(gen.pinned_revision(entry.format("4d7c1cc" + "0" * 33) * 2), "4d7c1cc" + "0" * 33)
 
     def test_the_committed_catalog_is_what_the_records_generate(self):
-        """The committed array is the generator's output from the records alone, so no card, header
-        or hand edit contributes to it."""
+        """The committed array, the diarizer's pin and the download list are the generator's output from
+        the records and the committed walk alone, so no card, header or hand edit contributes to them.
+        Offline: the pins are selected from `hf_revisions.json`, and its two lists are applied (#179)."""
+        entries, diarizer = gen.generate_with_diarizer(RECORDS)
         region = CONFIG[CONFIG.index(gen.BEGIN) : CONFIG.index(gen.END) + len(gen.END)]
-        self.assertEqual(region, gen.render(gen.generate(RECORDS)))
+        self.assertEqual(region, gen.render(entries))
+        pin = CONFIG[CONFIG.index(gen.PIN_BEGIN) : CONFIG.index(gen.PIN_END) + len(gen.PIN_END)]
+        self.assertEqual(pin, gen.render_diarizer_pin(diarizer))
+        self.assertEqual(gen.DOWNLOAD_URLS.read_text(encoding="utf-8"), gen.render_urls(entries, diarizer))
+
+
+# The pinned transcribe.cpp commit's date as git prints it, and a commit HF dates seven hours earlier
+# by the clock but after it as an instant: 14:00Z is after 13:34:40Z, and before "21:34:40" as text.
+PIN = "2026-10-22T21:34:40+08:00"
+AFTER_THE_PIN = "2026-10-22T14:00:00.000Z"
+SIZE = 1000
+
+
+def commit(name, date, sha="a" * 64, size=SIZE):
+    """A recorded commit: `name` padded to 40 characters, as a revision is."""
+    return {"commit": name.ljust(40, "0"), "date": date, "size": size, "sha256": sha}
+
+
+def walked(rows, heads):
+    """A recorded walk over fixture rows. `rows` is key -> commits; `heads` is key -> the head commit's
+    name. Each key is its own repository."""
+    return {
+        "pin_date": PIN,
+        "rows": rows,
+        "heads": {key: {"commit": name.ljust(40, "0"), "date": "2026-10-29T00:00:00.000Z"} for key, name in heads.items()},
+    }
+
+
+def pins(rows, heads, off_head=None, collisions=None):
+    targets = [(key, key, SIZE) for key in rows]
+    return gen.pin_rows(targets, walked(rows, heads), off_head or {}, collisions or {})
+
+
+class TheSelection(unittest.TestCase):
+    """The rule over recorded fixtures (#179 condition 2). Each refusal is asserted by its own message."""
+
+    def test_the_date_bound_is_compared_as_instants(self):
+        """The newest commit holding the file is after the pin, so the older one is chosen. Deleting the
+        date filter chooses the later one, and so does comparing the two dates as strings."""
+        rows = {"row": [commit("later", AFTER_THE_PIN), commit("older", "2026-10-01T00:00:00.000Z")]}
+        got = pins(rows, {"row": "later"}, off_head={("row", "older".ljust(40, "0")): "fixture"})
+        self.assertEqual(got["row"][0], "older".ljust(40, "0"))
+
+    def test_no_commit_at_the_size_is_refused(self):
+        rows = {"row": [commit("other", "2026-10-01T00:00:00.000Z", size=SIZE + 1)]}
+        with self.assertRaisesRegex(SystemExit, r"^row: no commit dated on or before .* holds its file at 1000 bytes"):
+            pins(rows, {"row": "other"})
+
+    def test_two_files_at_the_size_unlisted_are_refused(self):
+        rows = {"row": [commit("newer", "2026-10-02T00:00:00.000Z", sha="b" * 64), commit("older", "2026-10-01T00:00:00.000Z")]}
+        with self.assertRaisesRegex(SystemExit, r"^row: 2 different files at 1000 bytes .*List it in COLLISIONS"):
+            pins(rows, {"row": "newer"})
+
+    def test_a_listed_collision_is_accepted_by_its_bytes_not_its_revision(self):
+        """(w): the entry names the newest bytes. It still approves them when a later commit holding the
+        same bytes becomes head, which an entry keyed by revision would not."""
+        listed = {("row", "b" * 64): "fixture"}
+        rows = {"row": [commit("newer", "2026-10-02T00:00:00.000Z", sha="b" * 64), commit("older", "2026-10-01T00:00:00.000Z")]}
+        self.assertEqual(pins(rows, {"row": "newer"}, collisions=listed)["row"][:2], ("newer".ljust(40, "0"), "b" * 64))
+        rows["row"].insert(0, commit("card", "2026-10-03T00:00:00.000Z", sha="b" * 64))
+        self.assertEqual(pins(rows, {"row": "card"}, collisions=listed)["row"][:2], ("card".ljust(40, "0"), "b" * 64))
+
+    def test_a_collision_entry_for_a_row_with_one_file_is_stale(self):
+        """(x)"""
+        rows = {"row": [commit("only", "2026-10-01T00:00:00.000Z")]}
+        with self.assertRaisesRegex(SystemExit, r"^COLLISIONS lists row, whose file has one sha256 at its size: stale"):
+            pins(rows, {"row": "only"}, collisions={("row", "a" * 64): "fixture"})
+
+    def test_a_collision_entry_for_other_bytes_is_stale_beside_the_right_one(self):
+        """(y): the older bytes listed first, the chosen ones after."""
+        rows = {"row": [commit("newer", "2026-10-02T00:00:00.000Z", sha="b" * 64), commit("older", "2026-10-01T00:00:00.000Z")]}
+        listed = {("row", "a" * 64): "the older bytes", ("row", "b" * 64): "the chosen bytes"}
+        with self.assertRaisesRegex(SystemExit, rf"^COLLISIONS lists row at {'a' * 64}, but its pin is {'b' * 64}: stale"):
+            pins(rows, {"row": "newer"}, collisions=listed)
+
+    def test_an_off_head_entry_for_a_row_back_on_head_is_stale(self):
+        rows = {"row": [commit("head", "2026-10-01T00:00:00.000Z")]}
+        with self.assertRaisesRegex(SystemExit, rf"^OFF_HEAD lists row at {'head'.ljust(40, '0')}, which is its repository's head again: stale"):
+            pins(rows, {"row": "head"}, off_head={("row", "head".ljust(40, "0")): "fixture"})
+
+    def test_an_off_head_entry_at_another_revision_is_stale_beside_the_right_one(self):
+        """(t): the earlier revision listed first, the one now chosen after it."""
+        rows = {"row": [commit("chosen", "2026-10-02T00:00:00.000Z"), commit("earlier", "2026-10-01T00:00:00.000Z", size=SIZE + 1)]}
+        listed = {("row", "earlier".ljust(40, "0")): "an old pin", ("row", "chosen".ljust(40, "0")): "the pin"}
+        with self.assertRaisesRegex(SystemExit, rf"^OFF_HEAD lists row at {'earlier'.ljust(40, '0')}, but it is now pinned to {'chosen'.ljust(40, '0')}: stale"):
+            pins(rows, {"row": "head"}, off_head=listed)
 
 
 class TheUnit(unittest.TestCase):
@@ -398,17 +486,23 @@ class TheRepositories(unittest.TestCase):
         )
 
 
-def base_url():
-    return re.search(r'pub const TRANSCRIBE_MODEL_BASE_URL: &str = "([^"]+)";', CONFIG)[1]
-
-
 def diarizer():
     block = CONFIG[CONFIG.index("pub const SPEAKER_DIARIZER: DiarizerModel") :]
     return re.search(r'hf_repo: "([^"]+)"', block)[1], re.search(r'filename: "([^"]+)"', block)[1]
 
 
-def final_status(url, attempts=3):
-    """The status a HEAD ends on after following every redirect.
+class _Unfollowed(urllib.request.HTTPRedirectHandler):
+    """Hand every redirect back as its answer: `x-linked-*` ride on the hop that redirects to the CDN."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(_Unfollowed)
+
+
+def hop(url, attempts=3):
+    """One HEAD, as (status, headers), without following a redirect.
 
     A transient failure is retried, up to `attempts` in all, with a pause between: a connection reset or
     refusal at send or at the response (measured on 2026-10-26: Hugging Face reset one of 97 parallel
@@ -419,15 +513,52 @@ def final_status(url, attempts=3):
     for attempt in range(attempts):
         last = attempt == attempts - 1
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return response.status
+            with OPENER.open(request, timeout=60) as response:
+                return response.status, response.headers
         except urllib.error.HTTPError as e:
+            e.close()
             if last or not (e.code == 429 or e.code >= 500):
-                return e.code
+                return e.code, e.headers
         except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError):
             if last:
                 raise
         time.sleep(2 * (attempt + 1))
+
+
+def chain(url, limit=10):
+    """Every hop from `url`, as (url, status, headers), each `Location` followed by hand."""
+    hops = []
+    while len(hops) < limit:
+        status, headers = hop(url)
+        hops.append((url, status, headers))
+        if not (300 <= status < 400 and headers.get("Location")):
+            return hops
+        url = urllib.parse.urljoin(url, headers["Location"])
+    raise AssertionError(f"more than {limit} redirects from {hops[0][0]}")
+
+
+def final_status(url):
+    """The status a HEAD ends on after following every redirect."""
+    return chain(url)[-1][1]
+
+
+def check_line(line):
+    """What is wrong with one line of `download_urls.tsv` against Hugging Face, or None: the chain must end
+    in 200, and the hop carrying `x-linked-*` must give the line's size and sha256. MOSS's first hop is a
+    rename's 307 without them, so the hop is found, not assumed to be the first."""
+    url, size, sha256 = line.split("\t")
+    hops = chain(url)
+    if hops[-1][1] != 200:
+        return f"{url}: the chain ends in {hops[-1][1]}, after {len(hops)} hop(s)"
+    linked = [h for _, _, h in hops if h.get("x-linked-size")]
+    if not linked:
+        return f"{url}: no hop carries x-linked-size"
+    got_size, got_etag = linked[0]["x-linked-size"], linked[0].get("x-linked-etag", "").strip('"')
+    if got_size != size:
+        return f"{url}: x-linked-size {got_size}, the list says {size}"
+    if got_etag != sha256:
+        return f"{url}: x-linked-etag {got_etag}, the list says {sha256}"
+    return None
 
 
 class TheRetry(unittest.TestCase):
@@ -469,15 +600,18 @@ class TheRetry(unittest.TestCase):
 
 class TheDownloads(unittest.TestCase):
     def test_every_download_url_resolves(self):
-        """Every row's file and the diarizer's, at the URL the engine builds, ends on a 200. Every gate
-        that runs this depends on Hugging Face answering."""
-        files = [(r["hf_repo"], r["filename"]) for r in ROWS] + [diarizer()]
-        urls = [f"{base_url()}/{repo}/resolve/main/{filename}" for repo, filename in files]
+        """Every line of `download_urls.tsv`, which a Rust test holds to the URLs the engine builds (#179):
+        the file at its pinned revision is the length and sha256 the line says, and the chain ends in 200.
+        A network error fails this, never skips it, so every gate that runs it depends on Hugging Face
+        answering."""
+        text = gen.DOWNLOAD_URLS.read_text(encoding="utf-8")
+        lines = text.splitlines()
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-            statuses = list(pool.map(final_status, urls))
-        bad = [f"{status} {url}" for status, url in zip(statuses, urls) if status != 200]
-        self.assertEqual(bad, [])
-        self.assertEqual(len(statuses), len(ROWS) + 1)
+            problems = list(pool.map(check_line, lines))
+        self.assertEqual([p for p in problems if p], [])
+        # Counted apart from the reader: a reader that dropped a line would check one URL fewer.
+        self.assertEqual(len(problems), text.count("\n"), "the URLs checked are not every line of the list")
+        self.assertEqual(len(problems), len(ROWS) + 1)
 
 
 if __name__ == "__main__":
