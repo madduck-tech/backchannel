@@ -3,8 +3,10 @@
 // The fonts were chosen from headless Chrome renders, and the application draws with WebKitGTK here
 // (WKWebView and WebView2 elsewhere). `document.fonts.load(font, text)` is the engine's own answer to
 // "which faces would draw this text": it loads them and returns those whose unicode-range covers the
-// text. So for each of the ten faces it asks twice: for 'a0ж→', which must be that face, loaded from
-// the shipped file; and for each symbol the product owner left to the system, which must match no face.
+// text. So for each of the ten faces it asks twice: for 'a0ж→', which must be that face, loaded at its
+// weight and style; and for each symbol the product owner left to the system, which must match no face.
+// It does not see which file a face came from: fonts-ship-in-the-repository.test.mjs reads that from
+// fonts.css.
 const done = arguments[arguments.length - 1];
 const FACES = [
   ['IBM Plex Sans', '400', 'normal'], ['IBM Plex Sans', '500', 'normal'], ['IBM Plex Sans', '600', 'normal'],

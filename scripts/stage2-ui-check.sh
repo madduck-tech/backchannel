@@ -202,7 +202,7 @@ done
   die "gave up waiting for the UI"
 }
 
-# --- the typefaces are the shipped files, and the symbols stay the system's (#264) --------
+# --- the ten faces load at their weights and styles, and the symbols stay the system's (#264)
 # Asked of WebKit, which is what draws this build, not of the Chrome the fonts were chosen in. For each
 # of the ten faces: text must be drawn by exactly that face, loaded; each symbol by none of them.
 FONTS=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
@@ -214,7 +214,7 @@ except Exception: v = None
 print(v if isinstance(v, str) else json.dumps({"error": "the probe did not answer: " + repr(v)[:200]}))')
 FONT_VERDICT=$(printf '%s' "$FONTS" | python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-verdict.py")
 say "fonts: $FONT_VERDICT"
-case "$FONT_VERDICT" in ok:*) ;; *) die "the typefaces are not what fonts.css ships: $FONT_VERDICT" ;; esac
+case "$FONT_VERDICT" in ok:*) ;; *) die "the faces fonts.css declares do not load as declared, or a face draws a symbol: $FONT_VERDICT" ;; esac
 
 # --- the settings tabs open -------------------------------------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button in the DOM"
