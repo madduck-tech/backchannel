@@ -315,10 +315,12 @@ class TheSelection(unittest.TestCase):
 
     def test_the_date_bound_is_compared_as_instants(self):
         """The newest commit holding the file is after the pin, so the older one is chosen. Deleting the
-        date filter chooses the later one, and so does comparing the two dates as strings."""
-        rows = {"row": [commit("later", AFTER_THE_PIN), commit("older", "2026-10-01T00:00:00.000Z")]}
-        got = pins(rows, {"row": "later"}, off_head={("row", "older".ljust(40, "0")): "fixture"})
-        self.assertEqual(got["row"][0], "older".ljust(40, "0"))
+        date filter chooses the later one, and so does comparing the two dates as strings. The pure
+        selection alone, so the list checks after it cannot answer first."""
+        commits = [commit("later", AFTER_THE_PIN), commit("older", "2026-10-01T00:00:00.000Z")]
+        older = "older".ljust(40, "0")
+        got = gen.select("row", SIZE, commits, "later".ljust(40, "0"), PIN, {("row", older): "fixture"}, {})
+        self.assertEqual(got[0], older)
 
     def test_no_commit_at_the_size_is_refused(self):
         rows = {"row": [commit("other", "2026-10-01T00:00:00.000Z", size=SIZE + 1)]}

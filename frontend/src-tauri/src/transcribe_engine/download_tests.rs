@@ -564,7 +564,8 @@ async fn a_download_of_another_length_is_refused_and_replaces_nothing() {
     let mut long = body.clone();
     long.push(9);
     for (what, served) in [("one byte short", body[..body.len() - 1].to_vec()), ("one byte long", long)] {
-        for fresh in [true, false] {
+        // The re-download first: a check that ran after the rename would replace the original.
+        for fresh in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let before = (!fresh).then(|| bytes(&original(dir.path())));
             let s = stub(Reply::Body(served.clone())).await;
