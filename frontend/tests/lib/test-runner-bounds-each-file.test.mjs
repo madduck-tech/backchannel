@@ -183,19 +183,20 @@ try {
     check(sleepsWith(r.marks.A).length === 0, "no /proc: a's sleep is still running after the run");
   }
 
-  // 3. The runner ended with SIGTERM: what it ran goes with it, and is named. With f, whose sleep is
-  //    outside the file's group, so the watchdog's group kill cannot stand in for the runner's own.
+  // 3. The runner ended with SIGTERM: what it ran goes with it, and is named. With h, signalled after
+  //    its orphan is made: only the runner's poll knows that orphan, so the file's watchdog, which
+  //    also kills on the runner's death, cannot stand in for the runner's own kill.
   {
-    const r = await nested('SIGTERM', 3, [fixture('f-hides-its-marker.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGTERM', ms: S / 2 + 500 } });
-    check(r.mid.f > 0, "SIGTERM: f's sleep was not running at S/2");
+    const r = await nested('SIGTERM', 3, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signalAt: { sig: 'SIGTERM', ms: S / 2 + 500 } });
+    check(r.mid.h > 0, "SIGTERM: h's sleep was not running at S/2");
     check(r.code === 143, `SIGTERM: the runner exited ${r.code} (${r.sig}), not 143`);
-    check(new RegExp(`^✖ ${FIX}/f-hides-its-marker\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'SIGTERM: no ✖ line names the file in flight');
-    let left = sleepsWith(r.marks.F).length;
+    check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'SIGTERM: no ✖ line names the file in flight');
+    let left = sleepsWith(r.marks.H).length;
     for (let i = 0; i < 10 && left; i++) {
       await sleep(100);
-      left = sleepsWith(r.marks.F).length;
+      left = sleepsWith(r.marks.H).length;
     }
-    check(left === 0, "SIGTERM: f's sleep is still running 1 s after the runner exited");
+    check(left === 0, "SIGTERM: h's sleep is still running 1 s after the runner exited");
   }
 
   // 4. SIGHUP, which a closed terminal or a dropped session sends.
@@ -220,28 +221,31 @@ try {
     check(await gone(r.marks.F), "SIGKILL: f's sleep is still running 3 s after the runner was killed");
   }
 
-  // 8. A closed terminal: SIGHUP, and every write after it fails with EIO. Run on a real pseudo-terminal.
+  // 8. A closed terminal: SIGHUP, and every write after it fails with EIO. Run on a real pseudo-terminal,
+  //    closed after h's orphan is made, which only the runner's own kill reaches.
   {
-    const r = await nested('closed terminal', 8, ['c-detached-child.mjs', 'f-hides-its-marker.mjs'].map(fixture), {
+    const r = await nested('closed terminal', 8, ['c-detached-child.mjs', 'h-orphans-a-hidden-child.mjs'].map(fixture), {
       fileTimeout: 60_000,
       prefix: ['python3', path.join(frontend, FIX, 'close-the-terminal.py'), String((S / 2 + 500) / 1000)],
     });
-    check(r.mid.c > 0 && r.mid.f > 0, "closed terminal: c's or f's sleep was not running at S/2");
+    check(r.mid.c > 0 && r.mid.h > 0, "closed terminal: c's or h's sleep was not running at S/2");
     check(r.code !== 99, 'closed terminal: the runner was still running 20 s after its terminal closed');
-    for (const k of ['C', 'F']) {
+    for (const k of ['C', 'H']) {
       for (let i = 0; i < 20 && sleepsWith(r.marks[k]).length; i++) await sleep(100);
       check(sleepsWith(r.marks[k]).length === 0, `closed terminal: ${k.toLowerCase()}'s sleep is still running after the terminal closed`);
     }
   }
 
   // 9. A reader that goes away (`pnpm test | head -1`): the runner's next write fails with EPIPE, and
-  //    what it is running goes with it, long before the bound.
+  //    what it is running goes with it, long before the bound. The write is k's report, at 3 s, after
+  //    h's orphan is made.
   {
-    const r = await nested('EPIPE', 9, ['f-hides-its-marker.mjs', 'passes.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
+    const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
+    check(r.mid.h > 0, "EPIPE: h's sleep was not running at S/2");
     check(r.ms < 15_000, `EPIPE: the runner ran on for ${r.ms} ms after its reader went away`);
     check(r.code !== 0, `EPIPE: the runner exited ${r.code}`);
-    for (let i = 0; i < 20 && sleepsWith(r.marks.F).length; i++) await sleep(100);
-    check(sleepsWith(r.marks.F).length === 0, "EPIPE: f's sleep is still running after the runner ended");
+    for (let i = 0; i < 20 && sleepsWith(r.marks.H).length; i++) await sleep(100);
+    check(sleepsWith(r.marks.H).length === 0, "EPIPE: h's sleep is still running after the runner ended");
   }
 
   // 6. Run from a path with a space and one with a non-ASCII letter: it runs, and a failing file fails.
