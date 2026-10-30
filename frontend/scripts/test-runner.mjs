@@ -43,6 +43,12 @@ const OUTPUT_HEAD = 1024 * 1024;
 // The summary block each `node --test <file>` prints. This runner prints one for the whole run.
 const NODE_SUMMARY = /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/;
 const WATCHDOG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'test-runner-watchdog.mjs');
+// The node that runs each file's watchdog. The behaviour test points it at nothing, to take the path a
+// spawn that fails takes, which a full process table or a moved binary also takes.
+const NODE = process.env.BC_TEST_RUNNER_NODE || process.execPath;
+// The behaviour test's way into the runner's own failure paths: `report` throws inside main, and
+// `uncaught` throws outside it. Nothing else sets it.
+const FAULT = process.env.BC_TEST_RUNNER_FAULT;
 
 export function parseArgs(argv) {
   const opts = { fileTimeoutMs: 0, concurrency: 4, nodeArgs: [], patterns: [] };
@@ -211,7 +217,7 @@ function runFile(file, index, opts, running) {
   delete env.NODE_TEST_CONTEXT;
   env[MARKS] = [process.env[MARKS], token].filter(Boolean).join(' ');
   const started = Date.now();
-  const child = spawn(process.execPath, [WATCHDOG, ...opts.nodeArgs, '--test', file], {
+  const child = spawn(NODE, [WATCHDOG, ...opts.nodeArgs, '--test', file], {
     cwd: opts.cwd,
     env,
     detached: true,
@@ -247,17 +253,29 @@ function runFile(file, index, opts, running) {
 
   return new Promise((resolve) => {
     let spawnError = null;
-    child.once('error', (e) => (spawnError = e));
+    let finished = false;
+    // A spawn that fails emits `error` and never `exit`: the file then ends here, as could not be
+    // started. Before, it never ended, main never settled, and the run exited 0 (#268's gate
+    // adversary, round 4, measured with a moved node binary and a task limit).
+    child.once('error', (e) => {
+      spawnError = e;
+      // A child that never started has no pid; Node sets its exitCode to the errno (-2 for ENOENT).
+      if (!child.pid) finish(null, null);
+    });
     // On `exit`, not on the pipes, so something the file left behind cannot hold the run open. Node's
     // inner runner owns the file's own pipes, so nothing reaches these in practice; this is defence.
-    child.once('exit', async (code, sig) => {
+    child.once('exit', (code, sig) => finish(code, sig));
+    async function finish(code, sig) {
+      if (finished) return;
+      finished = true;
       run.exited = true;
       clearTimeout(timer);
       const reasons = [];
       if (spawnError) reasons.push(`could not be started: ${spawnError.message}`);
-      if (running.interrupted) return;
       let aimed;
-      if (run.timedOut) {
+      if (spawnError && !child.pid) {
+        aimed = new Map();
+      } else if (run.timedOut) {
         aimed = new Map([...run.aimed, ...killFile(run, opts.procRoot)]);
         reasons.push(`still running after the ${opts.fileTimeoutMs} ms bound for one file`);
       } else {
@@ -278,7 +296,7 @@ function runFile(file, index, opts, running) {
       child.stderr.destroy();
       running.delete(run);
       resolve({ file, ms: Date.now() - started, ok: reasons.length === 0, reasons, output: outputOf(run) });
-    });
+    }
   });
 }
 
@@ -297,28 +315,19 @@ function body(output) {
 }
 
 function report(result, write) {
+  // An abort has the output from here on; a file that ends while it drains is not reported twice.
+  if (active.aborting) return;
+  if (FAULT === 'report') throw new Error('a fault injected into report()');
+  if (FAULT === 'uncaught') {
+    setTimeout(() => {
+      throw new Error('a fault injected outside main');
+    });
+  }
   const text = body(result.output);
   if (text) write(`${text}\n`);
   write(result.ok ? `✔ ${result.file} — ${result.ms} ms\n` : `✖ ${result.file} — ${result.ms} ms: ${result.reasons.join('; ')}\n`);
 }
 
-/**
- * Write all of `text` to `fd`. A full non-blocking pipe throws EAGAIN, which is not a reader gone:
- * it is waited out for up to 2 s. Returns false once the reader or the terminal is gone.
- */
-function writeAll(fd, text) {
-  const buf = Buffer.from(text);
-  const until = Date.now() + 2000;
-  for (let off = 0; off < buf.length; ) {
-    try {
-      off += fs.writeSync(fd, buf, off);
-    } catch (e) {
-      if (e.code !== 'EAGAIN' || Date.now() > until) return false;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  return true;
-}
 
 // What an abort needs, whichever path reaches it: a signal, an output error, an exception, or main's
 // own rejection.
@@ -329,19 +338,39 @@ const active = { running: new Set(), procRoot: '/proc', aborting: false };
  * sends SIGHUP and then fails every write with EIO, a reader that went away (`| head -1`) fails it
  * with EPIPE, and a write placed before the kills threw and nothing was killed (round 2, measured
  * with a real pty). A SIGKILL cannot be handled here: each file's watchdog answers it.
+ *
+ * The report goes through the same streams as everything before it, so its lines keep their place,
+ * and the runner exits once they have drained, or once nothing has moved for 2 s: a reader that has
+ * stopped is waited for, one that is gone is not. Synchronous writes were tried and dropped: a 16 MiB
+ * report written that way stopped the poll for as long as it took, and an orphan made meanwhile was
+ * never seen (#268, round 5, measured).
  */
 function abort(why, code, error) {
   if (active.aborting) return;
   active.aborting = true;
   const running = active.running;
-  running.interrupted = true;
   for (const run of running) killFile(run, active.procRoot);
-  for (const run of running) {
-    const text = body(outputOf(run));
-    if (!writeAll(1, `${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`)) break;
+  try {
+    for (const run of running) {
+      const text = body(outputOf(run));
+      process.stdout.write(`${text ? `${text}\n` : ''}✖ ${run.file}: ${why}; what was found of it was killed\n`);
+    }
+    if (error) process.stderr.write(`test-runner: ${error.stack ?? error}\n`);
+  } catch {
+    // the terminal or the reader is gone
   }
-  if (error) writeAll(2, `test-runner: ${error.stack ?? error}\n`);
-  process.exit(code);
+  let pending = Infinity;
+  let moved = Date.now();
+  setInterval(() => {
+    const now = process.stdout.writableLength + process.stderr.writableLength;
+    if (now === 0) process.exit(code);
+    if (now < pending) {
+      pending = now;
+      moved = Date.now();
+    } else if (Date.now() - moved > 2000) {
+      process.exit(code);
+    }
+  }, 20);
 }
 
 export async function main(argv, { cwd = process.cwd(), procRoot = process.env.BC_TEST_PROC_ROOT || '/proc', write = (s) => process.stdout.write(s) } = {}) {
@@ -367,7 +396,12 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
   // `on`, not `once`: a closed terminal sends SIGHUP twice, once from the terminal and once from its
   // shell, and with `once` the second took the default action halfway through the abort (#268's gate
   // adversary, round 3). A repeat while the abort runs is ignored by the abort itself.
-  for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) process.on(sig, () => abort(`the runner received ${sig}`, code));
+  // The signals whose default ends a process and that a person or a tool sends: ^C, ^\\, a closed
+  // terminal, `kill`, and SIGUSR2. Others (SIGUSR1 is Node's inspector) are left alone; the watchdog
+  // answers a runner they end, except for what only this runner's poll knew.
+  for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGQUIT', 131], ['SIGUSR2', 140], ['SIGTERM', 143]]) {
+    process.on(sig, () => abort(`the runner received ${sig}`, code));
+  }
   process.stdout.on('error', (e) => abort(`the runner's output failed (${e.code})`, 1));
   process.on('uncaughtException', (e) => abort('the runner failed while this file ran', 1, e));
 
@@ -395,10 +429,10 @@ export async function main(argv, { cwd = process.cwd(), procRoot = process.env.B
 // percent-encoded, so against a raw `argv[1]` a path with a space or a non-ASCII letter never matched,
 // and `pnpm test` exited 0 having run nothing (#268's gate adversary, measured).
 //
-// The status is set, not exited with: process.exit dropped what was still queued for a pipe, so a
-// last report over 64 KiB lost the summary (round 3, measured with `| cat`). A rejection goes through
-// the abort, so a bug in the runner still kills what is running.
+// The status is 1 until main has said otherwise, so a run whose loop drains without main settling
+// cannot exit 0. A rejection goes through the abort, so a bug in the runner still kills what is running.
 if (process.argv[1] && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  process.exitCode = 1;
   main(process.argv.slice(2)).then(
     (code) => {
       process.exitCode = code;

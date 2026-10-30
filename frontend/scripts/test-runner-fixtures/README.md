@@ -21,6 +21,7 @@ anything, so no run can fall back to a marker another run uses.
 | `i-kills-its-runner.mjs` | no `node:test`; ends its own `node --test` with SIGKILL, then exits 0. The watchdog reports 137 |
 | `j-prints-a-lot.mjs` | no `node:test`; 20 MiB of output, past the runner's 16 MiB cap |
 | `k-passes-late.mjs` | no `node:test`; passes after 3 s, so its report is written once h's orphan exists |
+| `passes.mjs` | ends by itself after about a second |
+| `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe |
 
 `close-the-terminal.py` is not a fixture: it runs a command on a pseudo-terminal and closes it, for the test's closed-terminal case.
-| `passes.mjs` | ends by itself after about a second |

@@ -63,11 +63,11 @@ const kill = (pid) => {
 function marksFor(n) {
   return Object.fromEntries(['A', 'C', 'D', 'E', 'F', 'H'].map((k, i) => [k, `9${process.pid}${n}${i}`]));
 }
-const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 const outputs = [];
 
-async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt } = {}) {
+async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt, pauseStdout } = {}) {
   const marks = marksFor(n);
   const stamp = path.join(tmp, `stamp-${n}`);
   const stampH = path.join(tmp, `stamp-h-${n}`);
@@ -86,8 +86,12 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   const command = [process.execPath, runner, `--file-timeout=${fileTimeout}`, '--concurrency=4', ...files];
   const child = spawn(prefix[0] ?? command[0], [...prefix.slice(1), ...(prefix.length ? command : command.slice(1))], { cwd: frontend, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
+  let err = '';
   child.stdout.on('data', (d) => (out += d));
-  child.stderr.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => {
+    out += d;
+    err += d;
+  });
   const ended = new Promise((resolve) => {
     child.once('exit', (code, sig) => resolve({ code, sig }));
     // Without this, a missing python3 threw past the `finally` and left the temp dir behind.
@@ -109,6 +113,11 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   });
   // A reader that goes away: the runner's next write fails with EPIPE.
   if (closeStdoutAt) setTimeout(() => child.stdout.destroy(), closeStdoutAt).unref();
+  // A reader that stops for a while and then goes on: the runner's write meets a full pipe.
+  if (pauseStdout) {
+    setTimeout(() => child.stdout.pause(), pauseStdout.from).unref();
+    setTimeout(() => child.stdout.resume(), pauseStdout.to).unref();
+  }
   for (const { sig, ms } of signals) {
     setTimeout(() => {
       try {
@@ -131,16 +140,13 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   // On `exit`, not on the pipes: a holder this test does not know of could keep them open.
   const { code, sig, error } = await ended;
   check(!error, `${name}: the nested run could not be started: ${error?.message}`);
-  // Read at once: a kill the runner made before it exited has taken effect by now, and a process
-  // killed later (by a file's watchdog, up to 500 ms on) has not.
-  const leftAtExit = Object.fromEntries(Object.entries(marks).map(([k, m]) => [k, sleepsWith(m).length]));
   clearTimeout(deadline);
   const ms = Date.now() - started;
   child.stdout.destroy();
   child.stderr.destroy();
   check(!deadlineFired, `${name}: the nested run was still going at ${DEADLINE_MS} ms and this test's deadline ended it`);
   outputs.push({ name, out });
-  return { code, sig, ms, out, mid: await mid, marks, leftAtExit };
+  return { code, sig, ms, out, err, mid: await mid, marks };
 }
 
 const fixture = (f) => `${FIX}/${f}`;
@@ -175,6 +181,7 @@ try {
     const r = await nested('f-j', 7, ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs', 'i-kills-its-runner.mjs', 'j-prints-a-lot.mjs'].map(fixture));
     check(r.mid.f > 0, "f-j: f's sleep was not running at S/2, so its absence later would mean nothing");
     check(r.mid.h > 0, "f-j: h's sleep was not running at S/2, so its absence later would mean nothing");
+    check(r.mid.hOrphaned, "f-j: h's helper had not exited by S/2, so its sleep was not yet an orphan");
     for (const f of ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs']) {
       check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `f-j: no ✖ line names ${f} at its bound, everything killed`);
     }
@@ -183,7 +190,6 @@ try {
     check(line(fixture('i-kills-its-runner.mjs'), 'exited 137').test(r.out), "f-j: no ✖ line names i for its runner's SIGKILL");
     check(/^… [0-9]+ bytes of its output were dropped here$/m.test(r.out), "f-j: j's report does not say its output was cut");
     check(/^j: the first line$/m.test(r.out), "f-j: j's first line was dropped, where an early error would be");
-    // Last, after j's 16 MiB report: a runner that exits with output still queued for its pipe loses it.
     check(/^ℹ files 4, passed 1, failed 3, /m.test(r.out), 'f-j: the run\'s summary line did not arrive');
     check(new RegExp(`^✔ ${FIX}/j-prints-a-lot\\.mjs — `, 'm').test(r.out), 'f-j: j did not pass');
   }
@@ -283,6 +289,53 @@ try {
       check(r.code === 1, `from "${dir}": the runner exited ${r.code}, not 1, on a file that fails`);
       check(line(failing, 'exited 1').test(r.out), `from "${dir}": no ✖ line names the failing file`);
     }
+  }
+  // 10. A spawn that fails, as a full process table or a moved node binary makes it: each file is
+  //     named as never started, and the run fails, where it once exited 0 having run nothing.
+  {
+    const r = await nested('spawn fails', 10, ['passes.mjs', 'g-ends-its-child-soon.mjs'].map(fixture), { env: { BC_TEST_RUNNER_NODE: path.join(tmp, 'no-node') } });
+    check(r.code === 1, `spawn fails: the runner exited ${r.code}, not 1`);
+    for (const f of ['passes.mjs', 'g-ends-its-child-soon.mjs']) check(line(fixture(f), 'could not be started').test(r.out), `spawn fails: no ✖ line names ${f} as never started`);
+  }
+
+  // 11. SIGTERM while the reader has stopped: the abort's 400 KiB for l meet a full pipe, and are
+  //     waited out once the reader goes on, so the line naming l still arrives.
+  {
+    const r = await nested('slow reader', 11, [fixture('l-prints-then-hangs.mjs')], {
+      fileTimeout: 60_000,
+      signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }],
+      pauseStdout: { from: S / 2, to: S / 2 + 1500 },
+    });
+    check(r.code === 143, `slow reader: the runner exited ${r.code} (${r.sig}), not 143`);
+    check(new RegExp(`^✖ ${FIX}/l-prints-then-hangs\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'slow reader: no ✖ line names l after the pipe filled');
+  }
+
+  // 12 and 13. The runner's own failure, inside main and outside it: what it runs is killed, h's
+  //     orphan too, and the stack is printed. With h, faulted when k reports at 3 s, after the orphan.
+  for (const [n, fault, code] of [[12, 'report', 2], [13, 'uncaught', 1]]) {
+    const name = `fault ${fault}`;
+    const r = await nested(name, n, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, env: { BC_TEST_RUNNER_FAULT: fault } });
+    check(r.mid.hOrphaned, `${name}: h's helper had not exited by S/2, so its sleep was not yet an orphan`);
+    check(r.code === code, `${name}: the runner exited ${r.code} (${r.sig}), not ${code}`);
+    check(/a fault injected/.test(r.err) && /\n {4}at /.test(r.err), `${name}: the runner did not print the fault's stack`);
+    check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner failed while this file ran`, 'm').test(r.out), `${name}: no ✖ line names the file in flight`);
+    for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
+    check(sleepsWith(r.marks.H).length === 0, `${name}: h's sleep is still running after the runner ended`);
+  }
+
+  // 14. SIGQUIT (^\\), handled like the others.
+  {
+    const r = await nested('SIGQUIT', 14, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig: 'SIGQUIT', ms: S / 2 + 500 }] });
+    check(r.mid.hOrphaned, "SIGQUIT: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    check(r.code === 131, `SIGQUIT: the runner exited ${r.code} (${r.sig}), not 131`);
+    for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
+    check(sleepsWith(r.marks.H).length === 0, "SIGQUIT: h's sleep is still running 1 s after the runner exited");
+  }
+  // 15. j alone, so its 16 MiB report is the last thing written before the summary: a runner that
+  //     exits with output still queued for its pipe loses the end of it.
+  {
+    const r = await nested('j alone', 15, [fixture('j-prints-a-lot.mjs')]);
+    check(/^ℹ files 1, passed 1, failed 0, /m.test(r.out), "j alone: the run's summary line did not arrive after j's report");
   }
 } finally {
   ownPids().forEach(kill);
