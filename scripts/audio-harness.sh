@@ -23,9 +23,9 @@
 # `--system-only` leaves the default input alone, so a capture that follows the default -- a
 # call's microphone in a browser tab -- stays on the person's own device (#293). The source
 # then carries a per-run name, which `src-name` prints, and a pass that wants it as its
-# microphone names it in `preferred_mic_device`. Without that, the microphone is the real
-# device, which is what makes a transcript attributable: with the machine's own microphone
-# delivering silence, anything transcribed can only have come through system audio.
+# microphone names it in `preferred_mic_device`, as the core and record passes do. The two
+# channels are told apart by the two-channel passes' swapped run, not by a silent microphone:
+# the by-hand system-audio recipe that relied on the machine's own microphone is retired.
 #
 # Two things this script exists to get right, both learned the hard way:
 #

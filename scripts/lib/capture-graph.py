@@ -11,13 +11,19 @@ samples the graph every 250 ms and records, for each sample:
 - **`default.configured.audio.source`, `default.audio.source` and `default.audio.sink`.**
 - **foreign captures:** `Stream/Input/Audio` nodes that are neither the recorder's nor the pass's.
   With `--stop`, the first one stops the pass by sending TERM to its process group, so a gate never
-  runs beside someone else's capture. A node whose process has already exited is `ended`, not foreign:
-  its node outlives it for a moment, and on 2026-10-31 the harness's own level probe, sampled as its
-  `timeout` ended it, stopped entries 28–29 that way. A capture that is still recording has a process.
+  runs beside someone else's capture. A node whose pid is not on this host is `ended` for at most
+  `ENDED_GRACE` seconds, then foreign: a node outlives its process for a moment, and on 2026-10-31 the
+  harness's own level probe, sampled as its `timeout` ended it, stopped entries 28–29 that way. Past the
+  grace it is foreign, because a sandboxed browser reports a pid from its own namespace, which is not on
+  the host either, for as long as it records.
+- **the pass's own captures:** the harness's level probes, by where they are linked from. A probe that
+  targets a name WirePlumber has not resolved falls back to the default input, and would measure the
+  person's microphone.
 
     capture-graph.py nodes                                      every node: id, name, media.class, description, tab-separated
-    capture-graph.py app-linked <source> [<root-pid>]           exit 0 when <source> links into a `cpal-pulseaudio-*`
-                                                                capture whose process descends from <root-pid>
+    capture-graph.py app-linked <source> [<root-pid>]           exit 0 when an active link from <source> reaches a
+                                                                `cpal-pulseaudio-*` capture whose process descends
+                                                                from <root-pid>
     capture-graph.py inputs                                     every Stream/Input/Audio node, one per line
     capture-graph.py recorder <recorder-pid>                    the nodes linked into the recorder, one per line
     capture-graph.py watch <out.jsonl> <recorder-pid> <pass-pid> [--stop] [--app-pgid-glob GLOB]
@@ -59,6 +65,7 @@ tg = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tg)
 
 INTERVAL = 0.25
+ENDED_GRACE = 1.0
 
 
 def dump():
@@ -122,11 +129,13 @@ def ours(pid, recorder, pass_pid, pgids):
         return False
 
 
-def sample(recorder, pass_pid, pattern, since=0.0):
+def sample(recorder, pass_pid, pattern, since=0.0, ended_seen=None):
     objs = dump()
     by_id = {o.get('id'): o for o in objs}
     links = [o for o in objs if str(o.get('type', '')).endswith('Link')]
-    rec = {'t': round(time.monotonic(), 3), **defaults(objs), 'recorder_from': [], 'app_links': [], 'foreign': [], 'ended': []}
+    now = time.monotonic()
+    ended_seen = {} if ended_seen is None else ended_seen
+    rec = {'t': round(now, 3), **defaults(objs), 'recorder_from': [], 'app_links': [], 'pass_links': [], 'foreign': [], 'ended': []}
     pgids = pass_pgids(pattern, since)
     for node in capture_nodes(objs):
         who = tg.attribute(by_id, node.get('id'), pass_pid)
@@ -137,9 +146,11 @@ def sample(recorder, pass_pid, pattern, since=0.0):
             rec['recorder_from'] += into
         elif name.startswith('cpal-pulseaudio-') and ours(pid, recorder, pass_pid, pgids):
             rec['app_links'] += [{'into': name, 'from': f} for f in into]
-        elif pid is not None and not os.path.exists(f'/proc/{pid}'):
+        elif ours(pid, recorder, pass_pid, pgids):
+            rec['pass_links'] += [{'into': name, 'from': f} for f in into]
+        elif pid is not None and not os.path.exists(f'/proc/{pid}') and now - ended_seen.setdefault(node.get('id'), now) <= ENDED_GRACE:
             rec['ended'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
-        elif not ours(pid, recorder, pass_pid, pgids):
+        else:
             rec['foreign'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
     return rec
 
@@ -157,7 +168,8 @@ def cmd_app_linked(source, root):
     for l in (o for o in objs if str(o.get('type', '')).endswith('Link')):
         i = l.get('info') or {}
         into = by_id.get(i.get('input-node-id')) or {}
-        if name_of(by_id, i.get('output-node-id')) != source or not tg.props(into).get('node.name', '').startswith('cpal-pulseaudio-'):
+        # Active, as tone-graph.py reads it: a link that is still negotiating or has failed carries nothing.
+        if i.get('state') != 'active' or name_of(by_id, i.get('output-node-id')) != source or not tg.props(into).get('node.name', '').startswith('cpal-pulseaudio-'):
             continue
         if root is None or tg.descends(tg.attribute(by_id, into.get('id'), root).get('pid'), root):
             return 0
@@ -173,11 +185,12 @@ def cmd_inputs():
 def cmd_watch(out, recorder, pass_pid, stop, pattern):
     stopping = []
     since = time.time()
+    ended_seen = {}
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(1))
     with open(out, 'a') as f:
         while not stopping:
             try:
-                rec = sample(recorder, pass_pid, pattern, since)
+                rec = sample(recorder, pass_pid, pattern, since, ended_seen)
             except Exception as e:  # a sample that could not be read is recorded, never skipped silently
                 rec = {'t': round(time.monotonic(), 3), 'error': repr(e)}
             f.write(json.dumps(rec) + '\n')
@@ -246,6 +259,16 @@ def cmd_check(path, systems, default_sink, recording):
             r['_system'] = r['_system'] or system
             if not (f.startswith(RUN_SOURCE) or system):
                 bad.append(f"t={r['t']}: {link['into']} is linked from {f}, neither the harness source nor the entry's system device")
+        for link in r.get('pass_links', []):
+            if HARNESS not in (link['from'] or ''):
+                bad.append(f"t={r['t']}: the pass's own capture {link['into']} is linked from {link['from']}, not a harness node")
+    ended = {}
+    for r in samples:
+        for e in r.get('ended', []):
+            ended.setdefault(e['node'], [r['t'], r['t'], e])[1] = r['t']
+    for first, last, e in ended.values():
+        if last - first > ENDED_GRACE:
+            bad.append(f"t={first}: node {e['node']} ({e['name']}, pid {e['pid']}) was read as ended for {last - first:.2f} s, longer than an exit takes")
     linked = [r for r in samples if any((l['from'] or '').startswith(RUN_SOURCE) for l in r['app_links'])]
     sources = sorted({l['from'] for r in samples for l in r['app_links'] if (l['from'] or '').startswith(RUN_SOURCE)})
     if not samples:

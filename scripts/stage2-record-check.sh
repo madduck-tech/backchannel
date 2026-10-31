@@ -44,9 +44,19 @@ die() { printf 'stage2-record-check: %s\n' "$*" >&2; exit 1; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/harness-guard.sh"
 # From the Start click on, a failure may have recorded a microphone, so the recordings go before the
-# profile is kept (#293).
+# profile is kept (#293): the application's group first, so nothing writes after them, and with INT and
+# TERM ignored, so a second signal cannot cut the drop short.
 STARTED=0
-trap 'rc=$?; [ "$rc" -ne 0 ] && [ "$STARTED" = 1 ] && harness_guard_drop_recordings "$PROFILE"; exit $rc' EXIT
+on_exit() {
+  local rc=$1
+  trap '' INT TERM
+  if [ "$rc" -ne 0 ] && [ "$STARTED" = 1 ]; then
+    [ -s "$PIDFILE" ] && { kill -TERM -"$(cat "$PIDFILE")" 2>/dev/null; sleep 2; kill -KILL -"$(cat "$PIDFILE")" 2>/dev/null; }
+    harness_guard_drop_recordings "$PROFILE"
+  fi
+  exit "$rc"
+}
+trap 'on_exit $?' EXIT
 
 tree() {
   orca-ide computer get-app-state --app "pid:$(cat "$PIDFILE")" --no-screenshot --json 2>/dev/null \

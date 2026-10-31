@@ -94,17 +94,19 @@ fi
 
 PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""; STARTED=""
 cleanup() {
+  # A second TERM or INT during the teardown would end the shell before the recordings are dropped.
+  trap '' INT TERM
   [ -n "$SESSION" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
   [ -n "$DRIVER_PID" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null
   sleep 1
   [ -n "$DRIVER_PID" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null
+  # From the Start click on, any failure may have recorded a microphone the guard did not prove, so the
+  # recordings go as soon as the application can no longer write them, before the profile is kept (#293).
+  [ -n "$PROFILE" ] && [ "$PASSED" != 1 ] && [ -n "$STARTED" ] && { harness_guard_drop_recordings "$PROFILE" || say "the recordings in $PROFILE were NOT removed"; }
   [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
   # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
   type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
-  # From the Start click on, any failure may have recorded a microphone the guard did not prove, so the
-  # recordings go before the profile is kept (#293).
-  [ -n "$PROFILE" ] && [ "$PASSED" != 1 ] && [ -n "$STARTED" ] && { harness_guard_drop_recordings "$PROFILE" || say "the recordings in $PROFILE were NOT removed"; }
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
 }

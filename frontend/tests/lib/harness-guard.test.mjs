@@ -34,7 +34,7 @@ if a[-1] == 'default.audio.source' and st.get('effective'):
 `);
 shim('pw-dump', `
 out = [{'id': n['id'], 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': n['name'], 'media.class': n['class'], 'node.description': n.get('desc', '')}}} for n in st['nodes']]
-out += [{'id': 900 + i, 'type': 'PipeWire:Interface:Link', 'info': {'output-node-id': l[0], 'input-node-id': l[1]}} for i, l in enumerate(st['links'])]
+out += [{'id': 900 + i, 'type': 'PipeWire:Interface:Link', 'info': {'output-node-id': l[0], 'input-node-id': l[1], 'state': l[2] if len(l) > 2 else 'active'}} for i, l in enumerate(st['links'])]
 print(json.dumps(out))
 if st.get('splitDump'): print('[]')
 `);
@@ -138,16 +138,25 @@ const stranger = spawnSync('bash', ['-c', 'sleep 30 & echo $!'], { encoding: 'ut
 refuses('15b a capture of another process', afterStart(graph(), logOf(START), 1, stranger), new RegExp(`no link from '.*_4242' into the application under pid ${stranger} within 1s`));
 try { process.kill(Number(stranger), 'SIGTERM'); } catch { /* gone */ }
 
+// 16. A link that is not active carries nothing, so it does not show the harness opened.
+refuses('16 a link still negotiating', afterStart(graph({ links: [[42, 50, 'negotiating']] }), logOf(START)), /no link from '.*_4242' into the application within 1s/);
+
 // 12. A failure after Start removes the recordings before the profile is kept, wherever the application
 // saves them, and never outside a gate profile. Both passes call it on that failure: the census in
 // `the-harness-is-never-the-default-input.test.mjs` holds the wiring (6d, 6h).
 const profile = path.join(root, 'profile');
 const saved = ['rec', 'home/Documents/backchannel-recordings', 'home/backchannel-recordings'];
 for (const d of saved) { fs.mkdirSync(path.join(profile, d), { recursive: true }); fs.writeFileSync(path.join(profile, d, 'audio.mp4'), 'x'); }
+const DATA = 'home/.local/share/tech.madduck.backchannel';
+const db = ['meeting_minutes.sqlite', 'meeting_minutes.sqlite-wal', 'meeting_minutes.sqlite-shm'].map((f) => `${DATA}/${f}`);
+fs.mkdirSync(path.join(profile, DATA, 'logs'), { recursive: true });
+for (const f of db) fs.writeFileSync(path.join(profile, f), 'transcripts');
+fs.writeFileSync(path.join(profile, DATA, 'logs', 'backchannel.log'), 'evidence');
+saved.push(...db);
 fs.writeFileSync(path.join(profile, 'stdout.log'), 'evidence');
 let r = run(graph(), `harness_guard_drop_recordings ${q(profile)}`);
 const left = saved.filter((d) => fs.existsSync(path.join(profile, d)));
-if (r.status !== 0 || left.length || !fs.existsSync(path.join(profile, 'stdout.log'))) {
+if (r.status !== 0 || left.length || !fs.existsSync(path.join(profile, 'stdout.log')) || !fs.existsSync(path.join(profile, DATA, 'logs', 'backchannel.log'))) {
   failures.push(`12a the recordings were not all removed, or the log went with them: exit ${r.status}, left ${JSON.stringify(left)}, log ${fs.existsSync(path.join(profile, 'stdout.log'))}: ${r.stderr}`);
 }
 // A path that climbs out of the profile is refused; the climb lands in this test's own directory.

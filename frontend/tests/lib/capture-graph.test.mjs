@@ -63,6 +63,10 @@ broken('12 no samples', check([], ...CORE), /no samples/);
 const record = () => good().map((r) => ({ ...r, app_links: r.app_links.map((l) => (l.from === SINK ? { ...l, from: 'alsa_output.speakers' } : l)) }));
 held('13 the record pass\'s system side is the default sink of that sample', check(record(), '--system-default-sink', '--recording'));
 broken('13b a sink that is not the sample\'s default', check(at(record(), 3, { 'default.audio.sink': 'alsa_output.hdmi' }), '--system-default-sink', '--recording'), /is linked from alsa_output\.speakers, neither/);
+broken('20 a node read as ended for longer than an exit takes', check(good().map((r) => ({ ...r, ended: [{ node: 77, name: 'Firefox', pid: 160, binary: 'firefox' }] })), ...CORE), /node 77 \(Firefox, pid 160\) was read as ended for 5\.00 s/);
+held('20b one read as ended for a moment', check(at(at(good(), 2, { ended: [{ node: 77, name: 'pw-cat', pid: 160 }] }), 3, { ended: [{ node: 77, name: 'pw-cat', pid: 160 }] }), ...CORE));
+broken('21 the pass\'s own capture on the person\'s microphone', check(at(good(), 1, { pass_links: [{ into: 'pw-cat', from: MIC }] }), ...CORE), /the pass's own capture pw-cat is linked from alsa_input\.builtin/);
+held('21b and on the harness source', check(at(good(), 1, { pass_links: [{ into: 'pw-cat', from: SRC }] }), ...CORE));
 held('14 the tone sink by its prefix', check(at(good(), 4, { app_links: [{ into: APP, from: SRC }, { into: APP, from: 'backchannel_tone_sink_17_9' }] }), ...CORE));
 
 // The reader: a split dump is one graph, removals apply, and the metadata is kept.
@@ -98,9 +102,15 @@ const dead = String(spawnSync('true').pid);
 const input = (id, pid) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': `cap-${id}`, 'media.class': 'Stream/Input/Audio', 'application.process.id': pid } } });
 fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([meta, input(50, dead), input(51, live)])}\nX\n`, { mode: 0o755 });
 r = py(`rec = cg.sample(1, ${passRoot}, None); print(json.dumps([[x['pid'] for x in rec['ended']], [x['pid'] for x in rec['foreign']]]))`);
+// ... for a moment: past the grace, a pid that is not on the host is foreign, as a sandboxed browser's is.
+const late = py(`rec = cg.sample(1, ${passRoot}, None, 0.0, {50: time.monotonic() - 5}); print(json.dumps([[x['pid'] for x in rec['ended']], [x['pid'] for x in rec['foreign']]]))`);
+const [lateEnded, lateForeign] = late.status === 0 ? JSON.parse(late.stdout) : [null, []];
+if (late.status !== 0 || lateEnded.length || JSON.stringify([...lateForeign].sort()) !== JSON.stringify([Number(dead), Number(live)].sort())) {
+  failures.push(`19b a pid not on the host stayed ended past the grace: exit ${late.status}, [ended, foreign] = ${late.stdout.trim()} ${late.stderr}`);
+}
 if (r.status !== 0 || JSON.stringify(JSON.parse(r.stdout || 'null')) !== JSON.stringify([[Number(dead)], [Number(live)]])) failures.push(`19 an exited capture is not told from a live foreign one: exit ${r.status}, [ended, foreign] = ${r.stdout.trim()} (dead ${dead}, live ${live}) ${r.stderr}`);
 for (const pid of [live, passRoot]) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* gone */ } }
 
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture-graph check: holds a correct entry; breaks on a recorder off the effective default, a default naming a harness node, an application link from anything but the harness source or the entry\'s system device, no harness link, two harness sources, a recording that never took the harness with a system device, an unreadable sample, a stop or no samples; reads a split dump as one graph with its metadata, fails on an unreadable one, ignores pid files older than the watch, and tells an exited capture from a live foreign one');
+console.log('ok - capture-graph check: holds a correct entry; breaks on a recorder off the effective default, a default naming a harness node, an application link from anything but the harness source or the entry\'s system device, no harness link, two harness sources, a recording that never took the harness with a system device, an unreadable sample, a stop or no samples; reads a split dump as one graph with its metadata, fails on an unreadable one, ignores pid files older than the watch, tells an exited capture from a live foreign one for a moment and no longer, and breaks on a node ended for longer or on a probe of the pass linked from anything but a harness node');

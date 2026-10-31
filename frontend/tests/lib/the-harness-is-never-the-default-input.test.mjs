@@ -110,17 +110,25 @@ const rec = seedOf('stage2-record-check.sh');
 check('3c the record pass names it', rec.writes.length === 1 && /"preferred_mic_device":sys\.argv\[2\]/.test(rec.writes[0].text) && /"\$MIC_SEED"/.test(rec.writes[0].text),
   `the record seed is ${JSON.stringify(rec.writes.map((w) => w.text))}`);
 check('3d with the suffix', rec.assigns.length === 1 && rec.assigns[0] === 'MIC_SEED="$HARNESS_DESC (input)"', `MIC_SEED is assigned as ${JSON.stringify(rec.assigns)}`);
-// The program's first line is its own statement; nothing may precede `python3` on it, `&&` included.
-const recOpen = sources.get('stage2-record-check.sh').split('\n')[(rec.writes[0]?.n ?? 0) - 2];
-check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys",
-  `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), and opens with '${recOpen}'`);
+// The program's first line is its own statement; nothing may precede `python3` on it, `&&` included, and
+// the code line before it may not carry it on with `&&`, `||`, `|` or a backslash.
+const recLines = sources.get('stage2-record-check.sh').split('\n');
+const recOpen = recLines[(rec.writes[0]?.n ?? 0) - 2];
+const recBefore = code(recLines.slice(0, Math.max(0, (rec.writes[0]?.n ?? 0) - 2)).join('\n')).filter(({ line }) => line.trim()).pop()?.line ?? '';
+check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !/(&&|\|\||\||\\)\s*$/.test(recBefore),
+  `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), opens with '${recOpen}', and follows '${recBefore}'`);
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that
 // moves the default: the guard after `up` is the only check that sees the default move, since a source
 // under the constant name still passes the checks around Start.
 const lineOf = (src, re) => code(src).find(({ line }) => re.test(line))?.n ?? -1;
 const stmtWith = (src, re) => statements(src).find((st) => re.test(st.text));
-const failsClosed = (st) => !!st && /\|\|\s*(die\b|\{)/.test(st.text);
+// Fails closed: the failure branch dies or exits, rather than saying something and carrying on.
+const failsClosed = (st) => !!st && (/\|\|\s*die\b/.test(st.text) || /\|\|\s*\{[^}]*\b(die\b|exit 1\b)[^}]*\}/.test(st.text));
+// The default is read before `up`, and that read is what the guard compares: read after it, the guard
+// compares a value with itself.
+const readsBefore = (src, st) => { const before = lineOf(src, /^\s*DEFAULT_SRC_BEFORE=\$\(harness_effective_source\)/);
+  return before > 0 && before < lineOf(src, UP) && /harness_guard_after_up "\$DEFAULT_SRC_BEFORE"/.test(st?.text ?? ''); };
 const UP = /audio-harness\.sh"?\s+up\b/;
 function wiring(name, sites) {
   const src = sources.get(name);
@@ -130,18 +138,20 @@ const CORE_SRC = sources.get('stage2-core-check.sh');
 const coreClick = lineOf(CORE_SRC, /click "\$R" "Start recording"/);
 wiring('stage2-core-check.sh', [
   ['6a the core pass checks the default after up', 'no harness_guard_after_up after its up, failing closed',
-    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP); }],
+    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP) && readsBefore(src, st); }],
   ['6b and checks the seed before Start', 'no harness_guard_before_start before the Start click, failing closed',
     (src) => { const st = stmtWith(src, /harness_guard_before_start /); return failsClosed(st) && coreClick > 0 && st.n < coreClick; }],
   ['6c and what opened after Start', "no harness_guard_after_start after the start's CALLED offset, under the driver's pid, failing closed",
     (src) => { const st = stmtWith(src, /harness_guard_after_start /); return failsClosed(st) && /"\$DRIVER_PID"/.test(st.text) && st.n > lineOf(src, /^N=\$\(grep -n 'CALLED start_recording_with_devices_and_meeting'/); }],
-  ['6d and drops the recordings on any failure after Start', 'STARTED=1 is not set before the click, or cleanup() does not drop the recordings when it is',
+  ['6d and drops the recordings on any failure after Start', "STARTED=1 is not set before the click, or cleanup() does not ignore a second signal and drop the recordings, when it is, before the rest of its teardown",
     (src) => { const body = src.slice(src.indexOf('cleanup() {'), src.indexOf('\n}\n', src.indexOf('cleanup() {')));
-      return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < coreClick && /\[ "\$PASSED" != 1 \] && \[ -n "\$STARTED" \] && \{ harness_guard_drop_recordings "\$PROFILE"/.test(body); }],
+      const drop = body.search(/\[ "\$PASSED" != 1 \] && \[ -n "\$STARTED" \] && \{ harness_guard_drop_recordings "\$PROFILE"/);
+      return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < coreClick && drop > 0
+        && /^cleanup\(\) \{\n(\s*#[^\n]*\n)*\s*trap '' INT TERM\n/.test(body) && drop < body.indexOf('tone_sink_destroy') && drop < body.indexOf('audio-harness.sh down'); }],
 ]);
 wiring('stage2-onboarding-check.sh', [
   ['6e the resumes mode checks the default after up', 'no harness_guard_after_up after its up, failing closed',
-    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP); }],
+    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP) && readsBefore(src, st); }],
 ]);
 const REC_SRC = sources.get('stage2-record-check.sh');
 const recClick = lineOf(REC_SRC, /click_labelled "Start recording"/);
@@ -150,13 +160,18 @@ wiring('stage2-record-check.sh', [
     (src) => { const st = stmtWith(src, /harness_guard_before_start /); return failsClosed(st) && recClick > 0 && st.n < recClick; }],
   ['6g and what opened after Start', "no harness_guard_after_start after the click, under the application's pid, failing closed",
     (src) => { const st = stmtWith(src, /harness_guard_after_start /); return failsClosed(st) && /"\$\(cat "\$PIDFILE"\)"/.test(st.text) && st.n > recClick; }],
-  ['6h and drops the recordings on any failure after Start', 'STARTED=1 is not set before the click, or the EXIT trap does not drop the recordings when it is',
-    (src) => lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < recClick
-      && /trap '[^']*"\$STARTED" = 1[^']*harness_guard_drop_recordings "\$PROFILE"[^']*' EXIT/.test(src)],
+  ['6h and drops the recordings on any failure after Start', "STARTED=1 is not set before the click, or the pass's one EXIT trap does not stop the application and drop the recordings when it is, with a second signal ignored",
+    (src) => { const traps = code(src).filter(({ line }) => /\btrap\b.*\bEXIT\b/.test(line));
+      const body = src.slice(src.indexOf('on_exit() {'), src.indexOf('\n}\n', src.indexOf('on_exit() {')));
+      return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < recClick
+        && traps.length === 1 && traps[0].line === "trap 'on_exit $?' EXIT"
+        && /trap '' INT TERM/.test(body) && /\[ "\$STARTED" = 1 \]/.test(body)
+        && body.search(/kill -TERM -"\$\(cat "\$PIDFILE"\)"/) > 0 && body.search(/kill -TERM -"\$\(cat "\$PIDFILE"\)"/) < body.indexOf('harness_guard_drop_recordings "$PROFILE"'); }],
 ]);
 const upEntry = stage2.find((e) => UP.test(e) && !/two-channel/.test(e));
 check('6i the record pass\'s up entry checks the default, and takes the harness down when it moved',
   !!upEntry && upEntry.indexOf('harness_guard_after_up') > upEntry.search(/up --system-only/)
+    && upEntry.indexOf('B=$(harness_effective_source)') >= 0 && upEntry.indexOf('B=$(harness_effective_source)') < upEntry.search(/up --system-only/)
     && /harness_guard_after_up "\$B"[^}]*\|\|\s*\{[^}]*scripts\/audio-harness\.sh down;\s*exit 1;\s*\}/.test(upEntry),
   `gopnik.json's up entry is ${JSON.stringify(upEntry)}`);
 
@@ -221,6 +236,10 @@ if '-p' in a:
 `);
 shim('pw-cli', '');
 shim('pkill', '');
+// The other two ways to write a default, so a harness that took either is seen, and never reaches the
+// developer's real one while this test runs.
+shim('wpctl', '');
+shim('pactl', '');
 
 const sample = path.join(root, 'sample.wav');
 fs.writeFileSync(sample, 'RIFF');
@@ -249,7 +268,8 @@ for (const cycle of [1, 2]) {
   check(`4.${cycle}a cycle ${cycle} ran`, up.status === 0 && down.status === 0 && name.status === 0 && created && log.some((c) => c[0] === 'pw-metadata'),
     `up ${up.status}, src-name ${name.status}, down ${down.status}, source ${created}: ${up.stdout}${up.stderr}${down.stdout}${down.stderr}`);
   check(`4.${cycle}b src-name names the source up made`, name.stdout.trim() === created, `src-name printed '${name.stdout.trim()}', up made '${created}'`);
-  const writes = log.filter((c) => c[0] === 'pw-metadata' && (c.includes('-d') || c.slice(1).some((x, i, xs) => /^default\.(configured\.)?audio\.source$/.test(x) && i < xs.length - 1)));
+  const writes = log.filter((c) => (c[0] === 'pw-metadata' && (c.includes('-d') || c.slice(1).some((x, i, xs) => /^default\.(configured\.)?audio\.source$/.test(x) && i < xs.length - 1)))
+    || (c[0] === 'wpctl' && c[1] === 'set-default') || (c[0] === 'pactl' && /^set-default-(source|sink)$/.test(c[1] ?? '')));
   check(`4.${cycle}c cycle ${cycle} writes no default`, writes.length === 0, `default writes: ${JSON.stringify(writes)}`);
   check(`4.${cycle}d the source is not the constant`, created !== 'backchannel_harness_src' && /^backchannel_harness_src_/.test(created ?? ''), `the source is '${created}'`);
 }

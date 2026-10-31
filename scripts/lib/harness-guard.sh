@@ -16,7 +16,8 @@
 #                                                         process under [root-pid], when it is given
 #   harness_guard_drop_recordings <profile>               on a failure after Start: the recordings go before
 #                                                         the profile is kept, the application's default
-#                                                         save folders under the profile's HOME included
+#                                                         save folders under the profile's HOME included,
+#                                                         and so does the database their transcripts are in
 #
 # The graph is read through `capture-graph.py`, which reads a split `pw-dump` (two arrays, 8 samples in
 # 688 on 2026-10-31) as one graph and fails on an unreadable one.
@@ -114,9 +115,12 @@ harness_guard_drop_recordings() {
     */..|*/../*) echo "refusing a profile path that climbs: $profile" >&2; return 1 ;;
     # `$PROFILE/rec` is the seeded save folder; the other two are where the application saves when it
     # could not read the seed (`recording_preferences.rs`, Linux), which is also when it records the
-    # default microphone.
+    # default microphone. What it heard is in the database as text, so that goes too; the logs stay.
     /tmp/backchannel-*)
-      rm -rf -- "$profile/rec" "$profile/home/Documents/backchannel-recordings" "$profile/home/backchannel-recordings" ;;
+      rm -rf -- "$profile/rec" "$profile/home/Documents/backchannel-recordings" "$profile/home/backchannel-recordings" \
+        "$profile/home/.local/share/tech.madduck.backchannel/meeting_minutes.sqlite" \
+        "$profile/home/.local/share/tech.madduck.backchannel/meeting_minutes.sqlite-wal" \
+        "$profile/home/.local/share/tech.madduck.backchannel/meeting_minutes.sqlite-shm" ;;
     *) echo "refusing to remove recordings outside a gate profile: $profile" >&2; return 1 ;;
   esac
 }
