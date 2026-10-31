@@ -1,0 +1,146 @@
+/* The application's typefaces, shipped in the repository (#264).
+ *
+ * IBM's own files, unmodified, from each IBM/plex package's fonts/complete/woff2 directory at
+ * @ibm/plex-sans@1.1.0, @ibm/plex-serif@2.0.0 and @ibm/plex-mono@2.5.0; fonts/SOURCES.md has each URL
+ * and sha256, and fonts/LICENSE.txt the licence, which reserves the font name "Plex": a subset or a
+ * converted copy may not carry it, which is why these are not Google's files.
+ *
+ * Until #264 these came from Next's Google font loader, so every build fetched them from Google, and a build
+ * failed when Google answered in a form its loader did not parse. Plain @font-face rather than
+ * next/font/local: under @storybook/nextjs, next/font/local renames the family to font-<hash>, and
+ * storybook-calibration.test.mjs asserts "IBM Plex Sans". The --font-* variables and the three
+ * metric-adjusted fallback faces are copied verbatim from what that loader generated, so `ch`
+ * and line metrics do not move. The variables live on :root, so no class has to reach a component.
+ *
+ * Each face leaves out the pictographic blocks: Miscellaneous Technical (U+2300-23FF), Enclosed
+ * Alphanumerics (U+2460-24FF), Geometric Shapes (U+25A0-25FF), Miscellaneous Symbols (U+2600-26FF),
+ * Dingbats (U+2700-27BF), Miscellaneous Symbols and Arrows (U+2B00-2BFF), and everything from U+10000.
+ * In those blocks IBM's complete files draw ◊ ✓ ❌ and ⬎⬏⬐⬑ in monochrome, where Google's subsets left
+ * them to the system, so a summary's ❌ beside its ✅ would have lost its colour. The product owner
+ * chose this on 2026-10-28 (#264): the slashed zero, the arrows, the maths and the kerning IBM's
+ * files bring, and the symbols as they were.
+ */
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('./fonts/IBMPlexSerif-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('./fonts/IBMPlexSerif-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('./fonts/IBMPlexSerif-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('./fonts/IBMPlexSerif-SemiBoldItalic.woff2') format('woff2');
+  font-weight: 600;
+  font-style: italic;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/IBMPlexMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  unicode-range: U+0000-22FF, U+2400-245F, U+2500-259F, U+27C0-2AFF, U+2C00-2FFF, U+3000-FFFF;
+  font-display: swap;
+}
+
+/* The fallbacks Next's Google font loader generated for these families, verbatim from main's compiled CSS. */
+@font-face {
+  font-family: 'IBM Plex Sans Fallback';
+  src: local("Arial");
+  ascent-override: 101.32%;
+  descent-override: 27.18%;
+  line-gap-override: 0.00%;
+  size-adjust: 101.17%;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif Fallback';
+  src: local("Times New Roman");
+  ascent-override: 88.04%;
+  descent-override: 23.62%;
+  line-gap-override: 0.00%;
+  size-adjust: 116.43%;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono Fallback';
+  src: local("Arial");
+  ascent-override: 76.16%;
+  descent-override: 20.43%;
+  line-gap-override: 0.00%;
+  size-adjust: 134.59%;
+}
+
+:root {
+  --font-sans: 'IBM Plex Sans', 'IBM Plex Sans Fallback';
+  --font-serif: 'IBM Plex Serif', 'IBM Plex Serif Fallback';
+  --font-mono: 'IBM Plex Mono', 'IBM Plex Mono Fallback';
+}

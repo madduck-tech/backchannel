@@ -6,3 +6,8 @@
 # The vendored crate is held to the published crate's sha256 (#243, ADR 0034), so git stores and checks
 # out its bytes as they are, whatever core.autocrlf says.
 vendor/** -text
+
+# IBM's font files and licence are held to their sha256 (#264). The licence has CRLF line endings, and
+# core.autocrlf=input or text=auto would store it with LF, so a fresh clone would carry other bytes.
+frontend/src/app/fonts/** -text
+frontend/public/IBM-Plex-LICENSE.txt -text

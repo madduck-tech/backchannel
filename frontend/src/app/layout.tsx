@@ -1,7 +1,6 @@
 'use client'
 
 import './globals.css'
-import { fontVars } from './fonts'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider, useSidebar } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -272,7 +271,7 @@ export default function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${fontVars} font-sans`}>
+      <body className="font-sans">
         {/* Resolves the theme before first paint — no flash of the wrong one. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         {/* Same trick for dragged pane widths — no flash of the default rail. */}

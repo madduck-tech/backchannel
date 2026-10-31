@@ -1,9 +1,9 @@
 // The catalogue measures this application, or it measures nothing. (#124 condition 1)
 //
 // Every geometry assertion a story makes is a multiple of one quantity: the width of a `ch`. That
-// resolves against the **loaded** face, and this application's face arrives through a content-hashed
-// class `next/font` generates, which `layout.tsx` puts on `<body>`. A story renders a component, not
-// `layout.tsx`.
+// resolves against the **loaded** face. Until #264 this application's face arrived through a
+// content-hashed class `next/font` generated, which `layout.tsx` put on `<body>`, and a story renders a
+// component, not `layout.tsx`. Since #264 the faces and the variables come from `fonts.css`, on :root.
 //
 // Measured while writing this, in headless Chrome over the project's compiled CSS:
 //
@@ -19,7 +19,7 @@
 // `bg-brand-soft` returns `oklch(0.955 0.022 190)` with the font class and without it, measured. The
 // guard has to be the font.
 //
-// **The family string alone cannot either.** `next/font` emits `"IBM Plex Sans Fallback"` as a
+// **The family string alone cannot either.** `fonts.css` declares `"IBM Plex Sans Fallback"` as a
 // metric-adjusted local face, so `--font-sans` can hold the right value while the woff2 never loads.
 // Hence `document.fonts.check`, and hence the width.
 import assert from 'node:assert/strict';
@@ -67,7 +67,7 @@ assert.ok(
   Math.abs(m.ch60 - CH60_WITH_PLEX) <= TOLERANCE,
   `60ch measured ${m.ch60}px; expected ${CH60_WITH_PLEX} ± ${TOLERANCE}.\n` +
     `  ${Math.abs(m.ch60 - CH60_FALLBACK) <= TOLERANCE
-      ? 'That is the fallback face — the next/font class is not reaching the story.'
+      ? 'That is the fallback face — fonts.css is not reaching the story.'
       : 'Neither this application\'s face nor the known fallback.'}`
 );
 

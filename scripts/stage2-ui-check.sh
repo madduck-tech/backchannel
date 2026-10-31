@@ -202,6 +202,22 @@ done
   die "gave up waiting for the UI"
 }
 
+# --- the ten faces load at their weights and styles, and the symbols stay the system's (#264)
+# Asked of WebKit, which is what draws this build, not of the Chrome the fonts were chosen in. For each
+# of the ten faces: the faces that would draw its text must be exactly that face, loaded; for each
+# symbol, none of them. A probe that does not answer reaches the verdict too: `|| true` keeps curl's
+# failure from ending the script before it, under pipefail (fonts-verdict.test.mjs holds that).
+FONT_PROBE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-probe.js"
+FONTS=$(python3 -I -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' "$FONT_PROBE" \
+  | { curl -s -m 30 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- || true; } \
+  | python3 -I -c 'import json,sys
+try: v = json.load(sys.stdin).get("value")
+except Exception: v = None
+print(v if isinstance(v, str) else json.dumps({"error": "the probe did not answer: " + repr(v)[:200]}))')
+FONT_VERDICT=$(printf '%s' "$FONTS" | python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-verdict.py" "$FONT_PROBE")
+say "fonts: $FONT_VERDICT"
+case "$FONT_VERDICT" in ok:*) ;; *) die "the faces fonts.css declares do not load as declared, or a face draws a symbol: $FONT_VERDICT" ;; esac
+
 # --- the settings tabs open -------------------------------------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button in the DOM"
 click "$S" "the Settings control"
@@ -272,4 +288,4 @@ say "stored preference: ${STORED:-<none>}"
   || die "selected '$FIRST' and the app stored '$STORED'; it must store exactly '$FIRST (output)'"
 
 PASSED=1
-say "PASS - tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"
+say "PASS - the ten faces load, each at its own weight and style, and leave the symbols to the system, tabs open, ${COUNT} system-audio entries offered, and the picked one round-trips to disk"

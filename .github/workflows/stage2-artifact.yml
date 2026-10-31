@@ -122,6 +122,16 @@ jobs:
           echo "built $APP ($(du -h "$APP" | cut -f1))"
           echo "APPIMAGE=$APP" >> "$GITHUB_ENV"
 
+      # #264. The fonts ship in the repository, and the census in no-build-reaches-google-for-fonts
+      # reads the frontend's own files. A dependency's stylesheet is not one of them, so the built
+      # frontend is read too: nothing in it may fetch a font from Google at run time.
+      - name: No built file names Google's font service
+        run: |
+          N=$(find frontend/out -type f 2>/dev/null | wc -l)
+          [ "$N" -gt 0 ] || { echo "frontend/out holds no files, so there is nothing to check"; exit 1; }
+          if grep -rliE 'fonts\.(googleapis|gstatic)\.com' frontend/out; then echo "the built files above name Google's font service"; exit 1; fi
+          echo "frontend/out: $N files, none names Google's font service"
+
       # #103. The build step writes `git rev-parse HEAD` beside the bundle, and that command must
       # stay byte-identical to gopnik.json stage 2 entry 3 -- `stage2-artifact-matches-the-gate.test.mjs`
       # asserts it. But on `pull_request` this checkout's HEAD is the **merge commit**: measured on
