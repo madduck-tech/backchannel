@@ -203,13 +203,18 @@ if [ "$MODE" = resumes-gone ]; then
 fi
 if [ "$MODE" = resumes ]; then
   RUNNING=$(app_pid) && die "another copy of the application is running (pid $RUNNING); a resume run cannot share the single-instance lock with it"
-  # The second launch presses Check by speaking. The harness is the default input, so the check hears
-  # its sample and never the room; before the first launch, because the device list is read at start.
+  # The second launch presses Check by speaking, with the harness picked by name, so the check hears its
+  # sample and never the room; before the first launch, because the device list is read at start. The
+  # harness never becomes the default input (#293), so a call's microphone stays on the person's device.
   SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
   [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample for the audio check"
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/harness-guard.sh"
   "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
-  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" up --sample "$SAMPLE" || die "the audio harness could not come up"
+  DEFAULT_SRC_BEFORE=$(harness_effective_source)
+  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" up --system-only --sample "$SAMPLE" || die "the audio harness could not come up"
   HARNESS_UP=1
+  GUARD=$(harness_guard_after_up "$DEFAULT_SRC_BEFORE" 2>&1) || die "the harness moved the default input (#293): $GUARD"
+  HARNESS_SRC=$("$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" src-name) || die "the harness names no source"
 fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
 
@@ -831,10 +836,10 @@ except Exception: print("")' 2>/dev/null)
 import json, sys
 for o in json.load(sys.stdin):
     p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == "backchannel_harness_src":
+    if p.get("node.name") == sys.argv[1]:
         print(p.get("node.description") or ""); break
-')
-  [ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph"
+' "$HARNESS_SRC")
+  [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
   TRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Microphone\"]"}')
   [ -n "$TRIG" ] || die "no microphone picker on the audio check"
   click "$TRIG" "the microphone picker"

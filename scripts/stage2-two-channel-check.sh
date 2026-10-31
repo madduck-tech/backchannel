@@ -152,6 +152,9 @@ say "system audio will be '$PICK' (playing into $TARGET_SINK)"
 scripts/audio-harness.sh down >/dev/null 2>&1 || true
 scripts/audio-harness.sh up --sample "$MIC_SAMPLE" || die "the audio harness could not come up"
 HARNESS_UP=1
+# The source by the name `up` wrote, never a literal (#293). This pass writes the default, so the name is
+# the constant one; reading it keeps the lookup right if that ever changes.
+HARNESS_SRC=$(scripts/audio-harness.sh src-name) || die "the harness names no source"
 # Read the description out of the graph rather than assuming the one the harness asks for.
 # Measured 2026-09-05: `audio-harness.sh` passes
 # `node.description=Backchannel harness microphone` and PipeWire reports `Backchannel` --
@@ -161,10 +164,10 @@ HARNESS_DESC=$(pw-dump | python3 -c '
 import json, sys
 for o in json.load(sys.stdin):
     p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == "backchannel_harness_src":
+    if p.get("node.name") == sys.argv[1]:
         print(p.get("node.description") or "")
         break
-')
+' "$HARNESS_SRC")
 [ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph after a successful 'up'"
 say "the harness source presents itself as '$HARNESS_DESC'"
 say "harness up: the default input is now the virtual source playing $(basename "$MIC_SAMPLE")"
