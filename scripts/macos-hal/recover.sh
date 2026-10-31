@@ -9,5 +9,5 @@ for plist in "$HOME"/Library/LaunchAgents/tech.madduck.backchannel.*.plist; do
   [ -e "$plist" ] || continue
   launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null; rm -f "$plist"
 done
-sudo launchctl kickstart -k system/com.apple.audio.coreaudiod
+sudo killall coreaudiod   # launchd restarts it; `launchctl kickstart` is refused under SIP (error 150, #316)
 echo "removed Backchannel plug-ins and agents; coreaudiod restarted"

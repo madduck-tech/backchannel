@@ -20,7 +20,7 @@ for plist in "$HOME"/Library/LaunchAgents/tech.madduck.backchannel.*.plist; do
   rm -f "$plist"
 done
 [ -z "${BC_HELPER_BUNDLE_ID:-}" ] || tccutil reset Microphone "$BC_HELPER_BUNDLE_ID"
-sudo launchctl kickstart -k system/com.apple.audio.coreaudiod
+sudo killall coreaudiod   # launchd restarts it; `launchctl kickstart` is refused under SIP (error 150, #316)
 sleep 6
 python3 -I "$HERE/census.py" take > "$RUN/after.json"
 set +e

@@ -20,7 +20,7 @@ echo "installing $NAME (administrator password needed)"
 sudo cp -R "$DRIVER" /Library/Audio/Plug-Ins/HAL/
 START=$(date "+%Y-%m-%d %H:%M:%S")
 echo "restarting coreaudiod (audio stops for a few seconds)"
-sudo launchctl kickstart -k system/com.apple.audio.coreaudiod
+sudo killall coreaudiod   # launchd restarts it; `launchctl kickstart` is refused under SIP (error 150, #316)
 sleep 6
 python3 -I "$HERE/census.py" take > "$RUN/after.json"
 log show --start "$START" --style compact --predicate "eventMessage CONTAINS[c] \"${NAME%.driver}\" OR eventMessage CONTAINS[c] \"backchannel\"" > "$RUN/log.txt" 2>/dev/null || true
