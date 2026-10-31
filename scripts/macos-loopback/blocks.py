@@ -345,34 +345,44 @@ def scan(E, th, start, end):
 
 
 def anchor_and_count(rows, tau):
-    """Apply the anchor rule to scan rows: counted, pending-turned-unexpected, unanchored, steps."""
-    counted, unexpected, unanchored, steps = [], [], [], []
-    anchor = None                  # (pos, n)
-    pending = []
-    def agree_chain(ds):
-        return all(b[3] == a[3] + 1 and abs((b[0] - a[0]) - L) <= tau for a, b in zip(ds, ds[1:]))
-    for r in rows:
-        if r[1] != "decoded":
+    """Classify decoded rows: counted, unexpected, unanchored; and steps.
+
+    Anchors are found first: every maximal run of at least K consecutive decodes with consecutive
+    numbers at spacing L (+/- tau). Each anchor fixes an offset, number minus block position. Every
+    decode is then judged against the nearest anchor before it and the nearest after it: inside an
+    anchor, or within +/-1 of what either neighbour's offset predicts, it is counted; otherwise it
+    is unexpected, or unanchored when the recording has no anchor at all. A duplicate or a swap next
+    to a loss is therefore counted (and reported as duplicated or out of order), where the first
+    rule, one anchor carried forward, turned it unexpected (the gate on #302, round 1)."""
+    dec = [r for r in rows if r[1] == "decoded"]
+    # Runs of consecutive numbers at spacing L.
+    runs, start = [], 0
+    for i in range(1, len(dec) + 1):
+        if i == len(dec) or not (dec[i][3] == dec[i - 1][3] + 1 and abs((dec[i][0] - dec[i - 1][0]) - L) <= tau):
+            if i - start >= K:
+                runs.append((start, i))
+            start = i
+    in_anchor = set(i for a, b in runs for i in range(a, b))
+    offsets = [(dec[a][0], dec[b - 1][0], dec[a][3] - round(dec[a][0] / L)) for a, b in runs]
+    counted, unexpected, unanchored = [], [], []
+    k = 0
+    for i, r in enumerate(dec):
+        if i in in_anchor:
+            counted.append(r)
             continue
-        pos, _, d, n = r[:4]
-        if anchor is not None and not pending:
-            expect = anchor[1] + round((pos - anchor[0]) / L)
-            if abs(n - expect) <= 1:
-                # The anchor stays where it formed: a duplicate, a swap or one lost block
-                # stays within +/-1 and is counted (and reported) rather than re-anchored.
-                counted.append(r)
-                continue
-        pending.append(r)
-        if len(pending) > K:
-            # The oldest pending can no longer start an anchor with the newest K.
-            old = pending.pop(0)
-            (unexpected if anchor is not None else unanchored).append(old)
-        if len(pending) == K and agree_chain(pending):
-            counted.extend(pending)
-            anchor = (pending[-1][0], pending[-1][3])
-            pending = []
-    for r in pending:
-        (unexpected if anchor is not None else unanchored).append(r)
+        if not offsets:
+            unanchored.append(r)
+            continue
+        while k + 1 < len(offsets) and offsets[k + 1][0] <= r[0]:
+            k += 1
+        near = [offsets[k]] + ([offsets[k + 1]] if k + 1 < len(offsets) else [])
+        if k > 0:
+            near.append(offsets[k - 1])
+        if any(abs(r[3] - (round(r[0] / L) + off)) <= 1 for _, _, off in near):
+            counted.append(r)
+        else:
+            unexpected.append(r)
+    steps = []
     # A cut inside a block that still decodes moves that block's measured position halfway: two
     # adjacent changes (+96 then -222 for a 128-sample cut). Changes on blocks within two numbers
     # of each other are one step, and its size is the median offset of the 3 counted blocks after
@@ -424,7 +434,11 @@ def cmd_decode(a):
         seen.add(v)
     lo_c = min(seen) if seen else None
     hi_c = max(seen) if seen else None
-    missing = [v for v in range(lo_c, hi_c + 1) if v not in seen] if seen else []
+    # From 0, not from the first counted block: losing the head of the stream was invisible to
+    # every category (the gate on #302, round 1). head_loss names that part apart, since A3 may
+    # start its window at the first block the client detects.
+    missing = [v for v in range(0, hi_c + 1) if v not in seen] if seen else []
+    head = lo_c if seen else 0
     tail = list(range(hi_c + 1, N)) if seen else list(range(N))
     out = {
         "track": a.track, "expected_direction": direction, "N": N, "first": first,
@@ -444,7 +458,11 @@ def cmd_decode(a):
         "no_signal": [round(r[0] / RATE, 4) for r in rows if r[1] == "no_signal"
                       and counted and counted[0][0] < r[0] < counted[-1][0]],
         "corrected": sum(1 for r in counted if len(r) > 4 and r[4]),
-        "steps": steps, "tail_loss": len(tail),
+        "steps": steps, "tail_loss": len(tail), "head_loss": head,
+        # Net offset over the window: what step merging and sub-tau cuts can leave unnamed
+        # (a loss and a gain within 3 blocks, or many cuts under tau) still shows here.
+        "net_offset_48k": int(round(((counted[-1][0] - L * counted[-1][3]) - (counted[0][0] - L * counted[0][3]))
+                                    * PLAY_RATE / RATE)) if counted else None,
         "positions": [[r[3] - first, r[0]] for r in counted],
         "tau": tau, "header": sched["header"],
     }
@@ -453,7 +471,7 @@ def cmd_decode(a):
 
 
 CATEGORIES = ("missing", "duplicated", "out_of_order", "unexpected", "unanchored", "wrong_direction",
-              "undecodable", "no_signal", "steps", "tail_loss")
+              "undecodable", "no_signal", "steps", "tail_loss", "head_loss")
 
 
 def size(v):
@@ -538,7 +556,7 @@ def cmd_tune(a):
 def cmd_level(a):
     d = json.load(open(a.decode))
     if not d["positions"]:
-        print(json.dumps({"void": True, "reasons": ["blocks not delivered acoustically: none counted"]}))
+        print(json.dumps({"void": True, "reasons": ["no blocks counted: level not measured (cannot place the blocks)"]}))
         sys.exit(2)
     x = markers.read_audio(a.recording, RATE)
     import level

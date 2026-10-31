@@ -40,6 +40,12 @@ class TheAttribution(Fixture):
         rep = self.attribute(self.without(150), self.clean)
         self.assertEqual((rep["recorder"], rep["peer_path"]), ([150], []))
 
+    def test_a_sub_block_cut_at_side_b_only_is_the_recorders_step(self):
+        cut = np.concatenate([self.clean[:self.at(150) + 1000], self.clean[self.at(150) + 1480:]])
+        rep = self.attribute(cut, self.clean)
+        self.assertEqual(len(rep["recorder_steps"]), 1, rep)
+        self.assertEqual(rep["peer_path_steps"], [])
+
     def test_l3b_the_same_loss_at_both_is_the_peer_paths(self):
         rep = self.attribute(self.without(150), self.without(150))
         self.assertEqual((rep["recorder"], rep["peer_path"]), ([], [150]))
@@ -70,7 +76,8 @@ class TheBlockLevel(Fixture):
     def test_l4b_blocks_under_floor_plus_15_db_are_void(self):
         code, rep = self.level("quiet", -50, -40)
         self.assertEqual(code, 2, rep)
-        self.assertTrue(any("not delivered acoustically" in r for r in rep["reasons"]), rep)
+        # Void either way: below floor + 15 dB, or so quiet that no block was counted to place.
+        self.assertTrue(any("not delivered acoustically" in r or "no blocks counted" in r for r in rep["reasons"]), rep)
 
 
 if __name__ == "__main__":

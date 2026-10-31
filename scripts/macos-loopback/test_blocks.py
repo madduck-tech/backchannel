@@ -183,6 +183,48 @@ class TheDecoderReportsEachMutation(Fixture):
         self.assertEqual((d["undecodable"], d["missing"], d["counted"]), ([], [], N))
         self.assertGreater(d["undecodable_outside"], 0)
 
+    def test_lost_head_blocks_are_missing_and_head_loss(self):
+        d = self.decode("head", np.concatenate([self.clean[:self.at(0)], self.clean[self.at(2):]]))
+        self.assertEqual((d["missing"], d["head_loss"]), ([0, 1], 2))
+
+    def test_head_blocks_replaced_by_noise_are_missing(self):
+        x = self.clean.copy()
+        x[self.at(0):self.at(5)] = self.mk.pink_noise(self.at(5) - self.at(0), np.random.default_rng(9))
+        d = self.decode("head-noise", x)
+        self.assertEqual((d["missing"], d["head_loss"]), ([0, 1, 2, 3, 4], 5))
+
+    def test_a_duplicate_after_a_two_block_loss_is_duplicated(self):
+        c = self.clean
+        x = np.concatenate([c[:self.at(100)], c[self.at(102):self.at(103)], c[self.at(102):]])
+        d = self.decode("loss2-dup", x)
+        self.assertEqual((d["missing"], d["duplicated"], d["unexpected"]), ([100, 101], [102], []))
+
+    def test_a_duplicate_after_a_ten_block_loss_is_duplicated(self):
+        c = self.clean
+        x = np.concatenate([c[:self.at(100)], c[self.at(110):self.at(111)], c[self.at(110):]])
+        d = self.decode("loss10-dup", x)
+        self.assertEqual((d["missing"], d["duplicated"], d["unexpected"]), (list(range(100, 110)), [110], []))
+
+    def test_a_swap_after_a_ten_block_loss_is_out_of_order(self):
+        c = self.clean
+        x = np.concatenate([c[:self.at(100)], c[self.at(111):self.at(112)], c[self.at(110):self.at(111)], c[self.at(112):]])
+        d = self.decode("loss10-swap", x)
+        self.assertEqual((d["missing"], d["out_of_order"], d["unexpected"]), (list(range(100, 110)), [110], []))
+
+    def test_a_duplicate_after_a_forged_block_is_duplicated(self):
+        c = self.clean
+        x = np.concatenate([c[:self.at(100)], self.block(5000), c[self.at(100):self.at(101)], c[self.at(100):]])
+        d = self.decode("forged-dup", x)
+        self.assertEqual(([u["n"] for u in d["unexpected"]], d["duplicated"]), ([5000], [100]))
+
+    def test_a_loss_and_a_gain_within_three_blocks_show_in_the_net_offset_or_categories(self):
+        # Merged steps cancel, but the categories still name the lost and the repeated block.
+        c = self.clean
+        x = np.concatenate([c[:self.at(100)], c[self.at(101):self.at(102)], c[self.at(102) - B48:self.at(102)], c[self.at(102):]])
+        d = self.decode("loss-gain", x)
+        self.assertEqual((d["missing"], d["duplicated"]), ([100], [101]))
+        self.assertIsNotNone(d["net_offset_48k"])
+
     def test_b6a_the_wrong_direction_is_reported(self):
         d = self.decode("b6a", self.clean, "--direction", "1")
         self.assertEqual(len(d["wrong_direction"]), N)
