@@ -105,6 +105,10 @@ def void_reasons(r):
         reasons.append("bitrate not measurable over the noise window")
     elif abs(kbps - PINNED_KBPS) > BITRATE_TOLERANCE * PINNED_KBPS:
         reasons.append(f"bitrate {kbps:.1f} kbit/s over the noise window, pinned {PINNED_KBPS:.0f} ±{BITRATE_TOLERANCE:.0%}")
+    if r.get("power_events"):
+        reasons.append(f"the Mac slept during the run: {r['power_events'][0]}")
+    if "capture" in r and (r["capture"] or {}).get("frames") == 0:
+        reasons.append("independent capture recorded nothing (0 frames)")
     if "capture" in r and (r["capture"] or {}).get("gaps") != 0:
         reasons.append(f"independent capture not continuous: {r['capture']}")
     return reasons

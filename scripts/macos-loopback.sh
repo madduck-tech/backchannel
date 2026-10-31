@@ -67,6 +67,10 @@ done
 RUN_DIR=${RUN_DIR:-$REPO/experiments/loopback-runs/$(date +%Y%m%d-%H%M%S)-$$}
 mkdir -p "$RUN_DIR"
 PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/bc-loopback-profile.XXXXXX")
+# Keep the Mac awake for the whole run: on 2026-10-31 #302's L1 started 14 s after an idle sleep
+# and spent its hour in sleep and dark wakes, recording nothing. Sleep inside the run still voids it.
+caffeinate -dims -w $$ &
+RUN_START=$(date "+%Y-%m-%d %H:%M:%S")
 
 PIDS=()
 CHROME_PIDS=
@@ -233,6 +237,14 @@ SIDE_A=$RUN_DIR/pre_send_mr.wav
 if [ -n "$SCHEDULE" ] && [ -f "$SIDE_A" ]; then
   python3 -I "$LIB/markers.py" detect "$SIDE_A" "$SCHEDULE" > "$RUN_DIR/det-pre_send.json" || true
 fi
+# Power events inside the run, for the void rule: a sleep means the run did not measure anything.
+pmset -g log 2>/dev/null | python3 -I -c '
+import sys
+start = sys.argv[1]
+for line in sys.stdin:
+    stamp = line[:19]
+    if stamp >= start and (" Sleep " in line or "DarkWake" in line):
+        print(line.strip()[:160])' "$RUN_START" > "$RUN_DIR/power-events" || true
 ifconfig | awk '/inet6? /{print $2}' | sed 's/%.*//' > "$RUN_DIR/interfaces"
 python3 -I - "$RUN_DIR" "${SCHEDULE:-}" "${PLAY_START:-}" <<'PY'
 import json, os, sys
@@ -247,6 +259,7 @@ cap = os.path.join(run, "capture.json")
 if os.path.exists(cap):
     text = open(cap).read().strip()
     rec["capture"] = json.loads(text) if text else {"gaps": None, "error": "the recorder printed nothing"}
+rec["power_events"] = open(os.path.join(run, "power-events")).read().splitlines() if os.path.exists(os.path.join(run, "power-events")) else []
 rec["events"] = [json.loads(l) for l in open(os.path.join(run, "events.jsonl"))] if os.path.exists(os.path.join(run, "events.jsonl")) else []
 tap = next((e["t"] for e in rec["events"] if e.get("type") == "tap-start"), None)
 det_path = os.path.join(run, "det-pre_send.json")
