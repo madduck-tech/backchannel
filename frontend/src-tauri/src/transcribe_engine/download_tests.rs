@@ -1164,7 +1164,7 @@ mod a_failed_download_says_why {
             .iter()
             .flat_map(|w| code.match_indices(w).map(|(i, _)| i).collect::<Vec<_>>())
             .filter(|i| !allowed.iter().any(|r| r.contains(i)))
-            .map(|i| context(i))
+            .map(context)
             .collect();
         assert!(stray.is_empty(), "engine.rs selects, sleeps or ticks outside commit_download's lock: {stray:#?}");
     }
