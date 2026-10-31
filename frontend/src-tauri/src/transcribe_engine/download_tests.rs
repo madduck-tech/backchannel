@@ -1017,22 +1017,34 @@ mod a_failed_download_says_why {
         assert!(test.contains("read_timeout: 300s"), "the test engine's client is not built with the engine's H: {test}");
     }
 
-    /// The byte range of the body of the first function whose signature starts with `signature`.
+    /// The byte range of the body of the one function whose signature starts with `signature`. A second
+    /// function of that name would let a decoy carry the pinned text (#310's gate adversary), so it is
+    /// refused. Braces inside string and char literals are skipped.
     fn body_of(code: &str, signature: &str) -> std::ops::Range<usize> {
-        let start = code.find(signature).unwrap_or_else(|| panic!("no {signature} in engine.rs"));
+        assert_eq!(code.matches(signature).count(), 1, "engine.rs has {} functions starting `{signature}`, not one", code.matches(signature).count());
+        let start = code.find(signature).unwrap();
         let open = start + code[start..].find('{').unwrap();
-        let mut depth = 0i32;
-        for (i, ch) in code[open..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
+        let (b, mut depth, mut i) = (code.as_bytes(), 0i32, open);
+        while i < b.len() {
+            match b[i] {
+                b'"' => {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                }
+                b'\'' if b.get(i + 2) == Some(&b'\'') => i += 2,
+                b'\'' if b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'') => i += 3,
+                b'{' => depth += 1,
+                b'}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return open..open + i;
+                        return open..i;
                     }
                 }
                 _ => {}
             }
+            i += 1;
         }
         panic!("{signature}'s body does not close")
     }
@@ -1058,7 +1070,11 @@ mod a_failed_download_says_why {
     /// of these words.
     #[test]
     fn the_engine_builds_its_client_in_one_place() {
-        let code = without_comments(include_str!("engine.rs"));
+        // A raw string can hide `//` from the comment stripper below, which would drop the rest of its
+        // line, a bound included (#310's gate adversary). engine.rs has none; it may not gain one.
+        let raw = include_str!("engine.rs");
+        assert!(!has_raw_string(raw), "engine.rs holds a raw string, which this census cannot read past");
+        let code = without_comments(raw);
         let builds: Vec<usize> = ["Client::builder(", "Client::new(", "Client::default(", "ClientBuilder::new(", "ClientBuilder::default(", "reqwest::get("]
             .iter()
             .flat_map(|c| code.match_indices(c).map(|(i, _)| i).collect::<Vec<_>>())
@@ -1118,6 +1134,15 @@ mod a_failed_download_says_why {
             "engine.rs bounds a download other than by its three allowed timers, the headers' H, the connection's C and the loop's G (#298, #310): {refused:#?}"
         );
         assert_eq!(pins, 1, "engine.rs has {pins} loop timers of the pinned text `{PIN}` inside download_inner, not one");
+        // The client gets exactly its two parameters, each once, as its two bounds: `.connect_timeout(
+        // connect_timeout.max(…))` would keep production's C out of every test (#310's gate adversary).
+        const BUILDER: &str = "reqwest::Client::builder().read_timeout(read_timeout).connect_timeout(connect_timeout)";
+        let squashed_client_fn = squash(&code[client_fn.clone()]);
+        assert!(squashed_client_fn.contains(BUILDER), "download_client does not build `{BUILDER}`: {}", context(client_fn.start));
+        for name in ["read_timeout", "connect_timeout"] {
+            let uses = squashed_client_fn.matches(&format!("({name})")).count() + squashed_client_fn.matches(&format!(",{name})")).count();
+            assert_eq!(uses, 1, "download_client hands `{name}` to the client {uses} times, not once, as itself");
+        }
         // And the call that hands each field to its own timer, pinned by its text: the fields are read
         // by #310 item 7, and this is what makes them the values the client is built with.
         const CALL: &str = "download_client(self.read_timeout,self.connect_timeout,self.system_proxy)";
@@ -1142,6 +1167,27 @@ mod a_failed_download_says_why {
             .map(|i| context(i))
             .collect();
         assert!(stray.is_empty(), "engine.rs selects, sleeps or ticks outside commit_download's lock: {stray:#?}");
+    }
+
+    /// Whether Rust source holds a raw string literal, `r"…"` or `r#"…"#`: an `r` that starts a token,
+    /// outside a string or comment, followed by `"` or `#`.
+    fn has_raw_string(src: &str) -> bool {
+        let b = without_comments(src).into_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'"' => {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                }
+                b'r' if (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) && matches!(b.get(i + 1), Some(b'"') | Some(b'#')) => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Rust source with `//` and `/* */` comments removed, strings and char literals kept.
@@ -1199,10 +1245,12 @@ mod a_failed_download_says_why {
         let body: Vec<u8> = (0..10_000u32).map(|i| (i * 7) as u8).collect();
         let s = stub(Reply::After(LATE, Box::new(Reply::Body(body.clone())))).await;
         let engine = stalling_engine(dir.path(), &s);
+        let called = tokio::time::Instant::now();
         tokio::time::timeout(LATE + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
             .await
             .expect("still running at LATE + 2 s")
             .expect("a server that answered after LATE, inside H, was cut off");
+        assert!(called.elapsed() >= LATE, "the download took {:?}, so the stub never made it wait LATE", called.elapsed());
         assert_eq!(bytes(&final_path(dir.path())), body, "the final path does not hold the bytes");
     }
 
