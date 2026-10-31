@@ -662,8 +662,10 @@ class TheDownloads(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             problems = list(pool.map(check_line, lines))
         self.assertEqual([p for p in problems if p], [])
-        # Counted apart from the reader: a reader that dropped a line, or a list, would check fewer URLs.
-        self.assertEqual(len(problems), sum(text.count("\n") for text in texts), "the URLs checked are not every line of both lists")
+        # Counted apart from the reader, each list read again by its own path: a reader that dropped a line,
+        # or a list, would check fewer URLs.
+        on_disk = sum(p.read_text(encoding="utf-8").count("\n") for p in (gen.DOWNLOAD_URLS, SUMMARY_URLS))
+        self.assertEqual(len(problems), on_disk, "the URLs checked are not every line of both lists")
         self.assertEqual(len(problems), len(ROWS) + 1 + 9, "the transcription catalogue, the diarizer and the 9 summary files")
 
 

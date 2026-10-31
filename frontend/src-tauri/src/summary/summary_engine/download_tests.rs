@@ -83,7 +83,6 @@ async fn a_short_download_fails_on_its_size_and_leaves_nothing() {
     let e = fetch(&m, &target(&s, &body(), 0)).await.expect_err("a short file was kept").to_string();
     assert_eq!(e, format!("{FILE} is 9999 bytes, not the 10000 its pin expects"), "the error is not the size check's");
     assert_eq!(names(dir.path()), Vec::<String>::new(), "a file is left after the size error");
-    assert!(!m.active_downloads.read().await.contains("test-model"), "the size error left the model in active_downloads");
 }
 
 #[tokio::test]
@@ -96,10 +95,6 @@ async fn a_download_of_other_bytes_fails_on_its_hash_and_leaves_nothing() {
     let e = fetch(&m, &target(&s, &body(), 0)).await.expect_err("other bytes were kept").to_string();
     assert!(e.starts_with(&format!("{FILE} hashes to ")) && e.ends_with(&format!("not the pinned {}", pin_of(&body()).sha256)), "the error is not the hash check's: {e}");
     assert_eq!(names(dir.path()), Vec::<String>::new(), "a file is left after the hash error");
-    assert!(!m.active_downloads.read().await.contains("test-model"), "the hash error left the model in active_downloads");
-    // A second download is not refused as already in flight.
-    let _ = fetch(&m, &target(&s, &body(), 0)).await;
-    assert_eq!(ranges(&s).len(), 2, "the second download after the hash error made no request");
 }
 
 #[tokio::test]
@@ -186,6 +181,7 @@ async fn the_model_download_requests_each_file_at_its_pin() {
     let dir = tempfile::tempdir().unwrap();
     let s = stub(Reply::Body(b"GGUF012345".to_vec())).await;
     let m = ModelManager::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap().with_base_url(&s.base);
+    m.scan_models().await.unwrap();
     let e = m.download_model_detailed("gemma4:e2b", None).await.expect_err("10 bytes were taken for the weights").to_string();
     assert_eq!(
         s.requests.lock().unwrap().first().cloned().unwrap_or_default(),
@@ -193,6 +189,13 @@ async fn the_model_download_requests_each_file_at_its_pin() {
         "the weights' request line"
     );
     assert!(e.contains(&format!("not the {} its pin expects", e2b.weights.size_bytes)), "the weights did not end in their size error: {e}");
+    // The size error frees the model and leaves it reading what is on disk, so its row keeps a button
+    // (#191's gate adversary): not refused as in flight, and not Downloading, with no rescan.
+    let after = m.get_model_info("gemma4:e2b").await.unwrap().status;
+    assert_eq!(after, ModelStatus::NotDownloaded, "after the size error the row reads {after:?}");
+    let again = m.download_model_detailed("gemma4:e2b", None).await.expect_err("10 bytes were taken the second time").to_string();
+    assert!(!again.contains("already in progress"), "the second download was refused as in flight: {again}");
+    assert_eq!(s.requests.lock().unwrap().len(), 2, "the second download made no request");
     // The projector, with whole-length weights at the final path (sparse), which the window skips.
     let dir = tempfile::tempdir().unwrap();
     let _serial = SPARSE.lock().await;
@@ -277,7 +280,7 @@ async fn a_server_serving_other_bytes_fails_after_one_resume_and_one_retry() {
     let m = manager(dir.path(), &s);
     let t = target(&s, &body(), 0);
     std::fs::write(dir.path().join(partial_name(&t.pin.sha256, FILE)), &body()[..5000]).unwrap();
-    let e = fetch(&m, &t).await.expect_err("other bytes were kept").to_string();
+    let e = tokio::time::timeout(Duration::from_secs(20), fetch(&m, &t)).await.expect("still retrying at 20 s").expect_err("other bytes were kept").to_string();
     assert!(e.contains("hashes to"), "not the hash error: {e}");
     assert_eq!(ranges(&s), vec![Some("bytes=5000-".to_string()), None], "not exactly one ranged and one full request");
     assert_eq!(names(dir.path()), Vec::<String>::new(), "a file is left at either path");
@@ -358,8 +361,8 @@ async fn a_cancelled_or_partial_model_reads_corrupted_and_a_delete_leaves_nothin
     }
     m.scan_models().await.unwrap();
     let status = m.get_model_info("gemma4:e2b").await.unwrap().status;
-    if !matches!(status, ModelStatus::Corrupted { .. }) {
-        fails.push(format!("after a cancel mid-weights the row reads {status:?}, not Corrupted"));
+    if !matches!(status, ModelStatus::Corrupted { file_size: 0, .. }) {
+        fails.push(format!("after a cancel mid-weights the row reads {status:?}, not Corrupted with the temporary file's 0 MiB"));
     }
     m.delete_model("gemma4:e2b").await.unwrap();
     if !names(dir.path()).is_empty() {
@@ -373,12 +376,22 @@ async fn a_cancelled_or_partial_model_reads_corrupted_and_a_delete_leaves_nothin
     let m = ModelManager::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
     m.scan_models().await.unwrap();
     let status = m.get_model_info("gemma4:e2b").await.unwrap().status;
-    if !matches!(status, ModelStatus::Corrupted { .. }) {
-        fails.push(format!("with a projector's temporary file the row reads {status:?}, not Corrupted"));
+    if !matches!(status, ModelStatus::Corrupted { file_size: 0, .. }) {
+        fails.push(format!("with a projector's temporary file the row reads {status:?}, not Corrupted with its 0 MiB"));
     }
     m.delete_model("gemma4:e2b").await.unwrap();
     if !names(dir.path()).is_empty() {
         fails.push(format!("with a projector's temporary file a delete left {:?}", names(dir.path())));
+    }
+
+    // No weights at all, and a projector's temporary file.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(partial_name(&proj.pin.sha256, &proj.file)), b"GGUF").unwrap();
+    let m = ModelManager::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+    m.scan_models().await.unwrap();
+    let status = m.get_model_info("gemma4:e2b").await.unwrap().status;
+    if !matches!(status, ModelStatus::Corrupted { file_size: 0, .. }) {
+        fails.push(format!("with only a projector's temporary file the row reads {status:?}, not Corrupted"));
     }
 
     // An Available model.

@@ -54,13 +54,14 @@ async fn sha256_of(path: &std::path::Path, from: u64) -> Result<String> {
 }
 
 /// Whether the file at `path` is exactly `pin`: its length first, then its sha256, each with an error of
-/// its own (#191).
-async fn verify(path: &std::path::Path, file: &str, pin: &PinnedFile) -> Result<()> {
+/// its own (#191). The hash is taken from byte `from`, which every caller passes as 0, so a resumed head
+/// is hashed with the bytes appended to it.
+async fn verify(path: &std::path::Path, file: &str, pin: &PinnedFile, from: u64) -> Result<()> {
     let len = fs::metadata(path).await?.len();
     if len != pin.size_bytes {
         return Err(anyhow!("{} is {} bytes, not the {} its pin expects", file, len, pin.size_bytes));
     }
-    let sha256 = sha256_of(path, 0).await?;
+    let sha256 = sha256_of(path, from).await?;
     if sha256 != pin.sha256 {
         return Err(anyhow!("{} hashes to {}, not the pinned {}", file, sha256, pin.sha256));
     }
@@ -400,10 +401,19 @@ impl ModelManager {
     /// window is Corrupted, nothing of it NotDownloaded.
     async fn status_of(&self, model_def: &super::models::ModelDef) -> ModelStatus {
         match self.file_status(&model_def.name, &model_def.gguf_file, model_def.size_mb, &model_def.weights).await {
-            None => {
-                log::debug!("Model '{}': NOT FOUND", model_def.name);
-                ModelStatus::NotDownloaded
-            }
+            // No weights at all: a projector partial still makes the model Corrupted, as "either of its
+            // files has a temporary file and no final file" says.
+            None => match &model_def.mmproj {
+                Some(p) if fs::metadata(self.partial_path(&p.file, &p.pin)).await.is_ok() => self
+                    .file_status(&model_def.name, &p.file, p.size_mb, &p.pin)
+                    .await
+                    .and_then(|r| r.err())
+                    .unwrap_or(ModelStatus::NotDownloaded),
+                _ => {
+                    log::debug!("Model '{}': NOT FOUND", model_def.name);
+                    ModelStatus::NotDownloaded
+                }
+            },
             Some(Err(corrupted)) => corrupted,
             // An audio model is only usable with its projector, and only inside its window: weights alone
             // would scan as Available and then fail at the first transcription instead of offering a
@@ -541,8 +551,20 @@ impl ModelManager {
 
         let mut offset: u64 = 0;
         for target in &targets {
-            self.download_one(model_name, target, offset, grand_total, &progress_callback)
-                .await?;
+            if let Err(e) = self.download_one(model_name, target, offset, grand_total, &progress_callback).await {
+                // Every failure frees the model, and one that left it reading Downloading reads what is on
+                // disk instead, so its row keeps a button (#191's gate adversary): the size and hash
+                // errors, a refused status, and a rename or removal that failed.
+                self.active_downloads.write().await.remove(model_name);
+                let status = self.status_of(&model_def).await;
+                let mut models = self.available_models.write().await;
+                if let Some(model_info) = models.get_mut(model_name) {
+                    if matches!(model_info.status, ModelStatus::Downloading { .. }) {
+                        model_info.status = status;
+                    }
+                }
+                return Err(e);
+            }
             offset += target.size_mb * MIB;
         }
 
@@ -651,7 +673,7 @@ impl ModelManager {
         // its length would be answered 416.
         if let Ok(m) = fs::metadata(&partial).await {
             if m.len() >= target.pin.size_bytes {
-                match verify(&partial, &target.file, &target.pin).await {
+                match verify(&partial, &target.file, &target.pin, 0).await {
                     Ok(()) => {
                         fs::rename(&partial, &file_path).await?;
                         if let Some(ref callback) = progress_callback {
@@ -670,8 +692,10 @@ impl ModelManager {
         // One fetch, and once more from zero when a resumed one fails its check.
         let mut retried = false;
         loop {
-            let resumed = self.fetch(model_name, target, &partial, &report, progress_callback).await?;
-            match verify(&partial, &target.file, &target.pin).await {
+            // `_from` is where this attempt's own bytes begin: the resumed length, or 0. The check hashes
+            // from 0, so a resumed head is checked with the bytes appended to it.
+            let (resumed, _from) = self.fetch(model_name, target, &partial, &report, progress_callback).await?;
+            match verify(&partial, &target.file, &target.pin, 0).await {
                 Ok(()) => break,
                 Err(e) => {
                     let _ = fs::remove_file(&partial).await;
@@ -680,7 +704,6 @@ impl ModelManager {
                         retried = true;
                         continue;
                     }
-                    self.active_downloads.write().await.remove(model_name);
                     return Err(e);
                 }
             }
@@ -695,7 +718,6 @@ impl ModelManager {
                     model_info.status = ModelStatus::Error(format!("Validation failed: {}", e));
                 }
             }
-            self.active_downloads.write().await.remove(model_name);
             return Err(anyhow!("File validation failed: {}", e));
         }
 
@@ -722,7 +744,7 @@ impl ModelManager {
         partial: &std::path::Path,
         report: &(dyn Fn(u64, f64) -> DownloadProgress + Sync),
         progress_callback: &Option<Box<dyn Fn(DownloadProgress) + Send + Sync>>,
-    ) -> Result<bool> {
+    ) -> Result<(bool, u64)> {
         let file_path = partial;
         let overall_percent = |downloaded: u64| -> u8 { report(downloaded, 0.0).percent };
 
@@ -981,7 +1003,7 @@ impl ModelManager {
         if let Some(ref callback) = progress_callback {
             callback(report(total_size, 0.0));
         }
-        Ok(resuming)
+        Ok((resuming, if resuming { existing_size } else { 0 }))
     }
 
     /// Validate that a file is a valid GGUF model

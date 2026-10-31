@@ -944,12 +944,17 @@ if [ "$MODE" = chooses ]; then
   [ -n "$W_SIZE" ] && [ -n "$P_SIZE" ] || die "$TSV names no E2B pair"
   SEED_SIZE=469372646
   START=$SECONDS; LAST_GROW=$SECONDS; LAST_TOTAL=-1; BOUND=${BC_SUMMARY_BOUND:-1800}
+  # Where the download stands as the wait begins, so a verdict can say whether the in-place check below
+  # ever saw it running: a download already whole here is sampled by nothing.
+  say "the summary download as the wait begins: weights $(stat -c %s "$SUMMARY_DIR/gemma-4-E2B-it-Q4_0.gguf" 2>/dev/null || echo 0) of $W_SIZE bytes at the final path; models/summary holds $(ls -A "$SUMMARY_DIR" 2>/dev/null | tr '\n' ' ')"
   while :; do
     w=$(stat -c %s "$SUMMARY_DIR/gemma-4-E2B-it-Q4_0.gguf" 2>/dev/null || echo 0)
     p=$(stat -c %s "$SUMMARY_DIR/mmproj-gemma-4-E2B-it-BF16.gguf" 2>/dev/null || echo 0)
     [ "$w" = "$W_SIZE" ] && [ "$p" = "$P_SIZE" ] && break
     case "$w" in 0|"$SEED_SIZE"|"$W_SIZE") ;; *) die "the weights' final path holds $w bytes, not the seed, nothing or the pin's $W_SIZE: the download is written in place" ;; esac
-    total=$(du -sb "$SUMMARY_DIR" | cut -f1)
+    # A file renamed while `du` walks the directory makes it exit 1, which `pipefail` would turn into a
+    # silent end of the pass; the sizes are summed by `find` instead.
+    total=$(find "$SUMMARY_DIR" -maxdepth 1 -type f -printf '%s\n' 2>/dev/null | awk '{t += $1} END {print t + 0}')
     if [ "$total" != "$LAST_TOTAL" ]; then LAST_TOTAL=$total; LAST_GROW=$SECONDS; fi
     [ $((SECONDS - LAST_GROW)) -lt 60 ] || die "nothing in models/summary has grown for 60 s: weights $w of $W_SIZE, projector $p of $P_SIZE bytes"
     [ $((SECONDS - START)) -lt "$BOUND" ] || die "the summary model is not whole after ${BOUND}s: weights $w of $W_SIZE, projector $p of $P_SIZE bytes"
