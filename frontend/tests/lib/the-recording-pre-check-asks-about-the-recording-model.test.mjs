@@ -45,12 +45,15 @@ const PATHS = ['button', 'auto-start', 'sidebar'];
 
 const RecordingStatus = { IDLE: 'idle', STARTING: 'starting', RECORDING: 'recording', STOPPING: 'stopping', PROCESSING_TRANSCRIPTS: 'processing', SAVING: 'saving', COMPLETED: 'completed', ERROR: 'error' };
 
+let titleAt = null;
 async function drive(condition, path) {
   const calls = [];
+  const startArgs = [];
   const modals = [];
   const status = (s) => (typeof s === 'string' ? s : Object.keys(s)[0]);
-  const invoke = async (cmd) => {
+  const invoke = async (cmd, args) => {
     calls.push(cmd);
+    if (cmd === 'start_recording_with_devices_and_meeting') startArgs.push(args);
     switch (cmd) {
       case 'transcribe_recording_model_state':
         if (condition.answer === 'throws') throw new Error('the backend could not answer');
@@ -69,20 +72,17 @@ async function drive(condition, path) {
     }
   };
   const boundary = boundaryStubs();
-  const { useRecordingStart } = loadTsx('src/hooks/useRecordingStart.ts', {
+  const { useRecordingStart, meetingTitleAt } = loadTsx('src/hooks/useRecordingStart.ts', {
     ...boundary.modules,
     '@tauri-apps/api/core': { invoke },
     '@tauri-apps/api/event': { listen: async () => () => {} },
     '@/contexts/TranscriptContext': { useTranscripts: () => ({ clearTranscripts: () => {}, setMeetingTitle: () => {} }) },
     '@/components/Sidebar/SidebarProvider': { useSidebar: () => ({ setIsMeetingActive: () => {} }) },
-    '@/contexts/ConfigContext': { useConfig: () => ({ selectedDevices: { micDevice: null, systemDevice: null } }) },
     '@/contexts/RecordingStateContext': { useRecordingState: () => ({ setStatus: () => {}, status: 'idle' }), RecordingStatus },
-    '@/services/recordingService': {
-      recordingService: { startRecordingWithDevices: (mic, sys, title) => invoke('start_recording_with_devices_and_meeting', { mic, sys, title }) },
-    },
     '@/lib/recordingNotification': { showRecordingNotification: () => {} },
   });
 
+  titleAt = meetingTitleAt;
   let api = null;
   function Host() {
     api = useRecordingStart(false, () => {}, (name, message) => modals.push({ name, message }));
@@ -109,13 +109,21 @@ async function drive(condition, path) {
   const downloading = toasts.some((t) => t.member === 'info' && t.title === 'Model download in progress');
   const notReady = toasts.some((t) => t.member === 'error' && t.title === 'Transcription model not ready') && modals.some((m) => m.name === 'modelSelector');
   const outcome = started ? 'start' : downloading ? 'downloading' : notReady ? 'not-ready' : 'nothing';
-  return { outcome, asked, started };
+  return { outcome, asked, started, startArgs };
 }
 
 const failures = [];
+// #242: a start sends its meeting's name and nothing else, under the key the command reads, in the form
+// the backend has always given a meeting (`recording_commands.rs`, `Meeting %Y-%m-%d_%H-%M-%S`).
+const TITLE = /^Meeting \d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/;
 for (const condition of CONDITIONS) {
   for (const path of PATHS) {
-    const { outcome, asked } = await drive(condition, path);
+    const { outcome, asked, startArgs } = await drive(condition, path);
+    for (const a of startArgs) {
+      if (JSON.stringify(Object.keys(a ?? {})) !== '["meetingName"]' || !TITLE.test(a.meetingName)) {
+        failures.push(`${condition.id} via ${path}: the start sent ${JSON.stringify(a)}, not { meetingName: 'Meeting YYYY-MM-DD_HH-MM-SS' }`);
+      }
+    }
     // A path that never ran asks nothing; that is not a pass for anything.
     if (asked !== 1) failures.push(`${condition.id} (${condition.what}) via ${path}: the pre-check ran ${asked} times`);
     if (outcome !== condition.expect) failures.push(`${condition.id} (${condition.what}) via ${path}: ${outcome}, expected ${condition.expect}`);
@@ -123,4 +131,10 @@ for (const condition of CONDITIONS) {
 }
 
 assert.deepEqual(failures, [], `the recording pre-check answered for the wrong model:\n  ${failures.join('\n  ')}`);
-console.log('ok - on all three start paths, the pre-check routes on the state of the model the recording would use: missing, downloading, corrupted and failed refuse with their own message, a command that cannot answer refuses, builtin-ai with Gemma starts, and a ready model starts');
+
+// The frontend's title has the backend's form to the character, so a saved title looks as it always did.
+import fs from 'node:fs';
+const backend = fs.readFileSync(new URL('../../src-tauri/src/audio/recording_commands.rs', import.meta.url), 'utf8');
+assert.match(backend, /"Meeting \{\}",\s*now\.format\("%Y-%m-%d_%H-%M-%S"\)/, "the backend no longer names a meeting `Meeting %Y-%m-%d_%H-%M-%S`, so the frontend's form below is held against nothing");
+assert.equal(titleAt(new Date(2026, 9, 31, 4, 5, 9)), 'Meeting 2026-10-31_04-05-09', "the frontend's meeting title does not have the backend's form");
+console.log('ok - every start sends only its meeting name, in the backend\'s form; on all three start paths, the pre-check routes on the state of the model the recording would use: missing, downloading, corrupted and failed refuse with their own message, a command that cannot answer refuses, builtin-ai with Gemma starts, and a ready model starts');

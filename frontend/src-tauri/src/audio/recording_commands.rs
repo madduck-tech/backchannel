@@ -14,7 +14,6 @@ use tauri::{AppHandle, Emitter, Runtime};
 use tokio::task::JoinHandle;
 
 use super::{
-    parse_audio_device,
     default_input_device,   // Get default microphone
     default_output_device,  // Get default system audio
     RecordingManager,
@@ -254,108 +253,35 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Create new recording manager
     let mut manager = RecordingManager::new();
 
-    // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name, save_folder) =
-        match super::recording_preferences::load_recording_preferences(&app).await {
-            Ok(prefs) => {
-                info!("📋 Loaded recording preferences: auto_save={}, save_folder={:?}, preferred_mic={:?}, preferred_system={:?}",
-                      prefs.auto_save, prefs.save_folder, prefs.preferred_mic_device, prefs.preferred_system_device);
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device, Some(prefs.save_folder))
-            }
-            Err(e) => {
-                warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None, None)
-            }
-        };
-
-    // ============================================================================
-    // MICROPHONE DEVICE RESOLUTION: Preference → Default → Error
-    // ============================================================================
-    let microphone_device = match preferred_mic_name {
-        Some(pref_name) => {
-            info!("🎤 Attempting to use preferred microphone: '{}'", pref_name);
-            match parse_audio_device(&pref_name) {
-                Ok(device) => {
-                    info!("✅ Using preferred microphone: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!("⚠️ Preferred microphone '{}' not available: {}", pref_name, e);
-                    warn!("   Falling back to system default microphone...");
-                    match default_input_device() {
-                        Ok(device) => {
-                            info!("✅ Using default microphone: '{}'", device.name);
-                            Some(Arc::new(device))
-                        }
-                        Err(default_err) => {
-                            error!("❌ No microphone available (preferred and default both failed)");
-                            return Err(fail_start(&app, format!(
-                                "No microphone device available. Preferred device '{}' not found, and default microphone unavailable: {}",
-                                pref_name, default_err
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-        None => {
-            info!("🎤 No microphone preference set, using system default");
-            match default_input_device() {
-                Ok(device) => {
-                    info!("✅ Using default microphone: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    error!("❌ No default microphone available");
-                    return Err(fail_start(&app, format!("No microphone device available: {}", e)));
-                }
-            }
+    // The devices stored at this moment, on every route (#242). Default is the default device; a
+    // named microphone that is missing fails the start rather than recording another (#9); a named
+    // system device that is missing is replaced by the default system device, with a warning.
+    let super::start_devices::Start { devices, auto_save, save_folder } = match super::start_devices::from_store(
+        &app,
+        std::path::Path::new(super::recording_preferences::PREFERENCES_STORE),
+        |name: &str| super::start_devices::lookup(name.to_string()),
+        default_input_device,
+        default_output_device,
+    )
+    .await
+    {
+        Ok(start) => start,
+        Err(e) => {
+            error!("❌ {}", e);
+            return Err(fail_start(&app, e));
         }
     };
-
-    // ============================================================================
-    // SYSTEM AUDIO DEVICE RESOLUTION: Preference → Default → None (optional)
-    // ============================================================================
-    let system_device = match preferred_system_name {
-        Some(pref_name) => {
-            info!("🔊 Attempting to use preferred system audio: '{}'", pref_name);
-            match parse_audio_device(&pref_name) {
-                Ok(device) => {
-                    info!("✅ Using preferred system audio: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!("⚠️ Preferred system audio '{}' not available: {}", pref_name, e);
-                    warn!("   Falling back to system default...");
-                    match default_output_device() {
-                        Ok(device) => {
-                            info!("✅ Using default system audio: '{}'", device.name);
-                            Some(Arc::new(device))
-                        }
-                        Err(default_err) => {
-                            warn!("⚠️ No system audio available (preferred and default both failed): {}", default_err);
-                            warn!("   Recording will continue with microphone only");
-                            None // System audio is optional
-                        }
-                    }
-                }
-            }
-        }
-        None => {
-            info!("🔊 No system audio preference set, using system default");
-            match default_output_device() {
-                Ok(device) => {
-                    info!("✅ Using default system audio: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!("⚠️ No default system audio available: {}", e);
-                    warn!("   Recording will continue with microphone only");
-                    None // System audio is optional
-                }
-            }
-        }
-    };
+    info!("✅ Using microphone: '{}'", devices.microphone.name);
+    match &devices.system {
+        Some(device) => info!("✅ Using system audio: '{}'", device.name),
+        None => info!("ℹ️ No system audio for this recording"),
+    }
+    if let Some(warning) = &devices.warning {
+        warn!("⚠️ {}", warning);
+        let _ = app.emit("recording-warning", warning.clone());
+    }
+    let microphone_device = Some(Arc::new(devices.microphone));
+    let system_device = devices.system.map(Arc::new);
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -469,199 +395,6 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     crate::tray::update_tray_menu(&app);
 
     info!("✅ Recording started successfully with async-first approach");
-
-    Ok(())
-}
-
-/// Start recording with specific devices
-pub async fn start_recording_with_devices<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
-}
-
-/// Start recording with specific devices and optional meeting name
-pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-    meeting_name: Option<String>,
-) -> Result<(), String> {
-    info!(
-        "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}",
-        mic_device_name, system_device_name, meeting_name
-    );
-
-    let start_began = std::time::Instant::now();
-    let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
-
-    // Check if already recording
-    let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
-    info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state {
-        return Err(fail_start(&app, "Recording already in progress".to_string()));
-    }
-
-    // One audio host for the whole start, and not ALSA while PulseAudio is back (#223).
-    crate::audio::devices::host::prepare_for_recording();
-
-    // Pre-flight only — see the twin comment in
-    // `start_recording_with_meeting_name`. The load happens after capture.
-    info!("🔍 Checking transcription model availability before starting recording...");
-    if let Err(validation_error) =
-        crate::transcribe_engine::commands::transcribe_check_model_ready(app.clone()).await
-    {
-        error!("Model check failed: {}", validation_error);
-        emit_start_error(&app, &validation_error);
-        return Err(fail_start(&app, validation_error));
-    }
-    info!("✅ Transcription model check passed");
-
-    // Parse devices
-    let mic_device = if let Some(ref name) = mic_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            fail_start(&app, format!("Invalid microphone device '{}': {}", name, e))
-        })?))
-    } else {
-        None
-    };
-
-    let system_device = if let Some(ref name) = system_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            fail_start(&app, format!("Invalid system device '{}': {}", name, e))
-        })?))
-    } else {
-        None
-    };
-
-    // Async-first approach for custom devices - no more blocking operations!
-    info!("🚀 Starting async recording initialization with custom devices");
-
-    // Create new recording manager
-    let mut manager = RecordingManager::new();
-
-    // Load recording preferences to check auto_save setting
-    let (auto_save, save_folder) = match super::recording_preferences::load_recording_preferences(&app).await {
-        Ok(prefs) => {
-            info!("📋 Loaded recording preferences: auto_save={}, save_folder={:?}", prefs.auto_save, prefs.save_folder);
-            (prefs.auto_save, Some(prefs.save_folder))
-        }
-        Err(e) => {
-            warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            (true, None) // Default to saving if preferences can't be loaded
-        }
-    };
-
-    // Always ensure a meeting name is set so incremental saver initializes
-    let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
-        let now = chrono::Local::now();
-        format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
-        )
-    });
-    manager.set_meeting_name(Some(effective_meeting_name));
-
-    // Set up error callback
-    let app_for_error = app.clone();
-    manager.set_error_callback(move |error| {
-        let _ = app_for_error.emit("recording-error", error.user_message());
-    });
-
-    // Start recording with specified devices and auto_save setting
-    let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save, save_folder)
-        .await
-        .map_err(|e| fail_start(&app, format!("Failed to start recording: {}", e)))?;
-    let capture_timings = manager.start_timings();
-    // Taken before the manager moves into the global, so the emitter never has
-    // to lock RECORDING_MANAGER to read a level.
-    let meter_state = Arc::clone(manager.get_state());
-
-    // Store the manager globally to keep it alive
-    {
-        let mut global_manager = RECORDING_MANAGER.lock().unwrap();
-        *global_manager = Some(manager);
-    }
-
-    // Set recording flag and reset speech detection flag
-    info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
-    IS_RECORDING.store(true, Ordering::SeqCst);
-    reset_speech_detected_flag(); // Reset for new recording session
-
-    // Start the level meter here, not after the model load below. The
-    // microphone is already open, so this is the stretch where the user most
-    // needs to see that it is — and the stretch a failed load will tear down,
-    // which `abort_started_capture` handles.
-    {
-        let handle = spawn_mic_level_emitter(app.clone(), meter_state);
-        *MIC_LEVEL_TASK.lock().unwrap() = Some(handle);
-    }
-
-    // Load the model only now that capture is live — see the twin comment in
-    // `start_recording_with_meeting_name`.
-    let validate_began = std::time::Instant::now();
-    if let Err(load_error) =
-        crate::transcribe_engine::commands::transcribe_validate_model_ready(app.clone()).await
-    {
-        error!("Model load failed after capture started: {}", load_error);
-        abort_started_capture(&app, &load_error).await;
-        return Err(load_error);
-    }
-    let validate_ms = validate_began.elapsed().as_millis();
-    drop(engine_lifecycle_guard);
-
-    log_start_timings(capture_timings, validate_ms, start_began.elapsed().as_millis());
-
-    // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
-    {
-        let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
-        *global_task = Some(task_handle);
-    }
-
-    // CRITICAL: Listen for transcript-update events and save to recording manager
-    // This enables transcript history persistence for page reload sync
-    // Store listener ID for cleanup during stop_recording to ensure microphone is released
-    {
-        use tauri::Listener;
-        let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
-            // Parse the transcript update from the event payload
-            if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // One constructor for both listeners: this block was duplicated verbatim, and both
-                // copies wrote `update.confidence.unwrap_or(1.0)` (#162).
-                let segment =
-                    crate::audio::recording_saver::TranscriptSegment::from_update(&update);
-
-                // Save to recording manager
-                if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
-                    if let Some(manager) = manager_guard.as_ref() {
-                        manager.add_transcript_segment(segment);
-                    }
-                }
-            }
-        });
-        let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
-        *global_listener = Some(listener_id);
-        info!("✅ Transcript-update event listener registered for history persistence");
-    }
-
-    // Emit success event
-    app.emit("recording-started", serde_json::json!({
-        "message": "Recording started with custom devices and parallel processing",
-        "devices": [
-            mic_device_name.unwrap_or_else(|| "Default Microphone".to_string()),
-            system_device_name.unwrap_or_else(|| "Default System Audio".to_string())
-        ],
-        "workers": 3
-    })).map_err(|e| fail_start(&app, e.to_string()))?;
-
-    // Update tray menu to reflect recording state
-    crate::tray::update_tray_menu(&app);
-
-    info!("✅ Recording started with custom devices using async-first approach");
 
     Ok(())
 }

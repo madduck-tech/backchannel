@@ -3,7 +3,7 @@
 # Two people speaking at once, on the two channels, and a transcript that says which is
 # which.
 #
-#   scripts/stage2-two-channel-check.sh <AppImage> normal|swapped
+#   scripts/stage2-two-channel-check.sh <AppImage> normal|swapped|changed
 #
 # This is #30's oracle. Every earlier audio check in this repository put ONE sample on ONE
 # channel, so "the label is right" and "the label is a constant" produced identical output.
@@ -14,6 +14,20 @@
 #
 # The labels must flip between the two runs. That is what separates a channel from a
 # loudness guess, from a constant, and from the arrival order of two queues.
+#
+#   changed   as normal, but the system device is changed in session (#242): monitor A is stored
+#             before launch, monitor B is picked in Settings, and the sample plays only into B's
+#             sink. A start that opened the stored-at-launch A records silence on the system side.
+#             Then a second start is driven the way the tray drives it (a reload with
+#             `autoStartRecording` set), which reaches the app before the frontend has read the store.
+#             A and B are null sinks, never the default output: a both-Default start opens the default
+#             output's monitor, so a B that was the default would pass the control this mode exists for.
+#             Last, B's sink is removed and a start opens the default output's monitor in its place,
+#             with a warning naming B (the product owner's rule on #242).
+#
+# In every mode, what the start opened is read from the app's log only after the start's own
+# `CALLED start_recording_with_devices_and_meeting` line: first run's audio check opens the harness
+# microphone by name before any start, so a grep over the whole log cannot go red (#242).
 #
 # The oracle is `transcripts.json` in the meeting folder, not the screen: nothing renders
 # the channel yet (the OTHERS chip is #30 item 6, a design question), so the assertion is
@@ -40,9 +54,9 @@
 # PipeWire session, so this is in the by-hand audio pass, never CI.
 set -euo pipefail
 
-APP="${1:?usage: stage2-two-channel-check.sh <AppImage> normal|swapped}"
-MODE="${2:?missing mode: normal|swapped}"
-case "$MODE" in normal|swapped) ;; *) echo "mode must be normal or swapped" >&2; exit 2 ;; esac
+APP="${1:?usage: stage2-two-channel-check.sh <AppImage> normal|swapped|changed}"
+MODE="${2:?missing mode: normal|swapped|changed}"
+case "$MODE" in normal|swapped|changed) ;; *) echo "mode must be normal, swapped or changed" >&2; exit 2 ;; esac
 
 PORT="${BC_WD_PORT:-14454}"
 NATIVE_PORT="${BC_WD_NATIVE_PORT:-14455}"
@@ -76,13 +90,18 @@ for pid in $(ls /proc | grep -E '^[0-9]+$'); do
 done
 
 case "$MODE" in
-  normal)  MIC_SAMPLE="$SAMPLE_A"; SYS_SAMPLE="$SAMPLE_B"; MIC_WORDS=("${WORDS_A[@]}"); SYS_WORDS=("${WORDS_B[@]}") ;;
+  normal|changed) MIC_SAMPLE="$SAMPLE_A"; SYS_SAMPLE="$SAMPLE_B"; MIC_WORDS=("${WORDS_A[@]}"); SYS_WORDS=("${WORDS_B[@]}") ;;
   swapped) MIC_SAMPLE="$SAMPLE_B"; SYS_SAMPLE="$SAMPLE_A"; MIC_WORDS=("${WORDS_B[@]}"); SYS_WORDS=("${WORDS_A[@]}") ;;
 esac
 say "mode $MODE: microphone plays $(basename "$MIC_SAMPLE") (${MIC_WORDS[*]}), system audio plays $(basename "$SYS_SAMPLE") (${SYS_WORDS[*]})"
 
 # The sink whose monitor will be picked for system audio.
-read -r TARGET_SINK TARGET_DESC <<<"$(pw-dump | python3 -c '
+SEEDED=""
+if [ "$MODE" = changed ]; then
+  # The sinks are made after `trap cleanup EXIT`, below, so a failure making B still removes A.
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/gate-sinks.sh"
+else
+  read -r TARGET_SINK TARGET_DESC <<<"$(pw-dump | python3 -c '
 import json, sys
 sinks = []
 for o in json.load(sys.stdin):
@@ -91,9 +110,12 @@ for o in json.load(sys.stdin):
         sinks.append((p.get("node.name"), p.get("node.description", "")))
 speaker = next((s for s in sinks if "Speaker" in s[1]), None) or (sinks[0] if sinks else None)
 print(speaker[0], "|".join(speaker[1].split()) if speaker else "")')"
-[ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
-PICK="Monitor of ${TARGET_DESC//|/ }"
-say "system audio will be '$PICK' (playing into $TARGET_SINK)"
+  [ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
+  PICK="Monitor of ${TARGET_DESC//|/ }"
+  # These modes play into a real sink and record its monitor (#30), so a profile of theirs can hold
+  # whatever else played there. It is never kept, passed or not.
+  REAL_OUTPUT_RECORDED=1
+fi
 
 PROFILE=""; PLAYER=""; PASSED=""; HARNESS_UP=""; PGIDFILE=""
 cleanup() {
@@ -107,10 +129,24 @@ cleanup() {
   sleep 1
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1 || true
-  if [ -n "$PROFILE" ] && [ "$PASSED" = "1" ]; then rm -rf "$PROFILE"
+  [ "$MODE" = changed ] && gate_sinks_destroy
+  # A profile that recorded the machine's real default output is never kept, passed or not: it can hold
+  # whatever the person had playing (step f below).
+  if [ -n "$PROFILE" ] && { [ "$PASSED" = "1" ] || [ -n "${REAL_OUTPUT_RECORDED:-}" ]; }; then
+    rm -rf "$PROFILE"
+    [ "$PASSED" = "1" ] || printf 'stage2-two-channel: profile removed, not kept: it recorded the real default output\n' >&2
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-two-channel: profile kept: %s\n' "$PROFILE" >&2; fi
 }
 trap cleanup EXIT
+
+if [ "$MODE" = changed ]; then
+  gate_sinks_create
+  TARGET_SINK=$GATE_SINK_B
+  PICK="Monitor of $GATE_DESC_B"
+  SEEDED="Monitor of $GATE_DESC_A (output)"
+  say "monitor A '${SEEDED% (output)}' is stored before launch; monitor B '$PICK' is picked in session"
+fi
+say "system audio will be '$PICK' (playing into $TARGET_SINK)"
 
 # --- the microphone side: the harness's virtual source, made the default input ----------
 scripts/audio-harness.sh down >/dev/null 2>&1 || true
@@ -153,8 +189,10 @@ APPDATA="$PROFILE/home/.local/share/tech.madduck.backchannel"
 mkdir -p "$APPDATA" "$PROFILE/rec"
 seed_copy "$CACHE/models" "$APPDATA/" || die "could not seed $APPDATA from $CACHE/models"
 cp -a "$CACHE/onboarding-status.json" "$APPDATA/" 2>/dev/null || true
-printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":null,"preferred_system_device":null}}' \
-  "$PROFILE/rec" > "$APPDATA/recording_preferences.json"
+python3 -c 'import json,sys
+print(json.dumps({"preferences":{"save_folder":sys.argv[1],"auto_save":True,"file_format":"mp4","preferred_mic_device":None,"preferred_system_device":sys.argv[2] or None}}))' \
+  "$PROFILE/rec" "$SEEDED" > "$APPDATA/recording_preferences.json"
+[ -z "$SEEDED" ] || say "stored before launch: preferred_system_device = '$SEEDED'"
 say "seeded models from $CACHE; save_folder pinned to $PROFILE/rec"
 
 DRIVER_LOG="$PROFILE/tauri-driver.log"
@@ -203,6 +241,108 @@ await() { local want="$1" what="$2" secs="${3:-20}" n=0
   die "timed out after ${secs}s waiting for $what"; }
 
 await "document.querySelectorAll('button').length > 0" 'the application to render'
+
+# --- what a start opened, read after that start's own CALLED line (#242) ----------------------------
+# A pipeline here never ends in `grep -q`: under `pipefail`, grep's early exit kills the writer with
+# SIGPIPE once its output passes the pipe's buffer, and the pipeline fails though the line was there.
+# Measured on this pass's first run: the warning naming B was in the log and the check said it was not.
+FAILS=()
+LOG=""
+called_count() { grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" 2>/dev/null || true; }
+# In `changed` mode a failed start is recorded and the pass goes on: the control this mode exists for
+# can fail the first start too, and only the second start shows whether the tray route holds.
+fail_or_record() { if [ "$MODE" = changed ]; then FAILS+=("$1"); say "FAILED, recorded, going on: $1"; else die "$1"; fi; }
+start_oracles() {  # <which start> <the CALLED count before it>
+  local which=$1 before=$2 n i after line rest ok bad
+  for i in $(seq 1 40); do [ "$(called_count)" -gt "$before" ] && break; sleep 0.5; done
+  [ "$(called_count)" -gt "$before" ] || { fail_or_record "$which: the app logged no new CALLED line"; return 0; }
+  n=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+  line=$(sed -n "${n}p" "$LOG")
+  say "$which: ${line#*\] }"
+  case "$line" in *"Meeting: Some("*) ;; *) fail_or_record "$which: the start carried no meeting name" ;; esac
+  # The streams are created after the start returns; wait until the system side has said how it went.
+  for i in $(seq 1 40); do
+    tail -n +"$n" "$LOG" | grep -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system device specified' -e 'No system audio for this recording' >/dev/null && break
+    sleep 0.5
+  done
+  after=$(tail -n +"$n" "$LOG")
+  MIC_OPENED=$(printf '%s\n' "$after" | grep -o "Creating microphone stream: [^(]*" | head -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
+  say "$which: the app opened microphone '${MIC_OPENED:-<none>}'"
+  [ "$MIC_OPENED" = "$HARNESS_DESC" ] || fail_or_record "$which: after its CALLED line the app opened microphone '${MIC_OPENED:-<none>}', not the harness's '$HARNESS_DESC'. If it is the real device, the default-input swap did not take; see $LOG"
+  SYS_OPENED=$(printf '%s\n' "$after" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
+  say "$which: the app opened system audio '${SYS_OPENED:-<none>}'"
+  if [ "$MODE" = changed ] && [ "$SYS_OPENED" != "Monitor of $GATE_DESC_A" ] && [ "$SYS_OPENED" != "Monitor of $GATE_DESC_B" ]; then
+    REAL_OUTPUT_RECORDED=1
+  fi
+  [ "$SYS_OPENED" = "$PICK" ] || { fail_or_record "$which: after its CALLED line the app opened system audio '${SYS_OPENED:-<none>}', not the device picked, '$PICK'"; return 0; }
+  # The Creating line is written before the device is opened; the line after it says whether it was.
+  rest=$(printf '%s\n' "$after" | sed -n '/Creating system audio stream: /,$p')
+  ok=$(printf '%s\n' "$rest" | grep -n 'System audio stream created' | head -1 | cut -d: -f1 || true)
+  bad=$(printf '%s\n' "$rest" | grep -n 'Failed to create system audio stream' | head -1 | cut -d: -f1 || true)
+  if [ -z "$ok" ] || { [ -n "$bad" ] && [ "$bad" -lt "$ok" ]; }; then
+    fail_or_record "$which: '$PICK' was named and then not opened; see $LOG"
+  fi
+  return 0
+}
+
+# A stop takes the app to the meeting it saved (`useRecordingStop.ts:365`), where the record controls
+# are not drawn, so a start the pass makes through the command would show no Stop control there. This
+# goes back to the main screen first. Its wait names the path, which reads `/meeting-details` until the
+# navigation lands: a Start recording button would not do, because the sidebar draws one on every page.
+go_home() {
+  await_saved "${1:-the meeting before}"
+  js '"window.location.assign(\"/\"); return true"' >/dev/null || true
+  await "location.pathname === '/' && document.querySelectorAll('button').length > 0" 'the main screen' 30
+}
+# A reload during a stop's save loses it: the frontend marks the meeting saved only at the end of the
+# stop (`useRecordingStop.ts:304`), and a reload before that brings the meeting back as interrupted
+# (measured on this pass's first runs, where the next screen was the recovery dialog). The stop then
+# navigates to the saved meeting (`:365`), so that path is the sign the save is done. False on `/`,
+# where the stop began.
+await_saved() {
+  await "location.pathname === '/meeting-details'" "$1 to be saved, and the app to show it" 60
+}
+# A start made through the command: the meeting's name, the driver's answer, and a Stop control drawn
+# for it, which the app's one-second sync with the backend puts on the main screen.
+command_start() {  # <meeting name> <what this start is, for the messages>
+  local body answer
+  body=$(python3 -c 'import json,sys; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"start_recording_with_devices_and_meeting\", {meetingName: arguments[0]}).then(function () { return \"RESOLVED\"; }, function (e) { return \"REJECTED:\" + String(e); });", "args": [sys.argv[1]]}))' "$1")
+  # execute/sync waits for a returned promise, as scripts/lib/audio-check.sh relies on.
+  answer=$({ curl -s -m 60 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" || true; } | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("value"))
+except Exception: print("")')
+  [ "$answer" = RESOLVED ] || fail_or_record "$2 was refused: '${answer:-<no answer>}'"
+}
+
+# What plays on the default output, by application, or why that cannot be read. A start in `changed`
+# mode that opened the default output's monitor, by design in step f or by a defect before it, records
+# everything listed here; so each start refuses to run while it is not empty. A graph with no default
+# sink fails closed: nothing can be shown silent there.
+default_output_players() {
+  pw-dump | python3 -c 'import json,sys
+d=json.load(sys.stdin); nodes={o["id"]:o for o in d if o.get("type","").endswith("Node")}
+sink=None
+for o in d:
+    if o.get("type","").endswith("Metadata") and ((o.get("props") or {}).get("metadata.name")=="default"):
+        for m in o.get("metadata") or []:
+            if m.get("key")=="default.audio.sink": sink=(m.get("value") or {}).get("name")
+sid=next((i for i,o in nodes.items() if ((o.get("info") or {}).get("props") or {}).get("node.name")==sink), None)
+if sid is None:
+    print("(no default sink in the graph, so nothing shows it silent)"); sys.exit()
+out=[]
+for o in d:
+    if o.get("type","").endswith("Link"):
+        inf=o.get("info") or {}
+        if inf.get("input-node-id")==sid:
+            p=((nodes.get(inf.get("output-node-id")) or {}).get("info") or {}).get("props") or {}
+            if str(p.get("media.class","")).startswith("Stream/Output"): out.append(p.get("application.name") or p.get("node.name") or "?")
+print(", ".join(sorted(set(out))))' || echo "(the graph could not be read)"
+}
+refuse_if_the_default_output_plays() {  # <which start>
+  local playing
+  playing=$(default_output_players)
+  [ -z "$playing" ] || die "something plays on the default output ($playing); $1 could record it, so the pass refuses to make it"
+}
 
 # --- pick the system-audio monitor through the dropdown ----------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button"
@@ -275,6 +415,11 @@ click "$B" "the Back control on the settings screen"
 await "document.querySelectorAll('[role=tab]').length === 0 && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the settings screen to close and the main screen to offer Start recording'
 R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording button"
+LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
+[ -n "$LOG" ] || die "no application log under $APPDATA/logs"
+if [ "$MODE" = changed ] && gate_sink_is_default "$GATE_SINK_B"; then die "monitor B's sink is the default output, so a both-Default start would open it too; this run cannot judge"; fi
+[ "$MODE" = changed ] && refuse_if_the_default_output_plays "the start"
+BEFORE=$(called_count)
 click "$R" "Start recording"
 # A click that landed is a Stop control on screen. Everything below this line reads the application's
 # own log, and without this assertion every way of failing to press the button arrives at the same
@@ -283,25 +428,12 @@ await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-lab
       'the recording to start' 30
 say "recording"
 
-# --- what the application actually opened -------------------------------------------------
-# Condition A3. The harness's success message is about `default.configured.audio.source`;
-# the application resolves `default.audio.source`. If WirePlumber declined the configured
-# value the app opens the real, silent microphone and this whole run would be a system-only
-# recording wearing a two-channel label.
-sleep 8
-LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
-[ -n "$LOG" ] || die "no application log under $APPDATA/logs"
-MIC_OPENED=$(grep -o "Creating microphone stream: [^(]*" "$LOG" | tail -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
-say "the app opened microphone: '${MIC_OPENED:-<none>}'"
-[ -n "$MIC_OPENED" ] || die "the application never created a microphone stream; see $LOG"
-if [ "$MIC_OPENED" != "$HARNESS_DESC" ]; then
-  die "the application opened '$MIC_OPENED', not '$HARNESS_DESC'. The default-input swap did not take, so the microphone channel of this run carries the real device, not sample A. Fix the harness or pin preferred_mic_device; do not read this run as a two-channel result."
-fi
-if grep -q "Using preferred system audio" "$LOG"; then
-  grep -q "Using preferred system audio: '$PICK'" "$LOG" \
-    || die "the app opened a different system device than the one clicked; see $LOG"
-  say "the app opened system audio: $(grep -o "Using preferred system audio: '[^']*'" "$LOG" | tail -1)"
-fi
+# --- what the application actually opened ---------------------------------------------------------
+# Condition A3, and #242's 3c. The harness's success message is about `default.configured.audio.source`;
+# the application resolves `default.audio.source`, so the microphone it opened is read from its own log.
+# The system side is asserted unconditionally. It used to sit behind `if grep -q "Using preferred system
+# audio"`, a line only one of two start paths wrote, so on the other the check checked nothing.
+start_oracles "the start" "$BEFORE"
 
 # --- let both channels accumulate, then stop ----------------------------------------------
 say "recording for 90s so both samples are heard more than once"
@@ -321,7 +453,8 @@ say "reading $JSON"
 # --- the oracle ---------------------------------------------------------------------------
 MIC_WORDS_CSV=$(IFS=,; echo "${MIC_WORDS[*]}")
 SYS_WORDS_CSV=$(IFS=,; echo "${SYS_WORDS[*]}")
-python3 - "$JSON" "$MIC_WORDS_CSV" "$SYS_WORDS_CSV" <<'PY'
+RC=0
+python3 - "$JSON" "$MIC_WORDS_CSV" "$SYS_WORDS_CSV" <<'PY' || RC=$?
 import json, sys
 
 path, mic_csv, sys_csv = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -382,8 +515,7 @@ if problems:
     sys.exit(1)
 print("\n    both channels transcribed, each under its own label, neither under the other")
 PY
-RC=$?
-[ "$RC" -eq 0 ] || die "the channel oracle failed for mode $MODE"
+[ "$RC" -eq 0 ] || fail_or_record "the channel oracle failed for mode $MODE"
 
 # The finalised recording, not a checkpoint. `stop_and_save` merges the checkpoints into
 # one file (`recording_saver.rs`), and an unsorted `find` will happily return a checkpoint
@@ -404,5 +536,131 @@ if [ -z "$FINAL" ]; then
 fi
 say "recording finalised: $FINAL ($(du -h "$FINAL" | cut -f1))"
 
+if [ "$MODE" = changed ]; then
+  # --- e. A second start, driven the way the tray drives it (#242) ---------------------------------
+  # `tray.rs:110-111` sets `autoStartRecording` and reloads the window, so the start runs before the
+  # frontend has read the store. Two Execute Script calls make the same two moves; the result is the
+  # state after the reload, a Stop control and a new CALLED line, not either call's answer.
+  await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'the first meeting to stop' 30
+  await_saved 'the first meeting'
+  if gate_sink_is_default "$GATE_SINK_B"; then die "monitor B's sink became the default output before the second start; this run cannot judge it"; fi
+  refuse_if_the_default_output_plays "the second start, by the tray's route"
+  BEFORE=$(called_count)
+  js '"sessionStorage.setItem(\"autoStartRecording\", \"true\"); return true"' >/dev/null
+  js '"window.location.assign(\"/\"); return true"' >/dev/null || true
+  await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'the tray-route start to show a Stop control' 60
+  start_oracles "the second start, by the tray's route" "$BEFORE"
+  sleep 10
+  STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
+  [ -n "$STOP" ] || die "no Stop recording control after the second start"
+  click "$STOP" "Stop recording, the second start"
+  await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'the second meeting to stop' 30
+
+  # --- 4. A start's name is the meeting's name (#242) ----------------------------------------------
+  # Started with a name the backend never generates, so its own `Meeting YYYY-MM-DD_HH-MM-SS` cannot
+  # pass for it. The name must reach metadata.json, the folder's prefix, and the title saved from
+  # `recording-stopped`. No Rust test reaches the command (no Tauri mock runtime), so the step calls
+  # it the way the frontend does, through `__TAURI_INTERNALS__`, and reads the expression's own value.
+  NAME="Gate meeting $(date +%s)"
+  go_home 'the tray-route meeting'
+  refuse_if_the_default_output_plays "the named start"
+  BEFORE=$(called_count)
+  command_start "$NAME" "the named start"
+  for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
+  LINE=$(grep 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 || true)
+  case "$LINE" in *"Meeting: Some(\"$NAME\")"*) say "the named start: ${LINE#*\] }" ;; *) fail_or_record "the CALLED line does not carry '$NAME': ${LINE#*\] }" ;; esac
+  await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'a Stop control for the named start' 30
+  sleep 5
+  STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
+  [ -n "$STOP" ] || die "no Stop recording control after the named start"
+  click "$STOP" "Stop recording, the named start"
+  META=""
+  for _ in $(seq 1 60); do
+    META=$(find "$PROFILE/rec" -maxdepth 2 -name metadata.json -path "*/$NAME*/*" 2>/dev/null | head -1)
+    [ -n "$META" ] && break; sleep 1
+  done
+  if [ -z "$META" ]; then
+    fail_or_record "no meeting folder starting with '$NAME' under $PROFILE/rec: $(ls "$PROFILE/rec" | tr '\n' ' ')"
+  else
+    say "the folder is '$(basename "$(dirname "$META")")'"
+    GOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("meeting_name") or "")' "$META" 2>/dev/null || true)
+    [ "$GOT" = "$NAME" ] || fail_or_record "metadata.json says meeting_name '$GOT', not '$NAME'"
+  fi
+  # The saved title comes from `recording-stopped`'s meeting_name (useRecordingStop.ts), not from the
+  # folder: read it where the person sees it.
+  TITLED=""
+  for _ in $(seq 1 60); do [ "$(js "\"return document.body.innerText.includes('$NAME')\"")" = "true" ] && { TITLED=1; break; }; sleep 0.5; done
+  [ -n "$TITLED" ] && say "the saved title on screen is '$NAME'" || fail_or_record "the title '$NAME' never appeared on screen after the named meeting stopped"
+
+  # --- f. A start whose picked device is gone (the product owner's rule on #242, 2026-10-31) ---------
+  # B's sink is removed, so the stored 'Monitor of <B> (output)' names a device that is not there. The
+  # start opens the default output's monitor instead and warns naming B. Read after its own CALLED line;
+  # the default it resolved is the name the app itself logs, not one this pass works out.
+  # The sample player targets B by name; with B gone, the session manager would move its stream to the
+  # default output, the machine's real speakers. So it stops first.
+  kill -- -"$PLAYER" 2>/dev/null || true
+  PLAYER=""
+  sleep 1
+  # The default output here is the machine's own, so this start records whatever plays on it. Nothing
+  # may be playing there, the pass's own players included, or the step refuses rather than record it.
+  # The recording is removed as soon as it stops, and the profile is not kept (cleanup).
+  refuse_if_the_default_output_plays "the start with B gone"
+  REAL_OUTPUT_RECORDED=1
+  gate_sink_remove "$GATE_SINK_B"
+  say "removed B's sink; the stored device now names nothing"
+  NAME="Gate fallback $(date +%s)"
+  go_home 'the named meeting'
+  BEFORE=$(called_count)
+  command_start "$NAME" "the start with B gone"
+  for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
+  if [ "$(called_count)" -le "$BEFORE" ]; then
+    fail_or_record "the start with B gone logged no CALLED line"
+  else
+    N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+    for _ in $(seq 1 40); do
+      tail -n +"$N" "$LOG" | grep -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system audio for this recording' >/dev/null && break
+      sleep 0.5
+    done
+    AFTER=$(tail -n +"$N" "$LOG")
+    printf '%s\n' "$AFTER" | grep "The system audio device 'Monitor of $GATE_DESC_B (output)' is not available" >/dev/null \
+      || fail_or_record "with B gone, no warning names B after the start's CALLED line"
+    DEF_MON=$(printf '%s\n' "$AFTER" | grep -o "Default system audio resolved to the default sink's monitor: '[^']*'" | head -1 | sed "s/.*monitor: '//; s/'$//" || true)
+    FB_OPENED=$(printf '%s\n' "$AFTER" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
+    say "with B gone the app resolved the default monitor '${DEF_MON:-<none>}' and opened '${FB_OPENED:-<none>}'"
+    [ -n "$DEF_MON" ] && [ "$FB_OPENED" = "$DEF_MON" ] && [ "$FB_OPENED" != "$PICK" ] \
+      || fail_or_record "with B gone the app opened '${FB_OPENED:-<none>}', not the default monitor it resolved ('${DEF_MON:-<none>}')"
+    printf '%s\n' "$AFTER" | sed -n '/Creating system audio stream: /,$p' | grep 'System audio stream created' >/dev/null \
+      || fail_or_record "with B gone the default monitor was named and then not opened"
+  fi
+  await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'a Stop control for the start with B gone' 30
+  STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
+  [ -n "$STOP" ] || die "no Stop recording control after the start with B gone"
+  click "$STOP" "Stop recording, the start with B gone"
+  await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'the meeting with B gone to stop' 30
+  # Its folder goes at once, not with the profile: it holds the real output's audio. Found by the line
+  # the app writes for this start's folder, after its CALLED line, not by the name: a build that drops
+  # the name names the folder itself (measured under #242's name-dropped control).
+  FB_DIR=""
+  for _ in $(seq 1 60); do
+    FB_DIR=$(tail -n +"${N:-1}" "$LOG" | grep -o "Created meeting folder with checkpoints: .*" | head -1 | sed 's/^Created meeting folder with checkpoints: //' || true)
+    [ -n "$FB_DIR" ] && [ -d "$FB_DIR" ] && break; sleep 0.5
+  done
+  case "$FB_DIR" in
+    "$PROFILE/rec/"?*) rm -rf -- "$FB_DIR"; say "removed the recording of the real output: $(basename "$FB_DIR")" ;;
+    *) fail_or_record "no folder for '$NAME' under $PROFILE/rec to remove" ;;
+  esac
+fi
+if [ "${#FAILS[@]}" -gt 0 ]; then
+  printf 'stage2-two-channel: %s\n' "${FAILS[@]/#/FAILED: }" >&2
+  die "$MODE: ${#FAILS[@]} check(s) failed"
+fi
+
 say "PASS ($MODE) - microphone rows say 'you', system rows say 'others', and nothing crossed"
+[ "$MODE" = changed ] && say "PASS (changed) - both starts opened '$PICK', picked in session over '${SEEDED% (output)}' stored at launch; with it gone, the default monitor '$DEF_MON'"
 PASSED=1

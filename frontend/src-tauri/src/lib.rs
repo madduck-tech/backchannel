@@ -92,67 +92,6 @@ struct TranscriptionStatus {
 }
 
 #[tauri::command]
-async fn start_recording<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-    meeting_name: Option<String>,
-) -> Result<(), String> {
-    log_info!("🔥 CALLED start_recording with meeting: {:?}", meeting_name);
-    log_info!(
-        "📋 Backend received parameters - mic: {:?}, system: {:?}, meeting: {:?}",
-        mic_device_name,
-        system_device_name,
-        meeting_name
-    );
-
-    if is_recording().await {
-        return Err("Recording already in progress".to_string());
-    }
-
-    // Call the actual audio recording system with meeting name
-    match audio::recording_commands::start_recording_with_devices_and_meeting(
-        app.clone(),
-        mic_device_name,
-        system_device_name,
-        meeting_name.clone(),
-    )
-    .await
-    {
-        Ok(_) => {
-            RECORDING_FLAG.store(true, Ordering::SeqCst);
-            tray::update_tray_menu(&app);
-
-            log_info!("Recording started successfully");
-
-            // Show recording started notification through NotificationManager
-            // This respects user's notification preferences
-            let notification_manager_state = app.state::<NotificationManagerState<R>>();
-            if let Err(e) = notifications::commands::show_recording_started_notification(
-                &app,
-                &notification_manager_state,
-                meeting_name.clone(),
-            )
-            .await
-            {
-                log_error!(
-                    "Failed to show recording started notification: {}",
-                    e
-                );
-            } else {
-                log_info!("Successfully showed recording started notification");
-            }
-
-            Ok(())
-        }
-        Err(e) => {
-            log_error!("Failed to start audio recording: {}", e);
-            Err(format!("Failed to start recording: {}", e))
-        }
-    }
-}
-
-#[tauri::command]
 async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<(), String> {
     log_info!("Attempting to stop recording...");
 
@@ -256,45 +195,23 @@ async fn trigger_microphone_permission() -> Result<bool, String> {
 }
 
 
+/// The one command every recording start reaches: the record button, the sidebar, the tray and the
+/// call nudge (#242). It takes only the meeting's name. The devices are the ones stored at this
+/// moment, read by the start itself (`audio::start_devices`): the frontend's copy went stale when
+/// Settings changed a device, and the tray and the nudge reload the window before they start. The
+/// name keeps its old form so the gate's log oracles, which read after this line, still find it.
 #[tauri::command]
 async fn start_recording_with_devices_and_meeting<R: Runtime>(
     app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
-    log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Mic: {:?}, System: {:?}, Meeting: {:?}",
-             mic_device_name, system_device_name, meeting_name);
+    log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Meeting: {:?}", meeting_name);
 
     // Clone meeting_name for notification use later
     let meeting_name_for_notification = meeting_name.clone();
 
-    // Call the recording module functions that support meeting names
-    let recording_result = match (mic_device_name.clone(), system_device_name.clone()) {
-        (None, None) => {
-            log_info!(
-                "No devices specified, starting with defaults and meeting: {:?}",
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
-                .await
-        }
-        _ => {
-            log_info!(
-                "Starting with specified devices: mic={:?}, system={:?}, meeting={:?}",
-                mic_device_name,
-                system_device_name,
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_devices_and_meeting(
-                app.clone(),
-                mic_device_name,
-                system_device_name,
-                meeting_name,
-            )
-            .await
-        }
-    };
+    let recording_result =
+        audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name).await;
 
     match recording_result {
         Ok(_) => {
@@ -531,7 +448,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             call_detector::nudge_start_recording,
             call_detector::nudge_dismiss,
-            start_recording,
             stop_recording,
             is_recording,
             get_transcription_status,
