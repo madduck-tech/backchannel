@@ -4,10 +4,12 @@
 // here through `scripts/test-runner.mjs` with the bound shortened to S.
 //
 // Each run is sampled once, before any bound, to show its case's precondition was reached: a's sleep
-// running, h's helper gone. The sample waits for that rather than for a fixed time, since on a loaded
-// runner a fixture starts late (CI run 41150739546: h's helper was still alive at 2 s). It is taken at
-// SAMPLE_MS at the earliest and a second before S at the latest, and a case's signals, pauses and
-// terminal close are timed from it, so none can land before the state they are meant to interrupt.
+// running, h's helper gone, l's output out. It is taken at S/2 at the earliest, so a bound that fires
+// early has already killed what the sample looks for (#268's gate adversary, round 8: a sample at S/3
+// let a bound at 40% of S pass). Past S/2 it waits only while its case's state is not yet reached, up
+// to a second before S, since on a loaded runner a fixture starts late (CI run 41150739546: h's helper
+// was still alive at 2 s). A case's signals, pauses, terminal close and k's report are timed from it, so
+// none can land before the state they are meant to interrupt.
 //
 // Why this exists beside the configuration test: the bound was observed once, by hand, for #268's
 // verdict. Without this, a later edit that drops one of the runner's kill steps leaves every test
@@ -31,7 +33,7 @@ assert.ok(fs.existsSync('/proc/self/stat'), 'this test reads /proc to find what 
 const frontend = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIX = 'scripts/test-runner-fixtures';
 const S = 6000;
-const SAMPLE_MS = 2000;
+const SAMPLE_MS = S / 2;
 const DEADLINE_MS = S + 40_000;
 const OWN = `bc-runner-test-${process.pid}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-runner-test-'));
@@ -74,20 +76,24 @@ const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
 
 const outputs = [];
 
-/** What a run's sample waits for, by the fixtures it runs: each one's sleep, d's stamp, h's orphan. */
-const READY = { a: ['a'], c: ['c'], d: ['stamp'], f: ['f'], h: ['h', 'hOrphaned'] };
+/** What a run's sample waits for, by the fixtures it runs: each one's sleep, d's stamp, h's orphan, l's output. */
+const READY = { a: ['a'], c: ['c'], d: ['stamp'], f: ['f'], h: ['h', 'hOrphaned'], l: ['lPrinted'] };
 const readyFor = (files) => files.flatMap((f) => READY[/^([a-z])-/.exec(path.basename(f))?.[1]] ?? []);
 
-async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt, pauseStdout, concurrency = 4, watchMarks = [], ready = readyFor(files) } = {}) {
+async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt, pauseStdout, releaseK, concurrency = 4, watchMarks = [], ready = readyFor(files) } = {}) {
   const marks = marksFor(n);
   const stamp = path.join(tmp, `stamp-${n}`);
   const stampH = path.join(tmp, `stamp-h-${n}`);
+  const stampL = path.join(tmp, `stamp-l-${n}`);
+  const releaseFile = path.join(tmp, `release-k-${n}`);
   for (const m of Object.values(marks)) check(sleepsWith(m).length === 0, `${name}: a process already carries ${m} before the run`);
   const env = {
     ...process.env,
     ...Object.fromEntries(Object.entries(marks).map(([k, m]) => [`BC_HANG_MARK_${k}`, m])),
     BC_HANG_STAMP_D: stamp,
     BC_HANG_STAMP_H: stampH,
+    BC_HANG_STAMP_L: stampL,
+    BC_HANG_RELEASE_K: releaseFile,
     BC_TEST_MARKS: [process.env.BC_TEST_MARKS, OWN].filter(Boolean).join(' '),
     // As a run under `pnpm test` has it, so the runner's dropping it is what lets the files run.
     NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || 'child-v8',
@@ -119,6 +125,7 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
       f: sleepsWith(marks.F).length,
       h: sleepsWith(marks.H).length,
       hOrphaned: fs.existsSync(stampH),
+      lPrinted: fs.existsSync(stampL),
       stamp: fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : '',
     };
   };
@@ -141,8 +148,9 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
   // A reader that goes away: the runner's next write fails with EPIPE.
   if (closeStdoutAt) setTimeout(() => child.stdout.destroy(), closeStdoutAt).unref();
   // After the sample: a reader that stops for a while and then goes on, so the runner's write meets a
-  // full pipe, and the signals.
+  // full pipe; k's report; and the signals.
   mid.then(() => {
+    if (releaseK !== undefined) setTimeout(() => fs.writeFileSync(releaseFile, ''), releaseK).unref();
     if (pauseStdout) {
       setTimeout(() => child.stdout.pause(), pauseStdout.from).unref();
       setTimeout(() => child.stdout.resume(), pauseStdout.to).unref();
@@ -303,7 +311,7 @@ try {
   //    what it is running goes with it, long before the bound. The write is k's report, at 3 s, after
   //    h's orphan is made.
   {
-    const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
+    const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300, releaseK: 500 });
     check(r.mid.h > 0, "EPIPE: h's sleep was not running at the sample");
     check(r.mid.hOrphaned, "EPIPE: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.ms < 15_000, `EPIPE: the runner ran on for ${r.ms} ms after its reader went away`);
@@ -341,6 +349,7 @@ try {
       signals: [{ sig: 'SIGTERM', after: 500 }],
       pauseStdout: { from: 0, to: 1500 },
     });
+    check(r.mid.lPrinted, "slow reader: l had not written its 400 KiB by the sample, so the abort met none of it");
     check(r.code === 143, `slow reader: the runner exited ${r.code} (${r.sig}), not 143`);
     check(new RegExp(`^✖ ${FIX}/l-prints-then-hangs\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'slow reader: no ✖ line names l after the pipe filled');
     const named = r.out.search(/^✖ .*l-prints-then-hangs/m);
@@ -353,7 +362,7 @@ try {
   //     orphan too, and the stack is printed. With h, faulted when k reports at 3 s, after the orphan.
   for (const [n, fault, code] of [[12, 'report', 2], [13, 'uncaught', 1]]) {
     const name = `fault ${fault}`;
-    const r = await nested(name, n, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, env: { BC_TEST_RUNNER_FAULT: fault } });
+    const r = await nested(name, n, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, env: { BC_TEST_RUNNER_FAULT: fault }, releaseK: 500 });
     check(r.mid.hOrphaned, `${name}: h's helper had not exited by the sample, so its sleep was not yet an orphan`);
     check(r.code === code, `${name}: the runner exited ${r.code} (${r.sig}), not ${code}`);
     check(/a fault injected/.test(r.err) && /\n {4}at /.test(r.err), `${name}: the runner did not print the fault's stack`);
@@ -378,6 +387,7 @@ try {
       signals: [{ sig: 'SIGTERM', after: 500 }],
       pauseStdout: { from: 0, to: DEADLINE_MS * 2 },
     });
+    check(r.mid.lPrinted, "stopped reader: l had not written its 400 KiB by the sample, so the abort met none of it");
     check(r.code === 143, `stopped reader: the runner exited ${r.code} (${r.sig}), not 143`);
     check(r.ms < r.mid.at + 500 + 8000, `stopped reader: the runner took ${r.ms} ms to end, ${r.ms - r.mid.at - 500} ms after SIGTERM, with its reader stopped`);
   }
@@ -393,6 +403,7 @@ try {
       prefix: ['python3', path.join(frontend, FIX, 'read-slowly-on-a-pipe.py'), String(64 * 1024)],
       signals: [{ sig: 'SIGTERM', after: 500 }],
     });
+    check(r.mid.lPrinted, "steady reader: l had not written its 400 KiB by the sample, so the abort met none of it");
     check(r.code === 143, `steady reader: the runner exited ${r.code} (${r.sig}), not 143`);
     check(r.out.includes(`l: ${'y'.repeat(400 * 1024)}`), `steady reader: l's 400 KiB did not all arrive (${r.out.length} bytes did)`);
     check(r.ms - r.mid.at > 500 + 5000, `steady reader: the run ended ${r.ms - r.mid.at - 500} ms after SIGTERM, too soon for 400 KiB at 64 KiB a second, so the reader was not slow`);
@@ -413,8 +424,10 @@ try {
       signals: [{ sig: 'SIGTERM', after: 500 }],
       pauseStdout: { from: 0, to: 1500 },
       watchMarks: ['H'],
-      ready: [],
+      // l's output, not h's orphan: h is queued behind l and must never start.
+      ready: ['lPrinted'],
     });
+    check(r.mid.lPrinted, "queue: l had not written its 400 KiB by the sample, so the abort met none of it");
     check(r.code === 143, `queue: the runner exited ${r.code} (${r.sig}), not 143`);
     check(!r.seen.H, 'queue: h, waiting behind l, started after the abort');
     check(!/h-orphans-a-hidden-child/.test(r.out), 'queue: a line names h, which should never have started');
@@ -434,9 +447,9 @@ try {
 
   // 18. Too few file descriptors (EMFILE): Node returns before it sets up a child's stdio. Each file
   //     that could not start is named; the run does not fail as the runner's own bug.
-  //     The limit is two above what a fresh node holds once started: the middle of the range where Node
-  //     starts and a spawn, with its pipes, cannot, which ran from two below that count to six above it,
-  //     measured with io_uring and without. A fixed 28 was the top of that range here, and where the
+  //     The limit is two above what a fresh node holds once started: inside the range where Node starts
+  //     and a spawn, with its pipes, cannot, which ran from one below that count to six above it,
+  //     measured with io_uring and without (below it, Node cannot open the runner). A fixed 28 was the top of that range here, and where the
   //     kernel refuses io_uring (Docker's default seccomp profile) Node holds three fewer, and 28 let
   //     the first file start (#268's gate adversary, round 7).
   {

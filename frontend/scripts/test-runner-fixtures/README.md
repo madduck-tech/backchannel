@@ -20,8 +20,8 @@ anything, so no run can fall back to a marker another run uses.
 | `h-orphans-a-hidden-child.mjs` | a `test()` whose helper starts a marker-less `sleep` and exits 1.2 s later, writing `BC_HANG_STAMP_H`, then awaits forever. Only the runner's poll of the tree finds it |
 | `i-kills-its-runner.mjs` | no `node:test`; ends its own `node --test` with SIGKILL, then exits 0. The watchdog reports 137 |
 | `j-prints-a-lot.mjs` | no `node:test`; 20 MiB of output, past the runner's 16 MiB cap |
-| `k-passes-late.mjs` | no `node:test`; passes after 3 s, so its report is written once h's orphan exists |
+| `k-passes-late.mjs` | no `node:test`; passes once the test writes `BC_HANG_RELEASE_K`, after its sample has seen h's orphan, so its report is written once that orphan exists (3 s without the variable, 20 s if never released) |
 | `passes.mjs` | ends by itself after about a second |
-| `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe |
+| `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe. Once its write is out it writes `BC_HANG_STAMP_L` |
 
 `close-the-terminal.py` and `read-slowly-on-a-terminal.py` are not fixtures: they run a command on a pseudo-terminal, the first closing it when it receives SIGUSR1, the second draining it slowly, for the test's terminal cases. `read-slowly-on-a-pipe.py` is the second's counterpart on a pipe.

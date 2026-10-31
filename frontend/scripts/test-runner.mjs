@@ -392,8 +392,8 @@ function abort(why, code, error) {
   let moved = Date.now();
   setInterval(() => {
     if (streams.every((s) => s.writableLength === 0)) process.exit(code);
-    // `writeQueueSize` is internal to Node, and absent where a write is synchronous (a file, a
-    // terminal): there it reads 0. Nothing else writes once the abort has, so any change is the reader's.
+    // `writeQueueSize` is internal to Node: absent for a file and 0 on a terminal, whose writes are
+    // synchronous. Nothing else writes once the abort has, so any change is the reader's.
     const now = streams.map((s) => `${s.writableLength}/${s._handle?.writeQueueSize ?? 0}`).join(' ');
     if (now !== last) {
       last = now;
