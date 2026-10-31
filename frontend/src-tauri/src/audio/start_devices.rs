@@ -9,8 +9,11 @@
 
 use anyhow::Result;
 use log::{info, warn};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Runtime};
+
+use super::devices::{get_device_and_config, parse_audio_device, AudioDevice};
 
 /// What a start opens.
 #[derive(Debug, PartialEq, Eq)]
@@ -25,30 +28,55 @@ pub struct StartDevices<D> {
 ///
 /// - A named microphone that is missing fails the start. The default is not put in its place (#9):
 ///   recording a microphone the person did not pick, without saying so, is worse than not starting.
-/// - A named system device that is missing leaves the system side out, with a warning, and the
-///   microphone records. So does a default system device that cannot be found.
-pub fn resolve<D>(
+/// - A named system device that is missing is replaced by the default system device, with a warning
+///   (the product owner, on #242, 2026-10-31): unplugged headphones send the call to the speakers, so
+///   the default is where the other side now plays. With no default either, the microphone records
+///   alone, with a warning.
+///
+/// `by_name` is [`lookup`] in a start: "missing" means the device is not there, not only that its
+/// name does not parse.
+pub async fn resolve<D, F: Future<Output = Result<D>>>(
     microphone: Option<&str>,
     system: Option<&str>,
-    by_name: impl Fn(&str) -> Result<D>,
+    by_name: impl Fn(&str) -> F,
     default_microphone: impl FnOnce() -> Result<D>,
     default_system: impl FnOnce() -> Result<D>,
 ) -> Result<StartDevices<D>, String> {
     let microphone = match microphone {
         None => default_microphone().map_err(|e| format!("No microphone device available: {e}"))?,
-        Some(name) => by_name(name).map_err(|e| format!("The microphone '{name}' is not available: {e}"))?,
+        Some(name) => by_name(name).await.map_err(|e| format!("The microphone '{name}' is not available: {e}"))?,
     };
     let (system, warning) = match system {
         None => match default_system() {
             Ok(device) => (Some(device), None),
             Err(e) => (None, Some(format!("No default system audio device ({e}); recording the microphone only"))),
         },
-        Some(name) => match by_name(name) {
+        Some(name) => match by_name(name).await {
             Ok(device) => (Some(device), None),
-            Err(e) => (None, Some(format!("The system audio device '{name}' is not available ({e}); recording the microphone only"))),
+            Err(e) => match default_system() {
+                Ok(device) => (Some(device), Some(format!("The system audio device '{name}' is not available ({e}); recording the default system audio device instead"))),
+                Err(d) => (None, Some(format!("The system audio device '{name}' is not available ({e}), and there is no default ({d}); recording the microphone only"))),
+            },
         },
     };
     Ok(StartDevices { microphone, system, warning })
+}
+
+/// The lookup a start resolves a stored name with: the name parsed, then the device found through the
+/// enumeration its stream opens it with (`get_device_and_config`). Parsing alone never failed for an
+/// unplugged device, so before #242 a missing device was found only when its stream would not open.
+///
+/// On macOS a system device is only parsed: its stream may open through the Core Audio tap
+/// (`stream.rs`, `StreamPath::CoreAudioTap`), which this enumeration does not vouch for. Not proven
+/// there either way (ADR 0005).
+pub async fn lookup(name: String) -> Result<AudioDevice> {
+    let device = parse_audio_device(&name)?;
+    #[cfg(target_os = "macos")]
+    if device.device_type == super::devices::DeviceType::Output {
+        return Ok(device);
+    }
+    get_device_and_config(&device).await?;
+    Ok(device)
 }
 
 /// What a start records with: the devices, and where and whether it saves.
@@ -63,10 +91,10 @@ pub struct Start<D> {
 /// Every start calls this, so a device picked in Settings is the one the next start opens, and a
 /// start made before the window has read the store (the tray, the call nudge) still opens it.
 /// Preferences that cannot be read are the defaults, as they always were.
-pub async fn from_store<R: Runtime, D>(
+pub async fn from_store<R: Runtime, D, F: Future<Output = Result<D>>>(
     app: &AppHandle<R>,
     store: &Path,
-    by_name: impl Fn(&str) -> Result<D>,
+    by_name: impl Fn(&str) -> F,
     default_microphone: impl FnOnce() -> Result<D>,
     default_system: impl FnOnce() -> Result<D>,
 ) -> Result<Start<D>, String> {
@@ -82,7 +110,7 @@ pub async fn from_store<R: Runtime, D>(
                 (true, None, None, None)
             }
         };
-    let devices = resolve(microphone.as_deref(), system.as_deref(), by_name, default_microphone, default_system)?;
+    let devices = resolve(microphone.as_deref(), system.as_deref(), by_name, default_microphone, default_system).await?;
     Ok(Start { devices, auto_save, save_folder })
 }
 
@@ -97,72 +125,97 @@ mod tests {
     const GONE_MIC: &str = "Unplugged mic (input)";
     const GONE_SYS: &str = "Unplugged monitor (output)";
 
-    fn by_name(name: &str) -> Result<String> {
+    fn found(name: &str) -> Result<String> {
         match name {
             MIC | SYS => Ok(name.to_string()),
             _ => Err(anyhow::anyhow!("Device not found: {name}")),
         }
     }
-    fn run(mic: Option<&str>, sys: Option<&str>) -> Result<StartDevices<String>, String> {
-        resolve(mic, sys, by_name, || Ok("default mic".to_string()), || Ok("default monitor".to_string()))
+    /// What a machine with "Mic A" and "Monitor B" answers. A start passes [`lookup`] here.
+    fn by_name(name: &str) -> std::future::Ready<Result<String>> {
+        std::future::ready(found(name))
+    }
+    async fn run(mic: Option<&str>, sys: Option<&str>) -> Result<StartDevices<String>, String> {
+        resolve(mic, sys, by_name, || Ok("default mic".to_string()), || Ok("default monitor".to_string())).await
     }
     fn both(mic: &str, sys: &str) -> Result<StartDevices<String>, String> {
         Ok(StartDevices { microphone: mic.to_string(), system: Some(sys.to_string()), warning: None })
     }
 
-    #[test]
-    fn default_and_default_open_both_defaults() {
-        assert_eq!(run(None, None), both("default mic", "default monitor"));
+    #[tokio::test]
+    async fn default_and_default_open_both_defaults() {
+        assert_eq!(run(None, None).await, both("default mic", "default monitor"));
     }
 
-    #[test]
-    fn default_microphone_and_a_named_system_device_open_both() {
-        assert_eq!(run(None, Some(SYS)), both("default mic", SYS));
+    #[tokio::test]
+    async fn default_microphone_and_a_named_system_device_open_both() {
+        assert_eq!(run(None, Some(SYS)).await, both("default mic", SYS));
     }
 
-    #[test]
-    fn a_named_microphone_and_the_default_system_device_open_both() {
-        assert_eq!(run(Some(MIC), None), both(MIC, "default monitor"));
+    #[tokio::test]
+    async fn a_named_microphone_and_the_default_system_device_open_both() {
+        assert_eq!(run(Some(MIC), None).await, both(MIC, "default monitor"));
     }
 
-    #[test]
-    fn named_and_named_open_both() {
-        assert_eq!(run(Some(MIC), Some(SYS)), both(MIC, SYS));
+    #[tokio::test]
+    async fn named_and_named_open_both() {
+        assert_eq!(run(Some(MIC), Some(SYS)).await, both(MIC, SYS));
     }
 
-    #[test]
-    fn default_microphone_and_a_missing_system_device_record_the_microphone_only() {
-        let r = run(None, Some(GONE_SYS)).unwrap();
-        assert_eq!((r.microphone.as_str(), r.system), ("default mic", None));
-        assert!(r.warning.as_deref().is_some_and(|w| w.contains(GONE_SYS)), "no warning names the missing device: {:?}", r.warning);
+    /// The product owner's rule on #242: unplugged headphones send the call to the speakers, so the
+    /// default is where the other side now plays.
+    #[tokio::test]
+    async fn a_missing_system_device_is_replaced_by_the_default_with_a_warning() {
+        for mic in [None, Some(MIC)] {
+            let r = run(mic, Some(GONE_SYS)).await.unwrap();
+            assert_eq!((r.microphone.as_str(), r.system.as_deref()), (mic.unwrap_or("default mic"), Some("default monitor")), "microphone {mic:?}");
+            assert!(r.warning.as_deref().is_some_and(|w| w.contains(GONE_SYS) && w.contains("default")), "microphone {mic:?}: no warning names the missing device and the substitute: {:?}", r.warning);
+        }
     }
 
-    #[test]
-    fn a_named_microphone_and_a_missing_system_device_record_the_microphone_only() {
-        let r = run(Some(MIC), Some(GONE_SYS)).unwrap();
+    #[tokio::test]
+    async fn a_missing_system_device_and_no_default_record_the_microphone_only() {
+        let r = resolve(Some(MIC), Some(GONE_SYS), by_name, || Ok("default mic".to_string()), || Err(anyhow::anyhow!("no output"))).await.unwrap();
         assert_eq!((r.microphone.as_str(), r.system), (MIC, None));
-        assert!(r.warning.as_deref().is_some_and(|w| w.contains(GONE_SYS)), "no warning names the missing device: {:?}", r.warning);
+        assert!(r.warning.as_deref().is_some_and(|w| w.contains(GONE_SYS) && w.contains("microphone only")), "{:?}", r.warning);
     }
 
-    #[test]
-    fn a_missing_microphone_fails_the_start_and_is_not_replaced_by_the_default() {
+    #[tokio::test]
+    async fn a_missing_microphone_fails_the_start_and_is_not_replaced_by_the_default() {
         for sys in [None, Some(SYS), Some(GONE_SYS)] {
-            let r = run(Some(GONE_MIC), sys);
+            let r = run(Some(GONE_MIC), sys).await;
             assert!(matches!(&r, Err(e) if e.contains(GONE_MIC)), "system {sys:?}: a missing microphone gave {r:?}");
         }
     }
 
-    #[test]
-    fn no_default_system_device_records_the_microphone_only() {
-        let r = resolve(None, None, by_name, || Ok("default mic".to_string()), || Err(anyhow::anyhow!("no output"))).unwrap();
+    #[tokio::test]
+    async fn no_default_system_device_records_the_microphone_only() {
+        let r = resolve(None, None, by_name, || Ok("default mic".to_string()), || Err(anyhow::anyhow!("no output"))).await.unwrap();
         assert_eq!((r.microphone.as_str(), r.system), ("default mic", None));
         assert!(r.warning.is_some());
     }
 
-    #[test]
-    fn no_default_microphone_fails_the_start() {
-        let r = resolve(None, Some(SYS), by_name, || Err(anyhow::anyhow!("no input")), || Ok("default monitor".to_string()));
+    #[tokio::test]
+    async fn no_default_microphone_fails_the_start() {
+        let r = resolve(None, Some(SYS), by_name, || Err(anyhow::anyhow!("no input")), || Ok("default monitor".to_string())).await;
         assert!(r.is_err(), "{r:?}");
+    }
+
+    /// The production lookup, against this machine's own audio devices: a name nothing carries is
+    /// refused, where parsing alone accepted it (#242), and the default input's own name is found.
+    /// Ignored, because it enumerates audio devices; `gopnik.json` stage 1 runs it by name.
+    #[tokio::test]
+    #[ignore]
+    async fn the_start_lookup_refuses_a_device_that_is_not_there() {
+        crate::audio::devices::host::tests::use_the_real_sound_server();
+        let gone = "Backchannel no such device 7f3e9c (input)";
+        assert!(crate::audio::devices::parse_audio_device(gone).is_ok(), "the name does not even parse, so this proves nothing about presence");
+        let e = lookup(gone.to_string()).await.expect_err("a device nothing carries was found");
+        println!("refused: {e}");
+        let default = crate::audio::default_input_device().expect("this machine has no default input; the positive half cannot run");
+        let name = format!("{} (input)", default.name);
+        lookup(name.clone()).await.unwrap_or_else(|e| panic!("the default input's own name, {name}, was refused: {e}"));
+        println!("found: {name}");
     }
 
     /// The start as the app makes it, over a store on disk: a mock app with the store plugin, and
@@ -174,11 +227,11 @@ mod tests {
         const A: &str = "Monitor A (output)";
         const B: &str = "Monitor B (output)";
 
-        fn by_name(name: &str) -> Result<String> {
-            match name {
+        fn by_name(name: &str) -> std::future::Ready<Result<String>> {
+            std::future::ready(match name {
                 MIC | A | B => Ok(name.to_string()),
                 _ => Err(anyhow::anyhow!("Device not found: {name}")),
-            }
+            })
         }
 
         /// A store file holding `system` before the app is built: what was stored at launch.

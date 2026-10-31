@@ -22,6 +22,8 @@
 #             `autoStartRecording` set), which reaches the app before the frontend has read the store.
 #             A and B are null sinks, never the default output: a both-Default start opens the default
 #             output's monitor, so a B that was the default would pass the control this mode exists for.
+#             Last, B's sink is removed and a start opens the default output's monitor in its place,
+#             with a warning naming B (the product owner's rule on #242).
 #
 # In every mode, what the start opened is read from the app's log only after the start's own
 # `CALLED start_recording_with_devices_and_meeting` line: first run's audio check opens the harness
@@ -516,6 +518,46 @@ except Exception: print("")' || true)
   TITLED=""
   for _ in $(seq 1 60); do [ "$(js "\"return document.body.innerText.includes('$NAME')\"")" = "true" ] && { TITLED=1; break; }; sleep 0.5; done
   [ -n "$TITLED" ] && say "the saved title on screen is '$NAME'" || fail_or_record "the title '$NAME' never appeared on screen after the named meeting stopped"
+
+  # --- f. A start whose picked device is gone (the product owner's rule on #242, 2026-10-31) ---------
+  # B's sink is removed, so the stored 'Monitor of <B> (output)' names a device that is not there. The
+  # start opens the default output's monitor instead and warns naming B. Read after its own CALLED line;
+  # the default it resolved is the name the app itself logs, not one this pass works out.
+  gate_sink_remove "$GATE_SINK_B"
+  say "removed B's sink; the stored device now names nothing"
+  NAME="Gate fallback $(date +%s)"
+  BEFORE=$(called_count)
+  BODY=$(python3 -c 'import json,sys; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"start_recording_with_devices_and_meeting\", {meetingName: arguments[0]}).then(function () { return \"RESOLVED\"; }, function (e) { return \"REJECTED:\" + String(e); });", "args": [sys.argv[1]]}))' "$NAME")
+  ANSWER=$({ curl -s -m 60 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$BODY" || true; } | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("value"))
+except Exception: print("")')
+  [ "$ANSWER" = RESOLVED ] || fail_or_record "the start with B gone was refused: '${ANSWER:-<no answer>}'"
+  for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
+  if [ "$(called_count)" -le "$BEFORE" ]; then
+    fail_or_record "the start with B gone logged no CALLED line"
+  else
+    N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+    for _ in $(seq 1 40); do
+      tail -n +"$N" "$LOG" | grep -q -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system audio for this recording' && break
+      sleep 0.5
+    done
+    AFTER=$(tail -n +"$N" "$LOG")
+    printf '%s\n' "$AFTER" | grep -q "The system audio device 'Monitor of $GATE_DESC_B (output)' is not available" \
+      || fail_or_record "with B gone, no warning names B after the start's CALLED line"
+    DEF_MON=$(printf '%s\n' "$AFTER" | grep -o "Default system audio resolved to the default sink's monitor: '[^']*'" | head -1 | sed "s/.*monitor: '//; s/'$//" || true)
+    FB_OPENED=$(printf '%s\n' "$AFTER" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
+    say "with B gone the app resolved the default monitor '${DEF_MON:-<none>}' and opened '${FB_OPENED:-<none>}'"
+    [ -n "$DEF_MON" ] && [ "$FB_OPENED" = "$DEF_MON" ] && [ "$FB_OPENED" != "$PICK" ] \
+      || fail_or_record "with B gone the app opened '${FB_OPENED:-<none>}', not the default monitor it resolved ('${DEF_MON:-<none>}')"
+    printf '%s\n' "$AFTER" | sed -n '/Creating system audio stream: /,$p' | grep -q 'System audio stream created' \
+      || fail_or_record "with B gone the default monitor was named and then not opened"
+  fi
+  sleep 5
+  STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
+  [ -n "$STOP" ] || die "no Stop recording control after the start with B gone"
+  click "$STOP" "Stop recording, the start with B gone"
+  await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'the meeting with B gone to stop' 30
 fi
 if [ "${#FAILS[@]}" -gt 0 ]; then
   printf 'stage2-two-channel: %s\n' "${FAILS[@]/#/FAILED: }" >&2
@@ -523,5 +565,5 @@ if [ "${#FAILS[@]}" -gt 0 ]; then
 fi
 
 say "PASS ($MODE) - microphone rows say 'you', system rows say 'others', and nothing crossed"
-[ "$MODE" = changed ] && say "PASS (changed) - both starts opened '$PICK', picked in session over '${SEEDED% (output)}' stored at launch"
+[ "$MODE" = changed ] && say "PASS (changed) - both starts opened '$PICK', picked in session over '${SEEDED% (output)}' stored at launch; with it gone, the default monitor '$DEF_MON'"
 PASSED=1
