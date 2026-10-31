@@ -1,5 +1,7 @@
-"""Run a command on a new pseudo-terminal and read what it writes at RATE bytes a second, as a slow
-terminal drains, until the command has ended, passing on what it reads. Exits with the command's status.
+"""Run a command on a new pseudo-terminal and read what it writes at no more than RATE bytes a second, as
+a slow terminal drains, until the command has ended, passing on what it reads. A pty hands over a few KiB
+a read, so the rate reached is lower: about 1.8 MiB/s at a RATE of 4 MiB/s (#268's gate adversary,
+round 10). Exits with the command's status.
 A helper for test-runner-bounds-each-file.test.mjs: Node writes to a terminal synchronously, so a slow
 one holds the runner's event loop for as long as a large report takes.
 

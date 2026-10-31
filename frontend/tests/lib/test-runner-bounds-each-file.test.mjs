@@ -8,8 +8,10 @@
 // before S/2 has already killed what the sample looks for (#268's gate adversary, round 8: a sample at
 // S/3 let a bound at 40% of S pass). One that fires between S/2 and S is caught by the duration its ✖
 // line gives, which must be at least S: the line prints the configured bound whenever it fires (round 9).
-// Not in the slow terminal's case: there j's report holds the event loop, so h's duration runs past S
-// whatever its timer was set to. Past S/2 it waits only while its case's state is not yet reached, up
+// The duration includes the kill and drain after the bound, 20-30 ms without /proc and 150-330 ms with it,
+// so case 2 holds a bound to within about 25 ms of S and cases 1 and 1b to within those few hundred
+// (round 10). Not in the slow terminal's case: there j's report holds the event loop, so h's duration
+// runs past S whatever its timer was set to. Past S/2 it waits only while its case's state is not yet reached, up
 // to a second before S, since on a loaded runner a fixture starts late (CI run 41150739546: h's helper
 // was still alive at 2 s). A case's signals, pauses, terminal close and k's report are timed from it, so
 // none can land before the state they are meant to interrupt.
@@ -400,6 +402,9 @@ try {
     check(r.mid.lPrinted, "stopped reader: l had not written its 400 KiB by the sample, so the abort met none of it");
     check(r.code === 143, `stopped reader: the runner exited ${r.code} (${r.sig}), not 143`);
     check(r.ms < r.mid.at + 500 + 8000, `stopped reader: the runner took ${r.ms} ms to end, ${r.ms - r.mid.at - 500} ms after SIGTERM, with its reader stopped`);
+    // An abort with nothing queued ends on its first tick, so a run that ended sooner than the 2 s rule never
+    // met l's output in its pipe, and proves nothing about the rule (round 10).
+    check(r.ms - r.mid.at - 500 >= 1900, `stopped reader: the runner ended ${r.ms - r.mid.at - 500} ms after SIGTERM, before the 2 s rule could act, so it held none of l's output`);
   }
 
   // 11c. SIGTERM with a reader that is slow but never stops, 64 KiB a second on a pipe: the abort's
@@ -441,6 +446,8 @@ try {
     check(r.code === 143, `queue: the runner exited ${r.code} (${r.sig}), not 143`);
     check(!r.seen.H, 'queue: h, waiting behind l, started after the abort');
     check(!/h-orphans-a-hidden-child/.test(r.out), 'queue: a line names h, which should never have started');
+    // The abort was still draining l when l's slot freed only if it held l's output (round 10).
+    check(r.out.includes(`l: ${'y'.repeat(400 * 1024)}`), "queue: l's 400 KiB did not arrive, so the abort held none of it while l's slot freed");
   }
 
   // 17. A slow terminal: j's 16 MiB report is written to it synchronously while h's helper lives and
