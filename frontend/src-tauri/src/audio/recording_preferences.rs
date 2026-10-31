@@ -1,6 +1,6 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 
@@ -108,12 +108,23 @@ pub fn generate_recording_filename(format: &str) -> String {
     format!("recording_{}.{}", timestamp, format)
 }
 
+/// The store the recording preferences live in, under the app-data directory. A test names an
+/// absolute path instead, which the store plugin takes as it is (`resolve_store_path`).
+pub(crate) const PREFERENCES_STORE: &str = "recording_preferences.json";
+
 /// Load recording preferences from store
 pub async fn load_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<RecordingPreferences> {
+    load_recording_preferences_from(app, Path::new(PREFERENCES_STORE)).await
+}
+
+pub(crate) async fn load_recording_preferences_from<R: Runtime>(
+    app: &AppHandle<R>,
+    store: &Path,
+) -> Result<RecordingPreferences> {
     // Try to load from Tauri store
-    let store = match app.store("recording_preferences.json") {
+    let store = match app.store(store) {
         Ok(store) => store,
         Err(e) => {
             warn!("Failed to access store: {}, using defaults", e);
@@ -159,13 +170,21 @@ pub async fn save_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
     preferences: &RecordingPreferences,
 ) -> Result<()> {
+    save_recording_preferences_to(app, Path::new(PREFERENCES_STORE), preferences).await
+}
+
+pub(crate) async fn save_recording_preferences_to<R: Runtime>(
+    app: &AppHandle<R>,
+    store: &Path,
+    preferences: &RecordingPreferences,
+) -> Result<()> {
     info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           preferences.save_folder, preferences.auto_save, preferences.file_format,
           preferences.preferred_mic_device, preferences.preferred_system_device);
 
     // Get or create store
     let store = app
-        .store("recording_preferences.json")
+        .store(store)
         .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
 
     // Serialize preferences to JSON value

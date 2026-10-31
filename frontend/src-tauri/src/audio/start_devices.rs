@@ -8,6 +8,9 @@
 //! every start already read the store; this keeps that, and makes it the only way.
 
 use anyhow::Result;
+use log::{info, warn};
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Runtime};
 
 /// What a start opens.
 #[derive(Debug, PartialEq, Eq)]
@@ -46,6 +49,41 @@ pub fn resolve<D>(
         },
     };
     Ok(StartDevices { microphone, system, warning })
+}
+
+/// What a start records with: the devices, and where and whether it saves.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Start<D> {
+    pub devices: StartDevices<D>,
+    pub auto_save: bool,
+    pub save_folder: Option<PathBuf>,
+}
+
+/// The start's preferences, read from `store` now, and the devices they name, resolved by [`resolve`].
+/// Every start calls this, so a device picked in Settings is the one the next start opens, and a
+/// start made before the window has read the store (the tray, the call nudge) still opens it.
+/// Preferences that cannot be read are the defaults, as they always were.
+pub async fn from_store<R: Runtime, D>(
+    app: &AppHandle<R>,
+    store: &Path,
+    by_name: impl Fn(&str) -> Result<D>,
+    default_microphone: impl FnOnce() -> Result<D>,
+    default_system: impl FnOnce() -> Result<D>,
+) -> Result<Start<D>, String> {
+    let (auto_save, microphone, system, save_folder) =
+        match super::recording_preferences::load_recording_preferences_from(app, store).await {
+            Ok(prefs) => {
+                info!("📋 Loaded recording preferences: auto_save={}, save_folder={:?}, preferred_mic={:?}, preferred_system={:?}",
+                      prefs.auto_save, prefs.save_folder, prefs.preferred_mic_device, prefs.preferred_system_device);
+                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device, Some(prefs.save_folder))
+            }
+            Err(e) => {
+                warn!("Failed to load recording preferences, using defaults: {}", e);
+                (true, None, None, None)
+            }
+        };
+    let devices = resolve(microphone.as_deref(), system.as_deref(), by_name, default_microphone, default_system)?;
+    Ok(Start { devices, auto_save, save_folder })
 }
 
 #[cfg(test)]
@@ -125,5 +163,71 @@ mod tests {
     fn no_default_microphone_fails_the_start() {
         let r = resolve(None, Some(SYS), by_name, || Err(anyhow::anyhow!("no input")), || Ok("default monitor".to_string()));
         assert!(r.is_err(), "{r:?}");
+    }
+
+    /// The start as the app makes it, over a store on disk: a mock app with the store plugin, and
+    /// the preferences file at an absolute path in a temporary directory, never the app-data one.
+    mod from_the_store {
+        use super::*;
+        use crate::audio::recording_preferences::{save_recording_preferences_to, RecordingPreferences};
+
+        const A: &str = "Monitor A (output)";
+        const B: &str = "Monitor B (output)";
+
+        fn by_name(name: &str) -> Result<String> {
+            match name {
+                MIC | A | B => Ok(name.to_string()),
+                _ => Err(anyhow::anyhow!("Device not found: {name}")),
+            }
+        }
+
+        /// A store file holding `system` before the app is built: what was stored at launch.
+        fn app_with(system: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf, tauri::App<tauri::test::MockRuntime>) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = dir.path().join("recording_preferences.json");
+            let prefs = RecordingPreferences { preferred_system_device: system.map(str::to_string), save_folder: dir.path().join("recordings"), ..Default::default() };
+            std::fs::write(&store, serde_json::json!({ "preferences": prefs }).to_string()).unwrap();
+            let app = tauri::test::mock_builder()
+                .plugin(tauri_plugin_store::Builder::new().build())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            (dir, store, app)
+        }
+
+        async fn start(app: &tauri::App<tauri::test::MockRuntime>, store: &Path) -> Option<String> {
+            let s = from_store(app.handle(), store, by_name, || Ok("default mic".to_string()), || Ok("default monitor".to_string())).await.unwrap();
+            s.devices.system
+        }
+
+        /// What Settings does with a pick: `set_recording_preferences`, which writes the same store.
+        async fn pick(app: &tauri::App<tauri::test::MockRuntime>, store: &Path, system: Option<&str>) {
+            let mut prefs = crate::audio::recording_preferences::load_recording_preferences_from(app.handle(), store).await.unwrap();
+            prefs.preferred_system_device = system.map(str::to_string);
+            save_recording_preferences_to(app.handle(), store, &prefs).await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_device_picked_in_settings_is_the_one_the_next_start_opens() {
+            let (_dir, store, app) = app_with(Some(A));
+            assert_eq!(start(&app, &store).await.as_deref(), Some(A), "the first start, with A stored at launch");
+            pick(&app, &store, Some(B)).await;
+            assert_eq!(start(&app, &store).await.as_deref(), Some(B), "B was picked in Settings after a start opened A");
+        }
+
+        #[tokio::test]
+        async fn default_picked_in_settings_is_the_default_device_at_the_next_start() {
+            let (_dir, store, app) = app_with(Some(A));
+            assert_eq!(start(&app, &store).await.as_deref(), Some(A), "the first start, with A stored at launch");
+            pick(&app, &store, None).await;
+            assert_eq!(start(&app, &store).await.as_deref(), Some("default monitor"), "Default was picked in Settings after a start opened A");
+        }
+
+        /// The tray and the call nudge reload the window and start before it has read anything: the
+        /// start's own read is what opens the stored device.
+        #[tokio::test]
+        async fn a_start_with_nothing_read_yet_opens_the_stored_device() {
+            let (_dir, store, app) = app_with(Some(B));
+            assert_eq!(start(&app, &store).await.as_deref(), Some(B));
+        }
     }
 }
