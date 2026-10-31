@@ -109,9 +109,15 @@ pub struct TranscribeEngine {
     stale: Arc<RwLock<bool>>,
     /// Where catalogue files are fetched from: `TRANSCRIBE_MODEL_BASE_URL`, or a test's local server.
     base_url: String,
-    /// How long a download waits for its response, and then for each next part of its body, before it
-    /// fails (#298). [`DOWNLOAD_READ_TIMEOUT`] in production; a test of a stall sets less.
-    read_timeout: std::time::Duration,
+    /// How long a download waits for its response's headers, and reqwest's backstop for each gap in the
+    /// body (#298, #310). [`DOWNLOAD_READ_TIMEOUT`] in production; a test of a stall sets less.
+    pub(in crate::transcribe_engine) read_timeout: std::time::Duration,
+    /// How long a download waits for its connection to open: DNS, TCP, TLS and any proxy tunnel (#310).
+    /// [`DOWNLOAD_CONNECT_TIMEOUT`] in production.
+    pub(in crate::transcribe_engine) connect_timeout: std::time::Duration,
+    /// How long a download waits for the next part of its body, the first included (#310).
+    /// [`DOWNLOAD_CHUNK_GAP`] in production.
+    pub(in crate::transcribe_engine) chunk_gap: std::time::Duration,
     /// Whether a download's client reads the system proxy: production does, for each download, as
     /// before #195; a test's local server is reached directly.
     system_proxy: bool,
@@ -141,18 +147,34 @@ pub(crate) struct TestHooks {
 /// removes what a crash left.
 pub const PARTIAL_PREFIX: &str = ".partial-";
 
-/// A transcription download fails once it has waited this long for its response, or for the next part
-/// of its body (#298). Not a bound on the whole: the largest rows are 5 GB, and since #195 a failed
-/// download starts again from zero. Its basis is about 2 s to the headers, the one observation the
-/// gate's log holds, and the 30 s the summary download already allows a chunk.
-pub const DOWNLOAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// A transcription download fails once it has waited this long for its response's headers, from the
+/// start of the request and across every redirect (#298, #310). The product owner's 5 minutes, for a
+/// proxy that holds its answer while it scans the file: one that fetches the whole file first needs
+/// 2.35 MB/s for the 705 MB default row to answer in time, and 16.7 MB/s for a 5 GB row. Arithmetic, not
+/// a measurement. reqwest also applies it to each gap in the body, where [`DOWNLOAD_CHUNK_GAP`], being
+/// shorter, fires first.
+pub const DOWNLOAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A download fails once its connection has taken this long to open: DNS, TCP, TLS and any proxy
+/// tunnel (#310). The product owner kept a connection that never opens at 30 s, as before.
+pub const DOWNLOAD_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A download fails once the next part of its body, the first included, has been awaited this long
+/// (#298, #310). Not a bound on the whole: the largest rows are 5 GB, and since #195 a failed download
+/// starts again from zero. The 30 s the summary download already allows a chunk.
+pub const DOWNLOAD_CHUNK_GAP: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The one place a download's HTTP client is built (#298): `read_timeout` bounds the wait for the
-/// response, across redirects, and then each gap between parts of the body, and nothing bounds the
-/// whole. Built for each download, so a proxy change is read at the next one, and a client that cannot
-/// be built fails that download rather than the engine's construction.
-pub(crate) fn download_client(read_timeout: std::time::Duration, system_proxy: bool) -> reqwest::Result<reqwest::Client> {
-    let builder = reqwest::Client::builder().read_timeout(read_timeout);
+/// response's headers, across redirects, `connect_timeout` the connection's opening, and nothing bounds
+/// the whole. The gap between parts of the body is bounded in the download loop, at
+/// [`DOWNLOAD_CHUNK_GAP`] (#310). Built for each download, so a proxy change is read at the next one,
+/// and a client that cannot be built fails that download rather than the engine's construction.
+pub(crate) fn download_client(
+    read_timeout: std::time::Duration,
+    connect_timeout: std::time::Duration,
+    system_proxy: bool,
+) -> reqwest::Result<reqwest::Client> {
+    let builder = reqwest::Client::builder().read_timeout(read_timeout).connect_timeout(connect_timeout);
     if system_proxy { builder } else { builder.no_proxy() }.build()
 }
 
@@ -238,6 +260,8 @@ impl TranscribeEngine {
             stale: Arc::new(RwLock::new(false)),
             base_url: TRANSCRIBE_MODEL_BASE_URL.to_string(),
             read_timeout: DOWNLOAD_READ_TIMEOUT,
+            connect_timeout: DOWNLOAD_CONNECT_TIMEOUT,
+            chunk_gap: DOWNLOAD_CHUNK_GAP,
             system_proxy: true,
             #[cfg(test)]
             test_hooks: TestHooks::default(),
@@ -260,9 +284,23 @@ impl TranscribeEngine {
         self
     }
 
+    /// The engine with a shorter [`DOWNLOAD_CONNECT_TIMEOUT`], for a test whose connection never opens.
+    #[cfg(test)]
+    pub(crate) fn with_connect_timeout(mut self, connect_timeout: std::time::Duration) -> Self {
+        self.connect_timeout = connect_timeout;
+        self
+    }
+
+    /// The engine with a shorter [`DOWNLOAD_CHUNK_GAP`], for a test whose body stalls.
+    #[cfg(test)]
+    pub(crate) fn with_chunk_gap(mut self, chunk_gap: std::time::Duration) -> Self {
+        self.chunk_gap = chunk_gap;
+        self
+    }
+
     /// The client a download of this engine's is built with.
     pub(in crate::transcribe_engine) fn client(&self) -> reqwest::Result<reqwest::Client> {
-        download_client(self.read_timeout, self.system_proxy)
+        download_client(self.read_timeout, self.connect_timeout, self.system_proxy)
     }
 
     #[cfg(test)]
@@ -718,13 +756,25 @@ impl TranscribeEngine {
             cb(DownloadProgress::new(0, total_size, 0.0));
         }
 
-        while let Some(chunk) = stream.next().await {
+        loop {
+            // The gap before each part of the body, the first included (#310). reqwest's read timeout,
+            // the headers' 5 minutes, would also bound it, but this is shorter and fires first.
+            let next = match tokio::time::timeout(self.chunk_gap, stream.next()).await {
+                Ok(None) => break,
+                Ok(Some(chunk)) => Ok(chunk),
+                Err(elapsed) => Err(elapsed),
+            };
+            // The cancel is read before what the wait returned, a stall included, so a cancel during a
+            // stall is answered as the cancel (#298 condition 5(b)).
             if self.cancel_download_flag.read().await.as_deref() == Some(model_name) {
                 *self.cancel_download_flag.write().await = None;
                 return Err(anyhow!("Download cancelled by user"));
             }
 
-            let chunk = chunk.map_err(|e| anyhow!("Failed to read chunk: {}", with_causes(&e)))?;
+            let chunk = match next {
+                Ok(chunk) => chunk.map_err(|e| anyhow!("Failed to read chunk: {}", with_causes(&e)))?,
+                Err(_) => return Err(anyhow!("Failed to read chunk: timed out: no data for {} s", self.chunk_gap.as_secs())),
+            };
             file.write_all(&chunk).await?;
             hasher.update(&chunk);
             downloaded += chunk.len() as u64;
