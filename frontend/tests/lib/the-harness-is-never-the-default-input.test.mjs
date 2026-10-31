@@ -149,7 +149,8 @@ wiring('stage2-core-check.sh', [
     (src) => { const body = src.slice(src.indexOf('cleanup() {'), src.indexOf('\n}\n', src.indexOf('cleanup() {')));
       const drop = body.search(/\[ "\$PASSED" != 1 \] && \[ -n "\$STARTED" \] && \{ harness_guard_drop_recordings "\$PROFILE"/);
       return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < coreClick && drop > 0
-        && /^cleanup\(\) \{\n(\s*#[^\n]*\n)*\s*trap '' INT TERM\n/.test(body) && drop < body.indexOf('tone_sink_destroy') && drop < body.indexOf('audio-harness.sh down'); }],
+        && /^cleanup\(\) \{\n(\s*#[^\n]*\n)*\s*trap '' INT TERM\n/.test(body) && drop < body.indexOf('tone_sink_destroy') && drop < body.indexOf('audio-harness.sh down')
+        && body.indexOf('trap - INT TERM') > drop && body.indexOf('trap - INT TERM') < body.indexOf('tone_sink_destroy'); }],
 ]);
 wiring('stage2-onboarding-check.sh', [
   ['6e the resumes mode checks the default after up', 'no harness_guard_after_up after its up, failing closed',

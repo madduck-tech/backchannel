@@ -195,7 +195,9 @@ for (const [id, alive] of [['17a', false], ['17b', true]]) {
 // ... and when the pass is stopped by a signal to its group, as the watch stops it, or by Ctrl-C: the
 // exit trap then sees the last command's status, 0, so the drop is keyed on whether the pass passed, and
 // the signal ends the pass rather than returning to it (round 4).
-for (const [id, sig, code] of [['17c', 'SIGTERM', 143], ['17d', 'SIGINT', 130]]) {
+// 17e is a signal the pass sets no trap for: closing the terminal. Only keying the drop on PASSED drops
+// then, since the exit trap sees status 0; bash then reports the hangup itself (-1 to Python).
+for (const [id, sig, code] of [['17c', 'SIGTERM', 143], ['17d', 'SIGINT', 130], ['17e', 'SIGHUP', -1]]) {
   const prof = path.join(root, `rec-${id}`);
   fs.mkdirSync(path.join(prof, 'rec'), { recursive: true });
   const group = spawnSync('bash', ['-c', 'setsid sleep 30 >/dev/null 2>&1 < /dev/null & echo $!'], { encoding: 'utf8' }).stdout.trim();
@@ -213,4 +215,4 @@ time.sleep(1); os.killpg(p.pid, signal.${sig}); print(p.wait(timeout=20))`, scri
 
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - harness guard: accepts a run that kept the default and opened the harness by name, split dumps included; refuses a moved or unreadable default, a changed preference, a second or foreign Backchannel source, a start whose log lacks the harness stream, its creation or its Using line, names another microphone or fails on it, and a start with no link from the harness source into a capture under the root pid; removes the recordings from every save folder of a gate profile, and refuses any other path; and the exit path of the record pass stops the application and drops them under set -e, with the application running or gone, and when the pass is stopped by TERM or INT');
+console.log('ok - harness guard: accepts a run that kept the default and opened the harness by name, split dumps included; refuses a moved or unreadable default, a changed preference, a second or foreign Backchannel source, a start whose log lacks the harness stream, its creation or its Using line, names another microphone or fails on it, and a start with no link from the harness source into a capture under the root pid; removes the recordings from every save folder of a gate profile, and refuses any other path; and the exit path of the record pass stops the application and drops them under set -e, with the application running or gone, and when the pass is stopped by TERM, INT or a hangup');

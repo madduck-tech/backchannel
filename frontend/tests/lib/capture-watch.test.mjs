@@ -134,6 +134,33 @@ const r8 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.string
   { env, encoding: 'utf8', timeout: 40_000, cwd: root });
 check('8 a stopped watch waits for the entry\'s teardown', /rc=143/.test(r8.stdout) && /torn-down-first/.test(r8.stdout), `${r8.stdout.trim()}: ${r8.stderr}`);
 
+// 8b. ... the whole group's: in the record step the shell ends at once while the pass it ran is still
+// dropping its recordings, so waiting for the session leader alone returns too early.
+const child8 = path.join(root, 'child8.sh');
+fs.writeFileSync(child8, `trap 'sleep 2; touch ${mark('8b')}; exit 143' TERM\nsleep 20 & wait\n`);
+const out8b = path.join(root, 'out-group');
+const r8b = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8b)} -- "bash ${child8}; true" & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark('8b'))} ] && echo torn-down-first`],
+  { env, encoding: 'utf8', timeout: 40_000, cwd: root });
+check('8b a stopped watch waits for the whole group', /rc=143/.test(r8b.stdout) && /torn-down-first/.test(r8b.stdout), `${r8b.stdout.trim()}: ${r8b.stderr}`);
+
+// 9. Under the runner, a Ctrl-C to the terminal's group lets the watched entry tear down, then stops the
+// run: subprocess.call would kill the watch 0.25 s after it.
+const cfg = path.join(root, 'gopnik-9.json');
+fs.writeFileSync(cfg, JSON.stringify({ verification: { stage2: [
+  `trap 'sleep 2; touch ${mark(9)}' TERM; sleep 20 & wait; echo stage2-core-check.sh "$APP" x`,
+  `touch ${mark('9b')}`,
+  ': harness_guard_after_up up --system-only',
+  ': stage2-record-check.sh; RC=0; APID=x; scripts/audio-harness.sh down; exit $RC',
+] } }));
+const r9 = spawnSync('python3', ['-I', '-c', `import os, signal, subprocess, sys, time
+p = subprocess.Popen(['python3', '-I', sys.argv[1], sys.argv[2], '--only', '1,2', '--config', sys.argv[3]], start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+time.sleep(3); os.killpg(p.pid, signal.SIGINT)
+out = p.communicate(timeout=60)[0]
+print(p.returncode); print(os.path.exists(sys.argv[4])); print(out)`, path.join(repo, 'scripts', 'stage2-watched.py'), path.join(root, 'out-9'), cfg, mark(9)], { env, encoding: 'utf8', timeout: 90_000 });
+const [rc9, torn9] = r9.stdout.split('\n');
+check('9 a Ctrl-C under the runner waits for the entry and runs nothing after it', rc9 === '130' && torn9 === 'True' && !fs.existsSync(mark('9b')) && /interrupted/.test(r9.stdout),
+  `runner exit ${rc9}, torn down when it returned ${torn9}, the next entry ran ${fs.existsSync(mark('9b'))}: ${r9.stdout}${r9.stderr}`);
+
 // 6. The runner watches the entries that bring the harness up, found by what they run.
 const p = spawnSync('python3', ['-I', path.join(repo, 'scripts', 'stage2-watched.py'), root, '--plan'], { encoding: 'utf8' });
 const steps = p.stdout.trim().split('\n').map((l) => l.split('\t'));
@@ -161,9 +188,15 @@ check('6c the record pass runs under a trap holding its own tail', lines.length 
   `exit ${joined.status}, ${jl}: ${JSON.stringify(lines)} ${joined.stderr}`);
 
 for (const pid of strays) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
+// Whatever a case left behind that still names this test's directory, a sampler above all: once the
+// directory and its shims are gone, a leftover would read the real graph and could signal a group that is
+// no longer the entry's.
+for (const d of fs.readdirSync('/proc').filter((x) => /^\d+$/.test(x))) {
+  try { if (fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').includes(root) && Number(d) !== process.pid) process.kill(Number(d), 'SIGTERM'); } catch { /* gone */ }
+}
 for (const f of fs.readdirSync(live)) {
   if (f.startsWith('rec-')) { try { process.kill(Number(f.slice(4)), 'SIGTERM'); } catch { /* gone */ } }
 }
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the entry has torn down; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');
+console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the whole group of the entry has torn down, under a Ctrl-C to the runner too; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');

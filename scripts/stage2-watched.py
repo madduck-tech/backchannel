@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run gopnik.json's stage 2 with every entry that brings the harness up beside a silent recorder. (#293)
 
-    scripts/stage2-watched.py <outdir> [--only N,N,...] [--plan]
+    scripts/stage2-watched.py <outdir> [--only N,N,...] [--plan] [--config <gopnik.json>]
 
 The entries that bring the audio harness up run under `scripts/stage2-capture-watch.sh`, and each is then
 judged by `scripts/lib/capture-graph.py check` (#293 item 2): `onboarding resumes`, every core pass, and the
@@ -20,11 +20,13 @@ the wrong entry. Every other entry runs as the gate runs it.
   `"$(git rev-parse --git-dir)"/backchannel-*`, and the log says so.
 
 An entry's exit is its command's; a watched entry also fails when its check does. `--plan` prints what
-would run, and how, and runs nothing.
+would run, and how, and runs nothing. A Ctrl-C lets the running entry finish its teardown, under the
+watch when it is watched, and runs nothing after it. `--config` reads another gopnik.json, for tests.
 """
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -63,12 +65,28 @@ def plan(cmds):
     return out
 
 
+INTERRUPTED = []
+
+
+def call(argv, log):
+    """subprocess.call without its KeyboardInterrupt: that kills the child 0.25 s after a Ctrl-C, before
+    the watch has waited for the entry's teardown. The Ctrl-C reaches the child through the terminal's
+    group; this waits for it to finish, and the run stops after it."""
+    p = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
+    while True:
+        try:
+            return p.wait()
+        except KeyboardInterrupt:
+            INTERRUPTED.append(1)
+
+
 def main(argv):
     outdir = argv[0]
     only = None
     if '--only' in argv:
         only = {int(x) for x in argv[argv.index('--only') + 1].split(',')}
-    cmds = json.load(open(os.path.join(ROOT, 'gopnik.json')))['verification']['stage2']
+    config = argv[argv.index('--config') + 1] if '--config' in argv else os.path.join(ROOT, 'gopnik.json')
+    cmds = json.load(open(config))['verification']['stage2']
     steps = plan(cmds)
     worktree = os.path.isfile(os.path.join(ROOT, '.git'))
     if '--plan' in argv:
@@ -91,11 +109,11 @@ def main(argv):
             log.flush()
             verdict = ''
             if check is None:
-                rc = subprocess.call(['bash', '-c', run_c], stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
+                rc = call(['bash', '-c', run_c], log)
             else:
                 wd = os.path.join(outdir, f'watch-{label}')
                 argv_w = [os.path.join(HERE, 'stage2-capture-watch.sh'), wd] + (['--app-pgid-glob', glob] if glob else []) + ['--', run_c]
-                rc = subprocess.call(argv_w, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
+                rc = call(argv_w, log)
                 ck = subprocess.run(['python3', '-I', os.path.join(HERE, 'lib', 'capture-graph.py'), 'check', os.path.join(wd, 'graph.jsonl')] + check,
                                     capture_output=True, text=True)
                 open(os.path.join(wd, 'check.txt'), 'w').write(ck.stdout + ck.stderr)
@@ -106,6 +124,9 @@ def main(argv):
         print(line, flush=True)
         summary.write(line + '\n')
         summary.flush()
+        if INTERRUPTED:
+            print('stage2-watched: interrupted; the entry above finished its teardown, and nothing after it ran', flush=True)
+            return 130
     return 1 if failed else 0
 
 
