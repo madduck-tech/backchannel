@@ -928,6 +928,45 @@ if [ "$MODE" = chooses ]; then
   fi
 fi
 
+# --- chooses: the summary model arrives whole, at its pins (#191) -------------------------------------
+#
+# The seed is the cache's 469 372 646-byte partial of the E2B weights at their final path, an earlier
+# build's partial: the download moves it to its temporary name, resumes it, and renames each file into
+# place only once it is its pin. So the weights' final path holds the seed, nothing, or the whole pin,
+# never a size in between, which an in-place resume would show. The wait fails when nothing in
+# models/summary has grown for 60 s, and after BC_SUMMARY_BOUND seconds (1800 by default). This fetches
+# 3 358 942 202 bytes from Hugging Face per run. No Stage 2 control holds these lines (the issue says so).
+if [ "$MODE" = chooses ]; then
+  SUMMARY_DIR="$APPDATA/models/summary"
+  TSV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/frontend/src-tauri/scripts/summary_download_urls.tsv"
+  W_SIZE=$(grep "/gemma-4-E2B-it-Q4_0.gguf" "$TSV" | cut -f2)
+  P_SIZE=$(grep "/mmproj-gemma-4-E2B-it-BF16.gguf" "$TSV" | cut -f2)
+  [ -n "$W_SIZE" ] && [ -n "$P_SIZE" ] || die "$TSV names no E2B pair"
+  SEED_SIZE=469372646
+  START=$SECONDS; LAST_GROW=$SECONDS; LAST_TOTAL=-1; BOUND=${BC_SUMMARY_BOUND:-1800}
+  while :; do
+    w=$(stat -c %s "$SUMMARY_DIR/gemma-4-E2B-it-Q4_0.gguf" 2>/dev/null || echo 0)
+    p=$(stat -c %s "$SUMMARY_DIR/mmproj-gemma-4-E2B-it-BF16.gguf" 2>/dev/null || echo 0)
+    [ "$w" = "$W_SIZE" ] && [ "$p" = "$P_SIZE" ] && break
+    case "$w" in 0|"$SEED_SIZE"|"$W_SIZE") ;; *) die "the weights' final path holds $w bytes, not the seed, nothing or the pin's $W_SIZE: the download is written in place" ;; esac
+    total=$(du -sb "$SUMMARY_DIR" | cut -f1)
+    if [ "$total" != "$LAST_TOTAL" ]; then LAST_TOTAL=$total; LAST_GROW=$SECONDS; fi
+    [ $((SECONDS - LAST_GROW)) -lt 60 ] || die "nothing in models/summary has grown for 60 s: weights $w of $W_SIZE, projector $p of $P_SIZE bytes"
+    [ $((SECONDS - START)) -lt "$BOUND" ] || die "the summary model is not whole after ${BOUND}s: weights $w of $W_SIZE, projector $p of $P_SIZE bytes"
+    sleep 2
+  done
+  say "both E2B files are whole at their final paths after $((SECONDS - START))s: $W_SIZE and $P_SIZE bytes"
+  grep -q "Resuming download from byte $SEED_SIZE " "$LOG" || die "no 'Resuming download from byte $SEED_SIZE' line: the seeded partial was not resumed"
+  for f in gemma-4-E2B-it-Q4_0.gguf mmproj-gemma-4-E2B-it-BF16.gguf; do
+    n=$(grep -c "Verified $f: " "$LOG" || true)
+    [ "$n" = 1 ] || die "$n 'Verified $f' lines, not one"
+  done
+  if grep -n "Discarding the " "$LOG"; then
+    die "a discard line: a resume or a whole temporary file failed its check"
+  fi
+  say "the seeded partial resumed from byte $SEED_SIZE, each E2B file verified once, and nothing discarded"
+fi
+
 # --- catalogue: first run finishes with the catalogue's choice stored (#166 condition 2) ----------
 #
 # And finishing with Claude asks for no on-device summary model (#181). `completeOnboarding` used to
