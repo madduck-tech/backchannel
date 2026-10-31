@@ -26,9 +26,16 @@ const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest
 const css = fs.readFileSync(path.join(frontend, 'src', 'app', 'fonts.css'), 'utf8').replace(/\r\n/g, '\n');
 const uncommented = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const unquote = (s) => s.replace(/^(['"])(.*)\1$/, '$2');
+// `@font-face` as CSS reads it: in any case (#264's gate adversary, round 3), and with any letter
+// written as an escape (round 4: the build reads `@font-f\61 ce` and `@\66ont-face` as faces). A hex
+// escape is up to six digits and one optional space; f, a, c and e are hex digits, so `\f` is not f.
+const AT_FONT_FACE = '@' + [...'font-face'].map((c) => {
+  const hex = c.codePointAt(0).toString(16);
+  const literal = /[0-9a-f]/i.test(c) ? '' : `|\\\\${c === '-' ? '-' : c}`;
+  return `(?:${c === '-' ? '-' : c}|\\\\0{0,4}(?:${hex}|${c.toUpperCase().codePointAt(0).toString(16)})(?:\\r\\n|[ \\t\\n\\r\\f])?${literal})`;
+}).join('');
 function faces(text) {
-  // Case-insensitive, as CSS is: an `@FONT-FACE` is drawn too (#264's gate adversary, round 3).
-  return [...uncommented(text).matchAll(/@font-face\s*\{([^}]*)\}/gi)].map(([, body]) => {
+  return [...uncommented(text).matchAll(new RegExp(`${AT_FONT_FACE}\\s*\\{([^}]*)\\}`, 'gi'))].map(([, body]) => {
     const decl = {};
     for (const part of body.split(';').map((s) => s.trim()).filter(Boolean)) {
       const i = part.indexOf(':');
@@ -106,7 +113,7 @@ test('each face names its own file once, and the families keep their names and f
     assert.deepEqual(found, [v], `fonts.css declares ${k} as ${JSON.stringify(found)}`);
   }
   const elsewhere = [];
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|scss|tsx?|jsx?|mdx|html)$/.test(e.name) && p !== path.join(frontend, 'src', 'app', 'fonts.css')) { const s = uncommented(fs.readFileSync(p, 'utf8')); if (/@font-face/i.test(s) || /--font-(sans|serif|mono)\s*:/.test(s)) elsewhere.push(path.relative(frontend, p)); } } };
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|scss|tsx?|jsx?|mdx|html)$/.test(e.name) && p !== path.join(frontend, 'src', 'app', 'fonts.css')) { const s = uncommented(fs.readFileSync(p, 'utf8')); if (new RegExp(AT_FONT_FACE, 'i').test(s) || /--font-(sans|serif|mono)\s*:/.test(s)) elsewhere.push(path.relative(frontend, p)); } } };
   for (const d of ['src', '.storybook']) walk(path.join(frontend, d));
   assert.deepEqual(elsewhere, [], 'a face or a --font-* variable is declared outside fonts.css');
   assert.match(fs.readFileSync(path.join(frontend, 'src', 'app', 'globals.css'), 'utf8'), /^@import "\.\/fonts\.css";$/m, 'globals.css does not bring fonts.css');

@@ -129,7 +129,7 @@ jobs:
         run: |
           N=$(find frontend/out -type f 2>/dev/null | wc -l)
           [ "$N" -gt 0 ] || { echo "frontend/out holds no files, so there is nothing to check"; exit 1; }
-          if grep -rlE 'fonts\.(googleapis|gstatic)\.com' frontend/out; then echo "the built files above name Google's font service"; exit 1; fi
+          if grep -rliE 'fonts\.(googleapis|gstatic)\.com' frontend/out; then echo "the built files above name Google's font service"; exit 1; fi
           echo "frontend/out: $N files, none names Google's font service"
 
       # #103. The build step writes `git rev-parse HEAD` beside the bundle, and that command must

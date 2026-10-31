@@ -204,15 +204,17 @@ done
 
 # --- the ten faces load at their weights and styles, and the symbols stay the system's (#264)
 # Asked of WebKit, which is what draws this build, not of the Chrome the fonts were chosen in. For each
-# of the ten faces: text must be drawn by exactly that face, loaded; each symbol by none of them.
-FONTS=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' \
-    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-probe.js" \
+# of the ten faces: the faces that would draw its text must be exactly that face, loaded; for each
+# symbol, none of them. A probe that does not answer reaches the verdict too: `|| true` keeps curl's
+# failure from ending the script before it, under pipefail (fonts-verdict.test.mjs holds that).
+FONT_PROBE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-probe.js"
+FONTS=$(python3 -I -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' "$FONT_PROBE" \
   | { curl -s -m 30 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- || true; } \
-  | python3 -c 'import json,sys
+  | python3 -I -c 'import json,sys
 try: v = json.load(sys.stdin).get("value")
 except Exception: v = None
 print(v if isinstance(v, str) else json.dumps({"error": "the probe did not answer: " + repr(v)[:200]}))')
-FONT_VERDICT=$(printf '%s' "$FONTS" | python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-verdict.py")
+FONT_VERDICT=$(printf '%s' "$FONTS" | python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fonts-verdict.py" "$FONT_PROBE")
 say "fonts: $FONT_VERDICT"
 case "$FONT_VERDICT" in ok:*) ;; *) die "the faces fonts.css declares do not load as declared, or a face draws a symbol: $FONT_VERDICT" ;; esac
 
