@@ -424,7 +424,7 @@ await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-lab
 for _ in $(seq 1 40); do [ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] && break; sleep 0.5; done
 [ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] || die "the app logged no CALLED line for this start; see $LOG"
 N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
-for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep -q 'Creating microphone stream: ' && break; sleep 0.5; done
+for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep 'Creating microphone stream: ' >/dev/null && break; sleep 0.5; done
 STARTED_MIC=$(tail -n +"$N" "$LOG" | grep -o "Creating microphone stream: [^(]*" | head -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
 say "after its CALLED line the start opened microphone '${STARTED_MIC:-<none>}'"
 [ "$STARTED_MIC" = "$HARNESS_DESC" ] || die "the start opened microphone '${STARTED_MIC:-<none>}', not the harness's '$HARNESS_DESC'; see $LOG"

@@ -13,7 +13,10 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Runtime};
 
-use super::devices::{get_device_and_config, parse_audio_device, AudioDevice};
+use super::capture::{get_current_backend, AudioCaptureBackend, Platform};
+use super::devices::{get_device_and_config, parse_audio_device, AudioDevice, DeviceType};
+use super::recording_state::DeviceType as StreamKind;
+use super::stream::{stream_path_for, StreamPath};
 
 /// What a start opens.
 #[derive(Debug, PartialEq, Eq)]
@@ -62,21 +65,30 @@ pub async fn resolve<D, F: Future<Output = Result<D>>>(
     Ok(StartDevices { microphone, system, warning })
 }
 
-/// The lookup a start resolves a stored name with: the name parsed, then the device found through the
-/// enumeration its stream opens it with (`get_device_and_config`). Parsing alone never failed for an
-/// unplugged device, so before #242 a missing device was found only when its stream would not open.
-///
-/// On macOS a system device is only parsed: its stream may open through the Core Audio tap
-/// (`stream.rs`, `StreamPath::CoreAudioTap`), which this enumeration does not vouch for. Not proven
-/// there either way (ADR 0005).
+/// The lookup a start resolves a stored name with: the name parsed, then, wherever its stream will
+/// open it by name, the device found through the enumeration that stream uses (`get_device_and_config`).
+/// Parsing alone never failed for an unplugged device, so before #242 a missing device was found only
+/// when its stream would not open.
 pub async fn lookup(name: String) -> Result<AudioDevice> {
     let device = parse_audio_device(&name)?;
-    #[cfg(target_os = "macos")]
-    if device.device_type == super::devices::DeviceType::Output {
-        return Ok(device);
+    if opens_by_name(&device.device_type, get_current_backend(), Platform::CURRENT) {
+        get_device_and_config(&device).await?;
     }
-    get_device_and_config(&device).await?;
     Ok(device)
+}
+
+/// Whether a device's stream opens it by its name, so that a start must first find that name. It does
+/// on every path but one: macOS's Core Audio tap, its default for system audio, opens no named device.
+/// It taps every process on whatever the default output is (`capture/core_audio.rs`), so a picked
+/// device that is gone already records the default there, which is the product owner's rule by
+/// construction. Read from source; macOS is built in CI and never run (ADR 0005). Pure, so the macOS
+/// answers are tested here too.
+pub fn opens_by_name(device_type: &DeviceType, backend: AudioCaptureBackend, platform: Platform) -> bool {
+    let kind = match device_type {
+        DeviceType::Input => StreamKind::Microphone,
+        DeviceType::Output => StreamKind::System,
+    };
+    stream_path_for(&kind, backend, platform) == StreamPath::Cpal
 }
 
 /// What a start records with: the devices, and where and whether it saves.
@@ -199,6 +211,25 @@ mod tests {
     async fn no_default_microphone_fails_the_start() {
         let r = resolve(None, Some(SYS), by_name, || Err(anyhow::anyhow!("no input")), || Ok("default monitor".to_string())).await;
         assert!(r.is_err(), "{r:?}");
+    }
+
+    /// Where a start must find its device first: every path but macOS's Core Audio tap for system audio.
+    #[test]
+    fn a_start_finds_a_device_first_wherever_its_stream_opens_it_by_name() {
+        use AudioCaptureBackend::{CoreAudio, ScreenCaptureKit};
+        use Platform::{Linux, MacOs, Windows};
+        assert!(!opens_by_name(&DeviceType::Output, CoreAudio, MacOs), "macOS's tap opens no named device, so there is nothing to find");
+        for (device, backend, platform) in [
+            (DeviceType::Output, ScreenCaptureKit, MacOs),
+            (DeviceType::Input, CoreAudio, MacOs),
+            (DeviceType::Input, ScreenCaptureKit, MacOs),
+            (DeviceType::Output, ScreenCaptureKit, Linux),
+            (DeviceType::Input, ScreenCaptureKit, Linux),
+            (DeviceType::Output, ScreenCaptureKit, Windows),
+            (DeviceType::Input, ScreenCaptureKit, Windows),
+        ] {
+            assert!(opens_by_name(&device, backend, platform), "{device:?} through {backend:?} on {platform:?} is opened by name, so a start must find it first");
+        }
     }
 
     /// The production lookup, against this machine's own audio devices: a name nothing carries is

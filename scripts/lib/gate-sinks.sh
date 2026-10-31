@@ -62,5 +62,5 @@ gate_sink_remove() {
 }
 
 gate_sink_is_default() {
-  pw-metadata -n default 0 default.audio.sink 2>/dev/null | grep -q "\"name\":\"$1\""
+  pw-metadata -n default 0 default.audio.sink 2>/dev/null | grep "\"name\":\"$1\"" >/dev/null
 }

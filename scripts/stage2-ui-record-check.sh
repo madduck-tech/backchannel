@@ -257,7 +257,7 @@ N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 |
 OPENED=$(tail -n +"$N" "$LOG" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
 say "after its CALLED line the app opened system audio '${OPENED:-<none>}'"
 [ "$OPENED" = "$PICK" ] || die "the app opened '${OPENED:-<none>}' for system audio, not the device clicked, '$PICK'; see $LOG"
-tail -n +"$N" "$LOG" | sed -n '/Creating system audio stream: /,$p' | grep -q 'System audio stream created' \
+tail -n +"$N" "$LOG" | sed -n '/Creating system audio stream: /,$p' | grep 'System audio stream created' >/dev/null \
   || die "'$PICK' was named and then not opened; see $LOG"
 
 # Stop the recording before looking for audio: the file is assembled from checkpoints when

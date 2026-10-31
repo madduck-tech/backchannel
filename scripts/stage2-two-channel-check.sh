@@ -132,7 +132,11 @@ cleanup() {
   [ -n "${DRIVER_PID:-}" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null || true
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1 || true
   [ "$MODE" = changed ] && gate_sinks_destroy
-  if [ -n "$PROFILE" ] && [ "$PASSED" = "1" ]; then rm -rf "$PROFILE"
+  # A profile that recorded the machine's real default output is never kept, passed or not: it can hold
+  # whatever the person had playing (step f below).
+  if [ -n "$PROFILE" ] && { [ "$PASSED" = "1" ] || [ -n "${REAL_OUTPUT_RECORDED:-}" ]; }; then
+    rm -rf "$PROFILE"
+    [ "$PASSED" = "1" ] || printf 'stage2-two-channel: profile removed, not kept: it recorded the real default output\n' >&2
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-two-channel: profile kept: %s\n' "$PROFILE" >&2; fi
 }
 trap cleanup EXIT
@@ -232,6 +236,9 @@ await() { local want="$1" what="$2" secs="${3:-20}" n=0
 await "document.querySelectorAll('button').length > 0" 'the application to render'
 
 # --- what a start opened, read after that start's own CALLED line (#242) ----------------------------
+# A pipeline here never ends in `grep -q`: under `pipefail`, grep's early exit kills the writer with
+# SIGPIPE once its output passes the pipe's buffer, and the pipeline fails though the line was there.
+# Measured on this pass's first run: the warning naming B was in the log and the check said it was not.
 FAILS=()
 LOG=""
 called_count() { grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" 2>/dev/null || true; }
@@ -248,7 +255,7 @@ start_oracles() {  # <which start> <the CALLED count before it>
   case "$line" in *"Meeting: Some("*) ;; *) fail_or_record "$which: the start carried no meeting name" ;; esac
   # The streams are created after the start returns; wait until the system side has said how it went.
   for i in $(seq 1 40); do
-    tail -n +"$n" "$LOG" | grep -q -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system device specified' -e 'No system audio for this recording' && break
+    tail -n +"$n" "$LOG" | grep -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system device specified' -e 'No system audio for this recording' >/dev/null && break
     sleep 0.5
   done
   after=$(tail -n +"$n" "$LOG")
@@ -266,6 +273,35 @@ start_oracles() {  # <which start> <the CALLED count before it>
     fail_or_record "$which: '$PICK' was named and then not opened; see $LOG"
   fi
   return 0
+}
+
+# A stop takes the app to the meeting it saved (`useRecordingStop.ts:365`), where the record controls
+# are not drawn, so a start the pass makes through the command would show no Stop control there. This
+# goes back to the main screen first. Its wait names the path, which reads `/meeting-details` until the
+# navigation lands: a Start recording button would not do, because the sidebar draws one on every page.
+go_home() {
+  await_saved "${1:-the meeting before}"
+  js '"window.location.assign(\"/\"); return true"' >/dev/null || true
+  await "location.pathname === '/' && document.querySelectorAll('button').length > 0" 'the main screen' 30
+}
+# A reload during a stop's save loses it: the frontend marks the meeting saved only at the end of the
+# stop (`useRecordingStop.ts:304`), and a reload before that brings the meeting back as interrupted
+# (measured on this pass's first runs, where the next screen was the recovery dialog). The stop then
+# navigates to the saved meeting (`:365`), so that path is the sign the save is done. False on `/`,
+# where the stop began.
+await_saved() {
+  await "location.pathname === '/meeting-details'" "$1 to be saved, and the app to show it" 60
+}
+# A start made through the command: the meeting's name, the driver's answer, and a Stop control drawn
+# for it, which the app's one-second sync with the backend puts on the main screen.
+command_start() {  # <meeting name> <what this start is, for the messages>
+  local body answer
+  body=$(python3 -c 'import json,sys; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"start_recording_with_devices_and_meeting\", {meetingName: arguments[0]}).then(function () { return \"RESOLVED\"; }, function (e) { return \"REJECTED:\" + String(e); });", "args": [sys.argv[1]]}))' "$1")
+  # execute/sync waits for a returned promise, as scripts/lib/audio-check.sh relies on.
+  answer=$({ curl -s -m 60 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" || true; } | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("value"))
+except Exception: print("")')
+  [ "$answer" = RESOLVED ] || fail_or_record "$2 was refused: '${answer:-<no answer>}'"
 }
 
 # --- pick the system-audio monitor through the dropdown ----------------------------------
@@ -466,7 +502,7 @@ if [ "$MODE" = changed ]; then
   # state after the reload, a Stop control and a new CALLED line, not either call's answer.
   await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
         'the first meeting to stop' 30
-  sleep 3
+  await_saved 'the first meeting'
   if gate_sink_is_default "$GATE_SINK_B"; then die "monitor B's sink became the default output before the second start; this run cannot judge it"; fi
   BEFORE=$(called_count)
   js '"sessionStorage.setItem(\"autoStartRecording\", \"true\"); return true"' >/dev/null
@@ -487,17 +523,15 @@ if [ "$MODE" = changed ]; then
   # `recording-stopped`. No Rust test reaches the command (no Tauri mock runtime), so the step calls
   # it the way the frontend does, through `__TAURI_INTERNALS__`, and reads the expression's own value.
   NAME="Gate meeting $(date +%s)"
+  go_home 'the tray-route meeting'
   BEFORE=$(called_count)
-  BODY=$(python3 -c 'import json,sys; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"start_recording_with_devices_and_meeting\", {meetingName: arguments[0]}).then(function () { return \"RESOLVED\"; }, function (e) { return \"REJECTED:\" + String(e); });", "args": [sys.argv[1]]}))' "$NAME")
-  # execute/sync waits for a returned promise, as scripts/lib/audio-check.sh relies on.
-  ANSWER=$(curl -s -m 60 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$BODY" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("value"))
-except Exception: print("")' || true)
-  [ "$ANSWER" = RESOLVED ] || fail_or_record "the named start was refused: '${ANSWER:-<no answer>}'"
+  command_start "$NAME" "the named start"
   for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
   LINE=$(grep 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 || true)
   case "$LINE" in *"Meeting: Some(\"$NAME\")"*) say "the named start: ${LINE#*\] }" ;; *) fail_or_record "the CALLED line does not carry '$NAME': ${LINE#*\] }" ;; esac
-  sleep 8
+  await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'a Stop control for the named start' 30
+  sleep 5
   STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
   [ -n "$STOP" ] || die "no Stop recording control after the named start"
   click "$STOP" "Stop recording, the named start"
@@ -523,41 +557,74 @@ except Exception: print("")' || true)
   # B's sink is removed, so the stored 'Monitor of <B> (output)' names a device that is not there. The
   # start opens the default output's monitor instead and warns naming B. Read after its own CALLED line;
   # the default it resolved is the name the app itself logs, not one this pass works out.
+  # The sample player targets B by name; with B gone, the session manager would move its stream to the
+  # default output, the machine's real speakers. So it stops first.
+  kill -- -"$PLAYER" 2>/dev/null || true
+  PLAYER=""
+  sleep 1
+  # The default output here is the machine's own, so this start records whatever plays on it. Nothing
+  # may be playing there, the pass's own players included, or the step refuses rather than record it.
+  # The recording is removed as soon as it stops, and the profile is not kept (cleanup).
+  PLAYING=$(pw-dump | python3 -c 'import json,sys
+d=json.load(sys.stdin); nodes={o["id"]:o for o in d if o.get("type","").endswith("Node")}
+sink=None
+for o in d:
+    if o.get("type","").endswith("Metadata") and ((o.get("props") or {}).get("metadata.name")=="default"):
+        for m in o.get("metadata") or []:
+            if m.get("key")=="default.audio.sink": sink=(m.get("value") or {}).get("name")
+sid=next((i for i,o in nodes.items() if ((o.get("info") or {}).get("props") or {}).get("node.name")==sink), None)
+out=[]
+for o in d:
+    if o.get("type","").endswith("Link"):
+        inf=o.get("info") or {}
+        if inf.get("input-node-id")==sid:
+            p=((nodes.get(inf.get("output-node-id")) or {}).get("info") or {}).get("props") or {}
+            if str(p.get("media.class","")).startswith("Stream/Output"): out.append(p.get("application.name") or p.get("node.name") or "?")
+print(", ".join(sorted(set(out))))')
+  [ -z "$PLAYING" ] || die "something plays on the default output ($PLAYING); the start with B gone would record it, so this step refuses to run"
+  REAL_OUTPUT_RECORDED=1
   gate_sink_remove "$GATE_SINK_B"
   say "removed B's sink; the stored device now names nothing"
   NAME="Gate fallback $(date +%s)"
+  go_home 'the named meeting'
   BEFORE=$(called_count)
-  BODY=$(python3 -c 'import json,sys; print(json.dumps({"script": "return window.__TAURI_INTERNALS__.invoke(\"start_recording_with_devices_and_meeting\", {meetingName: arguments[0]}).then(function () { return \"RESOLVED\"; }, function (e) { return \"REJECTED:\" + String(e); });", "args": [sys.argv[1]]}))' "$NAME")
-  ANSWER=$({ curl -s -m 60 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$BODY" || true; } | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("value"))
-except Exception: print("")')
-  [ "$ANSWER" = RESOLVED ] || fail_or_record "the start with B gone was refused: '${ANSWER:-<no answer>}'"
+  command_start "$NAME" "the start with B gone"
   for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
   if [ "$(called_count)" -le "$BEFORE" ]; then
     fail_or_record "the start with B gone logged no CALLED line"
   else
     N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
     for _ in $(seq 1 40); do
-      tail -n +"$N" "$LOG" | grep -q -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system audio for this recording' && break
+      tail -n +"$N" "$LOG" | grep -e 'System audio stream created' -e 'Failed to create system audio stream' -e 'No system audio for this recording' >/dev/null && break
       sleep 0.5
     done
     AFTER=$(tail -n +"$N" "$LOG")
-    printf '%s\n' "$AFTER" | grep -q "The system audio device 'Monitor of $GATE_DESC_B (output)' is not available" \
+    printf '%s\n' "$AFTER" | grep "The system audio device 'Monitor of $GATE_DESC_B (output)' is not available" >/dev/null \
       || fail_or_record "with B gone, no warning names B after the start's CALLED line"
     DEF_MON=$(printf '%s\n' "$AFTER" | grep -o "Default system audio resolved to the default sink's monitor: '[^']*'" | head -1 | sed "s/.*monitor: '//; s/'$//" || true)
     FB_OPENED=$(printf '%s\n' "$AFTER" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
     say "with B gone the app resolved the default monitor '${DEF_MON:-<none>}' and opened '${FB_OPENED:-<none>}'"
     [ -n "$DEF_MON" ] && [ "$FB_OPENED" = "$DEF_MON" ] && [ "$FB_OPENED" != "$PICK" ] \
       || fail_or_record "with B gone the app opened '${FB_OPENED:-<none>}', not the default monitor it resolved ('${DEF_MON:-<none>}')"
-    printf '%s\n' "$AFTER" | sed -n '/Creating system audio stream: /,$p' | grep -q 'System audio stream created' \
+    printf '%s\n' "$AFTER" | sed -n '/Creating system audio stream: /,$p' | grep 'System audio stream created' >/dev/null \
       || fail_or_record "with B gone the default monitor was named and then not opened"
   fi
-  sleep 5
+  await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
+        'a Stop control for the start with B gone' 30
   STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
   [ -n "$STOP" ] || die "no Stop recording control after the start with B gone"
   click "$STOP" "Stop recording, the start with B gone"
   await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
         'the meeting with B gone to stop' 30
+  # Its folder goes at once, not with the profile: it holds the real output's audio.
+  for _ in $(seq 1 60); do
+    FB_DIR=$(find "$PROFILE/rec" -maxdepth 1 -mindepth 1 -type d -name "$NAME*" 2>/dev/null | head -1)
+    [ -n "$FB_DIR" ] && break; sleep 0.5
+  done
+  case "$FB_DIR" in
+    "$PROFILE/rec/$NAME"*) rm -rf -- "$FB_DIR"; say "removed the recording of the real output: $(basename "$FB_DIR")" ;;
+    *) fail_or_record "no folder for '$NAME' under $PROFILE/rec to remove" ;;
+  esac
 fi
 if [ "${#FAILS[@]}" -gt 0 ]; then
   printf 'stage2-two-channel: %s\n' "${FAILS[@]/#/FAILED: }" >&2
