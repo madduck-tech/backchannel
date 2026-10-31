@@ -127,10 +127,14 @@ print(v if isinstance(v, str) else "(the page could not be asked why.)")'
 
 # wd_raw_find <css-selector> — Find Element's whole answer for the selector, as the driver gave it. Not
 # `find_el`, which turns every miss into "" and so leaves a failure nothing to say (#296).
+#
+# Every `curl` in these three helpers is `{ curl … || echo …; }`. Under `set -o pipefail` a refused
+# connection (exit 7) or a timed-out request (exit 28) made the substitution fail, and `set -e` ended the
+# pass with no message at all; measured against a closed port by #296's gate adversary.
 wd_raw_find() {
   local body
   body=$(python3 -c 'import json,sys; print(json.dumps({"using": "css selector", "value": sys.argv[1]}))' "$1")
-  curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/json' -d "$body" | head -c 400
+  { curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/json' -d "$body" || echo "(no answer: curl exit $?)"; } | head -c 400
 }
 
 # wd_panel_state <css-selector> — what the active tab panel shows in place of the element: the element
@@ -150,12 +154,12 @@ script = """return (function (sel) {
   return "the panel rendered without it";
 })(arguments[0]);"""
 print(json.dumps({"script": script, "args": [sys.argv[1]]}))' "$1")
-  curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" \
+  { curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" || true; } \
     | python3 -c 'import json,sys
 try:
     v = json.load(sys.stdin).get("value")
 except Exception:
-    v = None
+    v = "(the driver gave no answer)"
 print(v if isinstance(v, str) else "(the page could not be asked: %r)" % (v,))'
 }
 
@@ -170,12 +174,12 @@ await_present() {
   t0=$(date +%s%3N)
   body=$(python3 -c 'import json,sys; print(json.dumps({"script": "return !!document.querySelector(" + json.dumps(sys.argv[1]) + ")", "args": []}))' "$sel")
   while :; do
-    v=$(curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" \
+    v=$({ curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" || true; } \
       | python3 -c 'import json,sys
 try:
     print(json.dumps(json.load(sys.stdin).get("value")))
 except Exception:
-    print("null")')
+    print("no answer")')
     [ -z "$first" ] && first="$v"
     [ "$v" = "true" ] && break
     if [ $(( $(date +%s%3N) - t0 )) -ge $((secs * 1000)) ]; then

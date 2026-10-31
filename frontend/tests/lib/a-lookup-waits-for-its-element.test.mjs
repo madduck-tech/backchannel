@@ -18,7 +18,9 @@
 // What this reads is the source, not a run. Whether a listed element really renders with what its
 // previous wait tested is the reason's claim, read from the frontend by the census on #296.
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,6 +32,13 @@ const passes = fs
   .sort()
   .map((f) => ({ name: f, lines: fs.readFileSync(path.join(SCRIPTS, f), 'utf8').split('\n') }));
 assert.ok(passes.length >= 5, `only ${passes.length} stage2 passes found; this census has gone stale`);
+// The passes' shared helpers make lookups too (`lib/audio-check.sh`'s press). `lib/webdriver.sh` only
+// defines them, and its own lookups are diagnostics inside a `die` (held below).
+const LIBS = fs
+  .readdirSync(path.join(SCRIPTS, 'lib'))
+  .filter((f) => f.endsWith('.sh') && f !== 'webdriver.sh')
+  .sort()
+  .map((f) => ({ name: `lib/${f}`, lines: fs.readFileSync(path.join(SCRIPTS, 'lib', f), 'utf8').split('\n') }));
 const WEBDRIVER = fs.readFileSync(path.join(SCRIPTS, 'lib', 'webdriver.sh'), 'utf8');
 
 // ---- `await_present` is a wait on the element, positively -----------------------------------------
@@ -86,7 +95,13 @@ function tests(cond, t) {
   if (/^!(?!!)/.test(c)) return false;
   const q = `['"]`;
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (t.css) return new RegExp(`querySelector\\(${q}${esc(t.css)}${q}\\)(?!\\s*===\\s*null)`).test(c);
+  // A selector is tested only by a conjunct that says it is present, in one of two spellings and
+  // nothing else: `… == null`, `… || true`, `(!…)` and `true && !…` all name the selector and test its
+  // absence or nothing (#296's gate adversary, M2).
+  if (t.css) {
+    const present = new RegExp(`^(?:!!document\\.querySelector\\(${q}${esc(t.css)}${q}\\)|document\\.querySelector\\(${q}${esc(t.css)}${q}\\)\\s*!==\\s*null)$`);
+    return c.split('&&').map((x) => x.trim()).some((x) => present.test(x));
+  }
   if (t.aria) return new RegExp(`getAttribute\\(${q}aria-label${q}\\)\\s*===\\s*${q}${esc(t.aria)}${q}`).test(c);
   if (t.label) return new RegExp(`===\\s*${q}${esc(t.label)}${q}`).test(c);
   return false;
@@ -161,6 +176,9 @@ for (const [file, rows] of Object.entries({
     ['by_text "Generate Summary"', 1, 'held as a pair by a wait whose regex names both spellings, which this rule does not parse'],
     ['by_text "Generate summary"', 1, 'held as a pair, as Generate Summary'],
   ],
+  'lib/audio-check.sh': [
+    [String.raw`find_el "{\"using\":\"xpath\",\"value\":\"//button[normalize-space()=\\\"$action\\\"]\"}"`, 1, 'the line before reads the same row from the DOM (`audio_check_read`): found, enabled, and labelled with this action; a read of the render the press is looked up in, not a wait'],
+  ],
   'stage2-onboarding-check.sh': [
     ['by_text "Browse every model"', 1, `${SAME}: first run's model step, drawn before the window resize its wait reads`],
     [`find_el "{\\"using\\":\\"xpath\\",\\"value\\":\\"//*[@role='radiogroup'][@aria-label='Models']//*[@role='radio'][.//text()[.='whisper-tiny-q8']]\\"}"`, 1, `${SAME}: the catalogue, waited for by its search field`],
@@ -194,12 +212,14 @@ const listed = new Map(LISTED.map(([file, call, ord, why]) => [key(file, call, o
 const fails = [];
 const seenKeys = new Set();
 const tally = { a: 0, b: 0, listed: 0 };
-for (const pass of passes) {
+const heldAt = new Map();
+for (const pass of [...passes, ...LIBS]) {
   const ws = waits(pass.lines);
   for (const site of sites(pass)) {
     const k = key(site.file, site.call, site.ord);
     seenKeys.add(k);
     const how = held(pass, site, ws);
+    heldAt.set(k, how);
     if (how && listed.has(k)) fails.push(`${k} (line ${site.line + 1}) is listed, and now holds by (${how}): a stale excuse`);
     else if (how) tally[how]++;
     else if (listed.has(k)) tally.listed++;
@@ -208,7 +228,25 @@ for (const pass of passes) {
 }
 for (const k of listed.keys()) if (!seenKeys.has(k)) fails.push(`${k} is listed, and no pass makes that call any more: a stale excuse`);
 
+// ---- lookups that are not find_el or by_text ----------------------------------------------------
+// A pass that asked Find Element by hand, or through `wd_raw_find`, would escape every rule above
+// (#296's gate adversary, M1). `"$BASE/element"` may appear only in a `find_el` definition, and
+// `wd_raw_find` only inside a `die` or `say` message, as a diagnostic.
+for (const pass of [...passes, ...LIBS]) {
+  pass.lines.forEach((l, i) => {
+    if (comment(l)) return;
+    if (/"\$BASE\/elements?"/.test(l) && !/^\s*find_el\(\)\s*\{/.test(l)) fails.push(`${pass.name}:${i + 1} asks Find Element by hand, outside find_el: ${l.trim().slice(0, 120)}`);
+    if (/\bwd_raw_find\b/.test(l) && !/\b(die|say)\s+".*\$\(wd_raw_find\b/.test(l)) fails.push(`${pass.name}:${i + 1} uses wd_raw_find outside a die or say message: ${l.trim().slice(0, 120)}`);
+  });
+}
+
 // ---- where the picker is looked up --------------------------------------------------------------
+// And the two lookups #296 fixed are there, and held by a wait on the picker itself.
+const PICK = `find_el '{"using":"css selector","value":"#system-selection"}'`;
+for (const f of ['stage2-ui-check.sh', 'stage2-ui-record-check.sh']) {
+  const how = heldAt.get(key(f, PICK, 1));
+  if (how !== 'a') fails.push(`${f}'s lookup of the system-audio picker is ${how === undefined ? 'gone' : `held by (${how ?? 'nothing'})`}, not by a wait on the picker`);
+}
 const PICKER = /system-selection/;
 const where = passes.filter((p) => p.lines.some((l) => !comment(l) && PICKER.test(l))).map((p) => p.name);
 const expected = ['stage2-two-channel-check.sh', 'stage2-ui-check.sh', 'stage2-ui-record-check.sh'];
@@ -217,4 +255,73 @@ if (JSON.stringify(where) !== JSON.stringify(expected)) fails.push(`the system-a
 assert.deepEqual(fails, [], 'a Stage 2 lookup does not wait for its element');
 const total = tally.a + tally.b + tally.listed;
 assert.ok(total >= 60, `only ${total} call sites found; the census has gone stale`);
-console.log(`ok - ${total} find_el and by_text calls in ${passes.length} passes: ${tally.a} held by a wait on their element, ${tally.b} retried, ${tally.listed} listed with their reason; the picker is looked up in ${expected.length} passes`);
+console.log(`ok - ${total} find_el and by_text calls in ${passes.length} passes and ${LIBS.length} helpers: ${tally.a} held by a wait on their element, ${tally.b} retried, ${tally.listed} listed with their reason; the picker is looked up in ${expected.length} passes`);
+
+// ---- the helpers, run against a driver stub ------------------------------------------------------
+// The census above reads `await_present` by two substrings; this runs it. A stub answers Execute
+// Script by mode and Find Element with an error, on a port of its own, and the helper runs under the
+// passes' own `set -euo pipefail`. `refused` closes the port first: before #296's gate adversary that
+// case ended the pass with exit 7 and no message at all, because a failed `curl` inside the
+// substitution failed it under `pipefail`.
+async function underStub(mode, body) {
+  let polls = 0;
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => { raw += d; });
+    req.on('end', () => {
+      let script = '';
+      try { script = JSON.parse(raw).script ?? ''; } catch { /* Find Element's body has no script */ }
+      res.setHeader('content-type', 'application/json');
+      if (req.url.endsWith('/element')) return res.end(JSON.stringify({ value: { error: 'no such element', message: 'stub' } }));
+      if (script.includes('tabpanel')) return res.end(JSON.stringify({ value: 'the panel rendered without it' }));
+      polls++;
+      const value = { present: true, late: polls >= 3, absent: false, error: { error: 'invalid session id', message: 'stub' } }[mode];
+      res.end(JSON.stringify({ value }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address();
+  if (mode === 'refused') await new Promise((r) => server.close(r));
+  const script = `set -euo pipefail
+die() { echo "DIE: $*"; exit 1; }
+say() { echo "SAY: $*"; }
+BASE=http://127.0.0.1:${port}/session/stub
+. "$1"
+${body}
+echo RETURNED`;
+  const child = spawn('bash', ['-c', script, 'stub', path.join(SCRIPTS, 'lib', 'webdriver.sh')], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+  const code = await new Promise((r) => child.on('close', (c, sig) => r(c ?? sig)));
+  clearTimeout(timer);
+  if (mode !== 'refused') server.close();
+  return { code, out, polls };
+}
+
+const WAIT = "await_present '#system-selection' 'the picker' 2";
+const helperFails = [];
+const expect = (name, r, code, patterns, absent = []) => {
+  if (r.code !== code) helperFails.push(`${name}: exit ${r.code}, not ${code}: ${JSON.stringify(r.out)}`);
+  for (const p of patterns) if (!p.test(r.out)) helperFails.push(`${name}: no ${p} in ${JSON.stringify(r.out)}`);
+  for (const p of absent) if (p.test(r.out)) helperFails.push(`${name}: ${p} in ${JSON.stringify(r.out)}`);
+};
+const DIED = /DIE: timed out after 2s waiting for the picker \(#system-selection\)\. The panel shows /;
+let r = await underStub('present', WAIT);
+expect('present at once', r, 0, [/SAY: the picker rendered after \d+ ms; at the first check it was present\n/, /RETURNED/]);
+r = await underStub('late', WAIT);
+expect('present at the third check', r, 0, [/at the first check it was absent \(false\)/, /RETURNED/]);
+if (r.polls < 3) helperFails.push(`present at the third check: the stub was asked ${r.polls} times`);
+r = await underStub('absent', WAIT);
+expect('never present', r, 1, [DIED, /The panel shows the panel rendered without it; Find Element answers .*no such element/], [/RETURNED/, /rendered after/]);
+r = await underStub('error', WAIT);
+expect('a driver error', r, 1, [DIED], [/RETURNED/, /rendered after/]);
+r = await underStub('refused', WAIT);
+expect('a refused connection', r, 1, [DIED, /The panel shows \(the driver gave no answer\); Find Element answers \(no answer: curl exit 7\)/], [/RETURNED/]);
+r = await underStub('refused', `PANEL=$(wd_panel_state '#system-selection'); echo "PANEL: $PANEL"`);
+expect('wd_panel_state, refused', r, 0, [/PANEL: \(the driver gave no answer\)/, /RETURNED/]);
+r = await underStub('refused', `RAW=$(wd_raw_find '#system-selection'); echo "RAW: $RAW"`);
+expect('wd_raw_find, refused', r, 0, [/RAW: \(no answer: curl exit 7\)/, /RETURNED/]);
+assert.deepEqual(helperFails, [], 'a WebDriver helper does not do what the passes rely on');
+console.log('ok - await_present, wd_panel_state and wd_raw_find, run against a stub in 7 cases');
