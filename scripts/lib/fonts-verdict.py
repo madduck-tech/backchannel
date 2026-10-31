@@ -6,9 +6,11 @@
 Prints `ok: …` when the answer covers each of the ten faces the probe declares, once and in order, each
 asked about every symbol the probe declares; when each face's text would be drawn with exactly that
 face, loaded; and when no face would draw a symbol. Otherwise one sentence naming every face that does
-not. The faces and symbols are read from the probe's own FACES and SYMBOLS, the lists
-fonts-verdict.test.mjs holds to fonts.css, so an edit to the probe's loops that stops asking cannot be
-read as a pass. stage2-ui-check.sh dies on anything but `ok:`.
+not. The faces and symbols are read from the probe's own FACES and SYMBOLS: fonts-verdict.test.mjs
+holds FACES to fonts.css and SYMBOLS to the four the product owner left to the system. So an edit to the
+probe's loops cannot drop a face or a symbol from the answer unnoticed. It cannot tell whether the
+probe asked WebKit at all: an answer filled in without `document.fonts.load` reads as a pass.
+stage2-ui-check.sh dies on anything but `ok:`.
 """
 import json
 import re

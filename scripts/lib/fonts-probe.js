@@ -8,7 +8,7 @@
 // It reads no element of the application, so it does not see whether the application's text uses these
 // faces, and it does not see which file a face came from: fonts-ship-in-the-repository.test.mjs reads
 // that from fonts.css. fonts-verdict.py holds the answer to FACES and SYMBOLS, so the loops below
-// cannot stop asking unnoticed.
+// cannot drop a face or a symbol from it unnoticed; it cannot see whether they asked WebKit.
 const done = arguments[arguments.length - 1];
 const FACES = [
   ['IBM Plex Sans', '400', 'normal'], ['IBM Plex Sans', '500', 'normal'], ['IBM Plex Sans', '600', 'normal'],
