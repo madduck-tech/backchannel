@@ -22,6 +22,6 @@ anything, so no run can fall back to a marker another run uses.
 | `j-prints-a-lot.mjs` | no `node:test`; 20 MiB of output, past the runner's 16 MiB cap |
 | `k-passes-late.mjs` | no `node:test`; passes once the test writes `BC_HANG_RELEASE_K`, after its sample has seen h's orphan, so its report is written once that orphan exists (3 s without the variable, 20 s if never released) |
 | `passes.mjs` | ends by itself after about a second |
-| `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe. Once its write is out it writes `BC_HANG_STAMP_L` |
+| `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe. Once its write has been handed on to `node --test`, it writes `BC_HANG_STAMP_L` |
 
 `close-the-terminal.py` and `read-slowly-on-a-terminal.py` are not fixtures: they run a command on a pseudo-terminal, the first closing it when it receives SIGUSR1, the second draining it slowly, for the test's terminal cases. `read-slowly-on-a-pipe.py` is the second's counterpart on a pipe.

@@ -5,8 +5,11 @@
 //
 // Each run is sampled once, before any bound, to show its case's precondition was reached: a's sleep
 // running, h's helper gone, l's output out. It is taken at S/2 at the earliest, so a bound that fires
-// early has already killed what the sample looks for (#268's gate adversary, round 8: a sample at S/3
-// let a bound at 40% of S pass). Past S/2 it waits only while its case's state is not yet reached, up
+// before S/2 has already killed what the sample looks for (#268's gate adversary, round 8: a sample at
+// S/3 let a bound at 40% of S pass). One that fires between S/2 and S is caught by the duration its ✖
+// line gives, which must be at least S: the line prints the configured bound whenever it fires (round 9).
+// Not in the slow terminal's case: there j's report holds the event loop, so h's duration runs past S
+// whatever its timer was set to. Past S/2 it waits only while its case's state is not yet reached, up
 // to a second before S, since on a loaded runner a fixture starts late (CI run 41150739546: h's helper
 // was still alive at 2 s). A case's signals, pauses, terminal close and k's report are timed from it, so
 // none can land before the state they are meant to interrupt.
@@ -192,7 +195,10 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
 }
 
 const fixture = (f) => `${FIX}/${f}`;
-const line = (file, rest) => new RegExp(`^✖ ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — [0-9]+ ms: ${rest}`, 'm');
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const line = (file, rest) => new RegExp(`^✖ ${esc(file)} — [0-9]+ ms: ${rest}`, 'm');
+/** How long the runner says `file` ran when its bound ended it, or NaN if no line says so. */
+const boundMs = (out, file) => Number(new RegExp(`^✖ ${esc(file)} — ([0-9]+) ms: still running after the `, 'm').exec(out)?.[1]);
 const HUNG = ['a-blocks-in-spawnsync.mjs', 'b-awaits-forever.mjs', 'c-detached-child.mjs', 'd-holds-the-output.mjs'];
 
 try {
@@ -209,6 +215,7 @@ try {
     check(r.code !== 0, `all: the run exited ${r.code}, with four files that never end`);
     for (const f of HUNG) {
       check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `all: no ✖ line names ${f} at its bound, everything killed`);
+      check(boundMs(r.out, fixture(f)) >= S, `all: ${f} was ended after ${boundMs(r.out, fixture(f))} ms, before its ${S} ms bound`);
     }
     check(line(fixture('e-leaves-a-process.mjs'), 'exited and left 1 process\\(es\\) running').test(r.out), 'all: no ✖ line names e for the process it left');
     check(new RegExp(`^✔ ${FIX}/g-ends-its-child-soon\\.mjs — `, 'm').test(r.out), 'all: g failed, though its child ended inside the grace');
@@ -226,6 +233,7 @@ try {
     check(r.mid.hOrphaned, "f-j: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     for (const f of ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs']) {
       check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `f-j: no ✖ line names ${f} at its bound, everything killed`);
+      check(boundMs(r.out, fixture(f)) >= S, `f-j: ${f} was ended after ${boundMs(r.out, fixture(f))} ms, before its ${S} ms bound`);
     }
     check(sleepsWith(r.marks.F).length === 0, "f-j: f's sleep is still running after the run");
     check(sleepsWith(r.marks.H).length === 0, "f-j: h's sleep is still running after the run");
@@ -241,6 +249,7 @@ try {
     const r = await nested('no /proc', 2, [fixture('a-blocks-in-spawnsync.mjs')], { env: { BC_TEST_PROC_ROOT: path.join(tmp, 'no-proc') } });
     check(r.mid.a > 0, "no /proc: a's sleep was not running at the sample");
     check(line(fixture('a-blocks-in-spawnsync.mjs'), `still running after the ${S} ms bound`).test(r.out), 'no /proc: no ✖ line names a at its bound');
+    check(boundMs(r.out, fixture('a-blocks-in-spawnsync.mjs')) >= S, `no /proc: a was ended after ${boundMs(r.out, fixture('a-blocks-in-spawnsync.mjs'))} ms, before its ${S} ms bound`);
     check(r.code !== 0, `no /proc: the run exited ${r.code}`);
     check(sleepsWith(r.marks.A).length === 0, "no /proc: a's sleep is still running after the run");
   }
@@ -308,8 +317,8 @@ try {
   }
 
   // 9. A reader that goes away (`pnpm test | head -1`): the runner's next write fails with EPIPE, and
-  //    what it is running goes with it, long before the bound. The write is k's report, at 3 s, after
-  //    h's orphan is made.
+  //    what it is running goes with it, long before the bound. The write is k's report, released half a
+  //    second after the sample has seen h's orphan.
   {
     const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300, releaseK: 500 });
     check(r.mid.h > 0, "EPIPE: h's sleep was not running at the sample");
@@ -359,7 +368,8 @@ try {
   }
 
   // 12 and 13. The runner's own failure, inside main and outside it: what it runs is killed, h's
-  //     orphan too, and the stack is printed. With h, faulted when k reports at 3 s, after the orphan.
+  //     orphan too, and the stack is printed. With h, faulted when k reports, released half a second
+  //     after the sample has seen the orphan.
   for (const [n, fault, code] of [[12, 'report', 2], [13, 'uncaught', 1]]) {
     const name = `fault ${fault}`;
     const r = await nested(name, n, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, env: { BC_TEST_RUNNER_FAULT: fault }, releaseK: 500 });

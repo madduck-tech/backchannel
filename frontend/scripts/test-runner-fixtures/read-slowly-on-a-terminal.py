@@ -1,7 +1,7 @@
 """Run a command on a new pseudo-terminal and read what it writes at RATE bytes a second, as a slow
-terminal drains, until the command has ended. Exits with the command's status. A helper for
-test-runner-bounds-each-file.test.mjs: Node writes to a terminal synchronously, so a slow one holds
-the runner's event loop for as long as a large report takes.
+terminal drains, until the command has ended, passing on what it reads. Exits with the command's status.
+A helper for test-runner-bounds-each-file.test.mjs: Node writes to a terminal synchronously, so a slow
+one holds the runner's event loop for as long as a large report takes.
 
     read-slowly-on-a-terminal.py RATE COMMAND...
 """
@@ -25,7 +25,10 @@ while True:
         if not ready:
             break
         try:
-            got += len(os.read(master, share - got))
+            data = os.read(master, share - got)
         except OSError:
             break
+        got += len(data)
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
     time.sleep(max(0.0, 0.05 - (time.time() - tick)))
