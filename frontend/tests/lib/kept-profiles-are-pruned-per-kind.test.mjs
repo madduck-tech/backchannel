@@ -24,7 +24,11 @@ const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 const LIB = path.join(repo, 'scripts', 'lib', 'kept-profile.sh');
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kept-prune-'));
 const holders = [];
-process.on('exit', () => { for (const h of holders) h.kill('SIGKILL'); fs.rmSync(base, { recursive: true, force: true }); });
+// Each holder leads a process group of its own, and the group is what is killed. `flock` runs `sleep` as
+// its child, so killing `flock` alone left `sleep 60` running for a minute after this file ended;
+// `pnpm test`'s runner names a process a file leaves behind (#268), and found this one.
+const killGroup = (h) => { try { process.kill(-h.pid, 'SIGKILL'); } catch { /* already gone */ } };
+process.on('exit', () => { for (const h of holders) killGroup(h); fs.rmSync(base, { recursive: true, force: true }); });
 
 const libEnv = (env, body, ...args) => spawnSync('bash', ['-c', `set -euo pipefail; say() { printf 'pass: %s\\n' "$*" >&2; }; . "$1"; shift; ${body}`, 'x', LIB, ...args],
   { encoding: 'utf8', env: { ...process.env, BC_KEEP_MODELS: '', ...env } });
@@ -47,7 +51,7 @@ function profile(root, name, { ageMin, dirAgeMin = ageMin, lock } = {}) {
   const dt = new Date(Date.now() - dirAgeMin * MIN);
   fs.utimesSync(d, dt, dt);
   if (lock === 'held') {
-    const h = spawn('flock', [path.join(d, '.lock'), 'sleep', '60'], { stdio: 'ignore' });
+    const h = spawn('flock', [path.join(d, '.lock'), 'sleep', '60'], { stdio: 'ignore', detached: true });
     h.unref(); // the holder is killed on exit; it must not keep the test process alive for a minute
     holders.push(h);
     for (let i = 0; i < 100 && spawnSync('flock', ['-n', path.join(d, '.lock'), 'true']).status === 0; i++) spawnSync('sleep', ['0.05']);
@@ -144,7 +148,7 @@ test('kept_profile_lock holds a live profile against a concurrent prune', async 
   const root = fs.mkdtempSync(path.join(base, 'live-'));
   const live = profile(root, 'backchannel-core.live00', { ageMin: 300 });
   // The real function, in a shell that stays alive as a pass does, and says when it holds the lock.
-  const holder = spawn('bash', ['-c', `say() { :; }; . "$1"; kept_profile_lock "$2" && echo locked; sleep 30`, 'x', LIB, live], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const holder = spawn('bash', ['-c', `say() { :; }; . "$1"; kept_profile_lock "$2" && echo locked; sleep 30`, 'x', LIB, live], { stdio: ['ignore', 'pipe', 'ignore'], detached: true });
   holder.unref(); holders.push(holder);
   await new Promise((resolve, reject) => {
     holder.stdout.on('data', (d) => { if (String(d).includes('locked')) resolve(); });
