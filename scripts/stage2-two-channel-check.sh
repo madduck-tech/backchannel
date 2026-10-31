@@ -643,13 +643,16 @@ if [ "$MODE" = changed ]; then
   click "$STOP" "Stop recording, the start with B gone"
   await "![...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
         'the meeting with B gone to stop' 30
-  # Its folder goes at once, not with the profile: it holds the real output's audio.
+  # Its folder goes at once, not with the profile: it holds the real output's audio. Found by the line
+  # the app writes for this start's folder, after its CALLED line, not by the name: a build that drops
+  # the name names the folder itself (measured under #242's name-dropped control).
+  FB_DIR=""
   for _ in $(seq 1 60); do
-    FB_DIR=$(find "$PROFILE/rec" -maxdepth 1 -mindepth 1 -type d -name "$NAME*" 2>/dev/null | head -1)
-    [ -n "$FB_DIR" ] && break; sleep 0.5
+    FB_DIR=$(tail -n +"${N:-1}" "$LOG" | grep -o "Created meeting folder with checkpoints: .*" | head -1 | sed 's/^Created meeting folder with checkpoints: //' || true)
+    [ -n "$FB_DIR" ] && [ -d "$FB_DIR" ] && break; sleep 0.5
   done
   case "$FB_DIR" in
-    "$PROFILE/rec/$NAME"*) rm -rf -- "$FB_DIR"; say "removed the recording of the real output: $(basename "$FB_DIR")" ;;
+    "$PROFILE/rec/"?*) rm -rf -- "$FB_DIR"; say "removed the recording of the real output: $(basename "$FB_DIR")" ;;
     *) fail_or_record "no folder for '$NAME' under $PROFILE/rec to remove" ;;
   esac
 fi
