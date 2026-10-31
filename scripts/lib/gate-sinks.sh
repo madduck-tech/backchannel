@@ -8,6 +8,7 @@
 #
 #   gate_sinks_create            sets GATE_SINK_A, GATE_SINK_B (node names), GATE_DESC_A, GATE_DESC_B
 #   gate_sinks_destroy           removes both, by the ids this run created
+#   gate_sink_remove <name>      removes one of them now, and returns once the graph no longer has it
 #   gate_sink_is_default <name>  exits 0 when <name> is the effective default output
 
 GATE_SINK_A=backchannel_gate_sink_a
@@ -47,6 +48,17 @@ gate_sinks_destroy() {
   local id
   for id in $GATE_SINK_IDS; do pw-cli destroy "$id" >/dev/null 2>&1 || true; done
   GATE_SINK_IDS=""
+}
+
+gate_sink_remove() {
+  local ids id n keep=""
+  ids=$(gate__nodes "$1") || die "could not read the graph"
+  [ -n "$ids" ] || die "$1 is not in the graph to remove"
+  for id in $ids; do pw-cli destroy "$id" >/dev/null 2>&1 || die "could not remove $1 (node $id)"; done
+  for n in $(seq 1 25); do [ -z "$(gate__nodes "$1" 2>/dev/null)" ] && break; sleep 0.2; done
+  [ -z "$(gate__nodes "$1")" ] || die "$1 is still in the graph after its removal"
+  for id in $GATE_SINK_IDS; do case " $ids " in *" $id "*) ;; *) keep="$keep $id" ;; esac; done
+  GATE_SINK_IDS="$keep"
 }
 
 gate_sink_is_default() {

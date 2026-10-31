@@ -14,7 +14,6 @@ use tauri::{AppHandle, Emitter, Runtime};
 use tokio::task::JoinHandle;
 
 use super::{
-    parse_audio_device,
     default_input_device,   // Get default microphone
     default_output_device,  // Get default system audio
     RecordingManager,
@@ -256,11 +255,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // The devices stored at this moment, on every route (#242). Default is the default device; a
     // named microphone that is missing fails the start rather than recording another (#9); a named
-    // system device that is missing leaves the system side out, with a warning.
+    // system device that is missing is replaced by the default system device, with a warning.
     let super::start_devices::Start { devices, auto_save, save_folder } = match super::start_devices::from_store(
         &app,
         std::path::Path::new(super::recording_preferences::PREFERENCES_STORE),
-        parse_audio_device,
+        |name: &str| super::start_devices::lookup(name.to_string()),
         default_input_device,
         default_output_device,
     )

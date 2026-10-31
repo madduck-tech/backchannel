@@ -23,6 +23,7 @@
       "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib checking_permissions_does_not_panic -- --ignored --nocapture",
       "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib the_diarizer_agrees_with_what_it_said_before_the_engine_moved -- --ignored --nocapture",
       "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib a_replace_against_a_load_and_a_job -- --ignored --nocapture",
+      "scripts/disk-floor.sh --brief && cargo test -p conversationaly --lib the_start_lookup_refuses_a_device_that_is_not_there -- --ignored --nocapture",
       "set -o pipefail; rc=0; out=$(python3 -I -m unittest discover -s frontend/src-tauri/scripts -p 'test_*.py' 2>&1) || rc=$?; printf '%s\\n' \"$out\"; n=$(printf '%s\\n' \"$out\" | sed -n 's/^Ran \\([0-9][0-9]*\\) tests\\{0,1\\} in .*/\\1/p'); [ \"$rc\" -eq 0 ] || exit \"$rc\"; [ \"${n:-0}\" -ge 28 ] || { echo \"ran ${n:-0} Python tests, expected at least 28\"; exit 1; }"
     ],
     "stage2": [
