@@ -126,6 +126,9 @@ def main(argv):
         summary.flush()
         if INTERRUPTED:
             print('stage2-watched: interrupted; the entry above finished its teardown, and nothing after it ran', flush=True)
+            # Die of the SIGINT, not exit 130: a calling shell then stops too, by bash's cooperative exit.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGINT)
             return 130
     return 1 if failed else 0
 

@@ -31,24 +31,28 @@ group() { printf '%s' "${PASS:-$WAITER}"; }
 teardown() {
   [ -n "$TORN" ] && return
   TORN=1
-  [ -n "$(group)" ] && kill -TERM -"$(group)" 2>/dev/null
+  # The leader alone when the group does not exist yet: before `setsid()` the child leads nothing.
+  [ -n "$(group)" ] && { kill -TERM -"$(group)" 2>/dev/null || kill -TERM "$(group)" 2>/dev/null; }
   [ -n "$SAMPLER" ] && kill -TERM "$SAMPLER" 2>/dev/null
   [ -n "$REC" ] && kill -TERM "$REC" 2>/dev/null
 }
 trap teardown EXIT
-# Stopped, it waits until the entry's whole group has ended, so whatever runs next does not start beside the
-# entry's teardown: the record step's shell ends while the pass it ran is still dropping its recordings, so
-# the session leader alone is not enough. Up to a minute, then the group is killed. Bash reaps an ended
-# child while this waits, so `kill -0` reads the group as it is.
+# However the entry ends, the watch returns only once the entry's whole group has ended, so whatever runs
+# next does not start beside its teardown: the record step's shell ends while the pass it ran is still
+# dropping its recordings, so the session leader alone is not enough. Up to a minute, then the group is
+# killed. Bash reaps an ended child while this waits, so `kill -0` reads the group as it is.
+await_group() {
+  [ -n "$(group)" ] || return 0
+  for _ in $(seq 1 240); do kill -0 -"$(group)" 2>/dev/null || break; sleep 0.25; done
+  kill -0 -"$(group)" 2>/dev/null && { say "the entry's group did not end within a minute; killing it"; kill -KILL -"$(group)" 2>/dev/null; }
+  [ -n "$WAITER" ] && wait "$WAITER" 2>/dev/null
+  return 0
+}
 stopped() {
   trap '' INT TERM
   say "stopped by a signal: the entry, the sampler and the recorder are stopped with it"
   teardown
-  if [ -n "$(group)" ]; then
-    for _ in $(seq 1 240); do kill -0 -"$(group)" 2>/dev/null || break; sleep 0.25; done
-    kill -0 -"$(group)" 2>/dev/null && { say "the entry did not end within a minute; killing its group"; kill -KILL -"$(group)" 2>/dev/null; }
-    wait "$WAITER" 2>/dev/null
-  fi
+  await_group
   exit 143
 }
 trap stopped INT TERM
@@ -74,6 +78,7 @@ say "the entry runs as session $PASS: $*"
 python3 -I "$GRAPH" watch "$OUT/graph.jsonl" "$REC" "$PASS" --stop ${GLOB:+--app-pgid-glob "$GLOB"} &
 SAMPLER=$!
 wait "$WAITER"; RC=$?
+await_group
 kill -TERM "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null
 kill -TERM "$REC" 2>/dev/null; wait "$REC" 2>/dev/null
 say "the entry exited $RC"

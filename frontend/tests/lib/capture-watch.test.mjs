@@ -77,6 +77,8 @@ const clear = () => { for (const f of fs.readdirSync(live)) if (f.startsWith('fo
 const absentPid = () => { for (let p = 4_000_000; p > 3_000_000; p -= 7) if (!fs.existsSync(`/proc/${p}`)) return p; return 0; };
 const sleeper = () => Number(spawnSync('bash', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim());
 const strays = [];
+// Signal only once the watch says the entry runs, not after a fixed sleep: under load the entry starts late.
+const whenRunning = (out) => `for i in $(seq 1 200); do grep "runs as session" ${JSON.stringify(path.join(out, 'watch.log'))} >/dev/null 2>&1 && break; sleep 0.05; done; sleep 0.5`;
 
 // 1. Beside a capture already in the graph, the entry never starts.
 const other = sleeper(); strays.push(other);
@@ -114,7 +116,7 @@ clear();
 
 // 7. A watch that is itself stopped takes the entry, the sampler and the recorder with it.
 const out7 = path.join(root, 'out-stopped');
-const r7 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out7)} -- 'sleep 20; touch ${mark(7)}' & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"`],
+const r7 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out7)} -- 'sleep 20; touch ${mark(7)}' & w=$!; ${whenRunning(out7)}; kill -TERM $w; wait $w; echo "rc=$?"`],
   { env, encoding: 'utf8', timeout: 30_000, cwd: root });
 const passGroup = Number(fs.existsSync(path.join(out7, 'pass.pgid')) ? fs.readFileSync(path.join(out7, 'pass.pgid'), 'utf8').trim() : 0);
 spawnSync('sleep', ['1']);
@@ -130,7 +132,7 @@ for (const pid of samplers) { try { process.kill(Number(pid), 'SIGTERM'); } catc
 
 // 8. ... and returns only once the entry's own teardown is done, so the next entry never starts beside it.
 const out8 = path.join(root, 'out-teardown');
-const r8 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8)} -- "trap 'sleep 2; touch ${mark(8)}' EXIT; sleep 20" & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark(8))} ] && echo torn-down-first`],
+const r8 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8)} -- "trap 'sleep 2; touch ${mark(8)}' EXIT; sleep 20" & w=$!; ${whenRunning(out8)}; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark(8))} ] && echo torn-down-first`],
   { env, encoding: 'utf8', timeout: 40_000, cwd: root });
 check('8 a stopped watch waits for the entry\'s teardown', /rc=143/.test(r8.stdout) && /torn-down-first/.test(r8.stdout), `${r8.stdout.trim()}: ${r8.stderr}`);
 
@@ -139,7 +141,7 @@ check('8 a stopped watch waits for the entry\'s teardown', /rc=143/.test(r8.stdo
 const child8 = path.join(root, 'child8.sh');
 fs.writeFileSync(child8, `trap 'sleep 2; touch ${mark('8b')}; exit 143' TERM\nsleep 20 & wait\n`);
 const out8b = path.join(root, 'out-group');
-const r8b = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8b)} -- "bash ${child8}; true" & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark('8b'))} ] && echo torn-down-first`],
+const r8b = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8b)} -- "bash ${child8}; true" & w=$!; ${whenRunning(out8b)}; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark('8b'))} ] && echo torn-down-first`],
   { env, encoding: 'utf8', timeout: 40_000, cwd: root });
 check('8b a stopped watch waits for the whole group', /rc=143/.test(r8b.stdout) && /torn-down-first/.test(r8b.stdout), `${r8b.stdout.trim()}: ${r8b.stderr}`);
 
@@ -152,14 +154,40 @@ fs.writeFileSync(cfg, JSON.stringify({ verification: { stage2: [
   ': harness_guard_after_up up --system-only',
   ': stage2-record-check.sh; RC=0; APID=x; scripts/audio-harness.sh down; exit $RC',
 ] } }));
+// The runner runs under a calling shell, which must stop with it rather than carry on.
 const r9 = spawnSync('python3', ['-I', '-c', `import os, signal, subprocess, sys, time
-p = subprocess.Popen(['python3', '-I', sys.argv[1], sys.argv[2], '--only', '1,2', '--config', sys.argv[3]], start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-time.sleep(3); os.killpg(p.pid, signal.SIGINT)
+p = subprocess.Popen(['bash', '-c', 'python3 -I "$0" "$1" --only 1,2 --config "$2"; echo CALLER-WENT-ON', sys.argv[1], sys.argv[2], sys.argv[3]], start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+log = os.path.join(sys.argv[2], 'watch-01', 'watch.log')
+for _ in range(200):
+    if os.path.exists(log) and 'runs as session' in open(log).read(): break
+    time.sleep(0.05)
+time.sleep(0.5); os.killpg(p.pid, signal.SIGINT)
 out = p.communicate(timeout=60)[0]
 print(p.returncode); print(os.path.exists(sys.argv[4])); print(out)`, path.join(repo, 'scripts', 'stage2-watched.py'), path.join(root, 'out-9'), cfg, mark(9)], { env, encoding: 'utf8', timeout: 90_000 });
 const [rc9, torn9] = r9.stdout.split('\n');
-check('9 a Ctrl-C under the runner waits for the entry and runs nothing after it', rc9 === '130' && torn9 === 'True' && !fs.existsSync(mark('9b')) && /interrupted/.test(r9.stdout),
-  `runner exit ${rc9}, torn down when it returned ${torn9}, the next entry ran ${fs.existsSync(mark('9b'))}: ${r9.stdout}${r9.stderr}`);
+check('9 a Ctrl-C under the runner waits for the entry, runs nothing after it, and stops its caller', rc9 === '-2' && torn9 === 'True' && !fs.existsSync(mark('9b')) && /interrupted/.test(r9.stdout) && !/CALLER-WENT-ON/.test(r9.stdout),
+  `caller exit ${rc9}, torn down when it returned ${torn9}, the next entry ran ${fs.existsSync(mark('9b'))}: ${r9.stdout}${r9.stderr}`);
+
+// 10. A stop by the sampler, the watch's own purpose, also waits for the entry's whole group.
+const caller10 = sleeper(); strays.push(caller10);
+const child10 = path.join(root, 'child10.sh');
+fs.writeFileSync(child10, `trap 'sleep 2; touch ${mark(10)}; exit 143' TERM\nsleep 20 & wait\n`);
+r = watch(`bash ${child10} & c=$!; sleep 1; echo '{"pid": ${caller10}}' > ${path.join(live, 'foreign-d.json')}; wait $c; true`);
+check('10 a stop by the sampler waits for the whole group', r.status === 143 && fs.existsSync(mark(10)) && r.rows.some((x) => x.stopped),
+  `exit ${r.status} after ${r.secs}s, torn down when it returned ${fs.existsSync(mark(10))}, stopped ${r.rows.some((x) => x.stopped)}: ${r.log}${r.text}`);
+clear();
+
+// 11. A watch stopped before the entry has become a group leader still stops it: `setsid` here takes a
+// second to get there, and the TERM goes to the leader-to-be.
+const realSetsid = spawnSync('bash', ['-c', 'command -v setsid'], { encoding: 'utf8' }).stdout.trim();
+const slow = path.join(root, 'slowbin');
+fs.mkdirSync(slow);
+fs.writeFileSync(path.join(slow, 'setsid'), `#!/bin/sh\nsleep 1\nexec ${realSetsid} "$@"\n`, { mode: 0o755 });
+const out11 = path.join(root, 'out-early');
+const r11 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out11)} -- 'touch ${mark(11)}; sleep 5; touch ${mark('11b')}' & w=$!; for i in $(seq 1 200); do grep "recorder pid" ${JSON.stringify(path.join(out11, 'watch.log'))} >/dev/null 2>&1 && break; sleep 0.05; done; sleep 0.3; kill -TERM $w; wait $w; echo "rc=$?"; sleep 6`],
+  { env: { ...env, PATH: `${slow}:${env.PATH}` }, encoding: 'utf8', timeout: 40_000, cwd: root });
+check('11 a watch stopped before the entry leads its group still stops it', /rc=143/.test(r11.stdout) && !fs.existsSync(mark(11)) && !fs.existsSync(mark('11b')),
+  `${r11.stdout.trim()}, the entry started ${fs.existsSync(mark(11))}, ran to its end ${fs.existsSync(mark('11b'))}: ${r11.stderr}`);
 
 // 6. The runner watches the entries that bring the harness up, found by what they run.
 const p = spawnSync('python3', ['-I', path.join(repo, 'scripts', 'stage2-watched.py'), root, '--plan'], { encoding: 'utf8' });
@@ -199,4 +227,4 @@ for (const f of fs.readdirSync(live)) {
 }
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the whole group of the entry has torn down, under a Ctrl-C to the runner too; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');
+console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the whole group of the entry has torn down, under a Ctrl-C to the runner too, which then stops its caller; waits the same way when the sampler stops the entry; and stops an entry that does not yet lead its group; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');
