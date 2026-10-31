@@ -16,6 +16,14 @@
 //     the adversary's round 2). Pid 1 is anybody else.
 //   - **`pw-dump` can print two arrays** when the graph changes while it reads (one sample in 39 across
 //     the first press). The second is an update, and `info: null` removes an object.
+//
+// It must not hang (#294). On CI one run of it held the step until the job was cancelled: the stub
+// truncated its counter before writing it, the wrapper read it empty, raised and died without stopping
+// `watch`, and `watch` held `spawnSync`'s pipes. So the wrapper no longer reads the counter: it counts the
+// lines `watch` has written, stops `watch` in a `finally` with bounded waits, and keeps `watch` off its
+// pipes; Node kills a `watch` a dead wrapper left; each case's runs are bounded, failing by name; and a
+// case fails unless every graph it served was sampled. The stub still writes its counter whole, though
+// only the next stub, which runs after it has exited, reads it.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,6 +36,10 @@ const TOOL = path.join(repo, 'scripts', 'lib', 'tone-graph.py');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tone-graph-'));
 
 const SINK = 50;
+// Above the wrapper's own 30 s deadline plus `watch`'s bounded exit, so even 13 cases at the bound end
+// inside #268's 480 s for one file.
+const CASE_TIMEOUT_MS = 35_000;
+const WATCH_EXIT_S = 2;
 const ROOT = process.pid;
 const descendant = spawn('sleep', ['120'], { stdio: 'ignore' });
 const OURS = descendant.pid;
@@ -57,27 +69,99 @@ function judge(name, graphs) {
 import json, os, sys
 graphs = json.load(open(${JSON.stringify(seq)}))
 n = int(open(${JSON.stringify(counter)}).read()) if os.path.exists(${JSON.stringify(counter)}) else 0
-open(${JSON.stringify(counter)}, 'w').write(str(n + 1))
+# Whole or not at all: a reader never sees it truncated (#294).
+open(${JSON.stringify(counter + '.tmp')}, 'w').write(str(n + 1))
+os.replace(${JSON.stringify(counter + '.tmp')}, ${JSON.stringify(counter)})
 g = graphs[min(n, len(graphs) - 1)]
 if g == 'fail': sys.exit(3)
 sys.stdout.write(g if isinstance(g, str) else json.dumps(g))
 `, { mode: 0o755 });
   const out = path.join(dir, `${name}.jsonl`);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  // Stopped once every graph has been served, counted by the stub, not timed: a slow machine takes
-  // fewer samples in a fixed time, and a case would then pass without its second graph being seen.
+  // Stopped once `watch` has written a line for every graph, counted in its own file, not timed: a slow
+  // machine takes fewer samples in a fixed time, and a case would then pass without its second graph
+  // being seen. Not the stub's counter either: the stub bumps it before it prints, so a stop on the
+  // counter could kill `watch` before its last sample was written (#294's gate adversary, round 1).
+  // `watch` writes to a file of its own, not to this `spawnSync`'s pipes, which a `watch` left running
+  // would hold open for ever; and the wrapper stops it in a `finally`, SIGTERM included, which a second
+  // SIGTERM cannot cut short.
   const child = spawnSync('python3', ['-I', '-c', `
 import os, signal, subprocess, sys, time
-p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}])
-served = lambda: int(open(${JSON.stringify(counter)}).read()) if os.path.exists(${JSON.stringify(counter)}) else 0
-deadline = time.monotonic() + 30
-while served() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
-p.send_signal(signal.SIGTERM); p.wait()
-sys.exit(0 if served() >= ${graphs.length} else 4)
-`], { env });
-  assert.equal(child.status, 0, String(child.stderr));
-  const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8' });
-  return { code: r.status, line: r.stdout.trim() };
+def stop(*_): raise SystemExit(5)
+signal.signal(signal.SIGTERM, stop)
+def sampled():
+    try:
+        return open(${JSON.stringify(out)}).read().count('\\n')
+    except OSError:
+        return 0
+p = None
+try:
+    with open(${JSON.stringify(out + '.log')}, 'w') as log:
+        p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    deadline = time.monotonic() + 30
+    while sampled() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
+finally:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if p is not None:
+        p.send_signal(signal.SIGTERM)
+        try:
+            p.wait(timeout=${WATCH_EXIT_S})
+        except subprocess.TimeoutExpired:
+            p.kill()
+            try:
+                p.wait(timeout=${WATCH_EXIT_S})
+            except subprocess.TimeoutExpired:
+                pass  # unreapable: Node's search below kills what is left
+sys.exit(0 if sampled() >= ${graphs.length} else 4)
+`], { env, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  killLeftWatch(out);
+  if (child.error || child.status !== 0) {
+    const how = child.error ? `${child.error.code} after ${CASE_TIMEOUT_MS} ms` : child.status === null ? `was ended by ${child.signal}` : `exited ${child.status}`;
+    throw new Error(`${name}: the wrapper ${how}: ${child.stderr}${tail(`${out}.log`)}`);
+  }
+  const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  if (r.error) throw new Error(`${name}: judge ${r.error.code} after ${CASE_TIMEOUT_MS} ms`);
+  const line = r.stdout.trim();
+  // The positive sentinel: every graph served was sampled, so a verdict never rests on a sample missing.
+  // A line it cannot read fails too, rather than leaving the sentinel nothing to compare.
+  const head = /^(\d+) samples, (\d+) not taken/.exec(line);
+  if (!head) throw new Error(`${name}: judge's line does not say how many samples it read: ${line || '(nothing)'}${r.stderr ? `\n  judge said: ${r.stderr.trim().slice(-600)}` : ''}`);
+  const [, taken, notTaken] = head;
+  if (Number(taken) + Number(notTaken) < graphs.length) throw new Error(`${name}: judge read ${taken} samples and ${notTaken} not taken, of ${graphs.length} graphs served: ${line}`);
+  return { code: r.status, line };
+}
+
+/** What `watch` said, if it said anything: its traceback, when it died. */
+function tail(file) {
+  try {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    return text ? `\n  watch said: ${text.slice(-600)}` : '';
+  } catch {
+    return '';
+  }
+}
+
+/** A wrapper that died without its `finally` (CI's shape) leaves `watch` running: find this case's by
+ *  its command line, which names the case's own output file, and kill it. */
+function killLeftWatch(out) {
+  const mine = `tone-graph.py\0watch\0${SINK}\0${ROOT}\0${out}\0`;
+  for (const n of fs.readdirSync('/proc')) {
+    if (!/^[0-9]+$/.test(n)) continue;
+    let cmd;
+    try {
+      cmd = fs.readFileSync(`/proc/${n}/cmdline`);
+    } catch {
+      continue; // gone
+    }
+    // As bytes: a path with a non-ASCII letter is UTF-8 there (#294's gate adversary, round 2).
+    if (cmd.includes(Buffer.from(mine))) {
+      try {
+        process.kill(Number(n), 'SIGKILL');
+      } catch {
+        // gone meanwhile
+      }
+    }
+  }
 }
 
 const cases = [
@@ -98,12 +182,21 @@ const cases = [
 ];
 
 const failures = [];
-for (const [name, graphs, code, line] of cases) {
-  const got = judge(name.replace(/\W+/g, '-'), graphs);
-  if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
+try {
+  for (const [name, graphs, code, line] of cases) {
+    let got;
+    try {
+      got = judge(name.replace(/\W+/g, '-'), graphs);
+    } catch (e) {
+      failures.push(e.message);
+      continue;
+    }
+    if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
+  }
+} finally {
+  descendant.kill();
+  fs.rmSync(dir, { recursive: true, force: true });
 }
-descendant.kill();
-fs.rmSync(dir, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 // Sanity: the tool is the one the pass runs.
 assert.match(execFileSync('grep', ['-c', 'scripts/lib/tone-graph.py', path.join(repo, 'scripts', 'stage2-core-check.sh')], { encoding: 'utf8' }), /^[1-9]/);
