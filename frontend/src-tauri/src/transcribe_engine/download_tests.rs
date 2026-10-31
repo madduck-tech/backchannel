@@ -34,12 +34,19 @@ enum Reply {
     After(Duration, Box<Reply>),
     /// The n-th connection gets the n-th reply, and every later one the last (#298).
     Sequence(Vec<Reply>),
+    /// Headers that promise `claimed` bytes, then `sent`, then a wait, then the connection closes; the
+    /// instant of the close is recorded in `Stub::closed` just before it (#310).
+    CloseAfter { sent: Vec<u8>, claimed: usize, wait: Duration },
 }
 
 struct Stub {
     base: String,
     requests: Arc<Mutex<Vec<String>>>,
     sent: Arc<AtomicUsize>,
+    /// Connections accepted, whether or not they ever sent a request: a TLS ClientHello never does.
+    accepted: Arc<AtomicUsize>,
+    /// When a `CloseAfter` reply closed its connection.
+    closed: Arc<Mutex<Option<tokio::time::Instant>>>,
 }
 
 async fn stub(reply: Reply) -> Stub {
@@ -47,16 +54,19 @@ async fn stub(reply: Reply) -> Stub {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(Mutex::new(Vec::new()));
     let sent = Arc::new(AtomicUsize::new(0));
-    let (requests_in, sent_in) = (requests.clone(), sent.clone());
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let closed = Arc::new(Mutex::new(None));
+    let (requests_in, sent_in, accepted_in, closed_in) = (requests.clone(), sent.clone(), accepted.clone(), closed.clone());
     tokio::spawn(async move {
         let mut connections = 0usize;
         while let Ok((mut sock, _)) = listener.accept().await {
+            accepted_in.fetch_add(1, Ordering::SeqCst);
             let mut reply = reply.clone();
             if let Reply::Sequence(replies) = &reply {
                 reply = replies[connections.min(replies.len() - 1)].clone();
             }
             connections += 1;
-            let (requests, sent) = (requests_in.clone(), sent_in.clone());
+            let (requests, sent, closed) = (requests_in.clone(), sent_in.clone(), closed_in.clone());
             tokio::spawn(async move {
                 let (mut buf, mut got) = (vec![0u8; 8192], Vec::new());
                 while !got.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -94,6 +104,16 @@ async fn stub(reply: Reply) -> Stub {
                         let _ = sock.write_all(&part).await;
                         sent.fetch_add(part.len(), Ordering::SeqCst);
                     }
+                    Reply::CloseAfter { sent: part, claimed, wait } => {
+                        let _ = sock.write_all(head(claimed).as_bytes()).await;
+                        let _ = sock.write_all(&part).await;
+                        let _ = sock.flush().await;
+                        sent.fetch_add(part.len(), Ordering::SeqCst);
+                        tokio::time::sleep(wait).await;
+                        // Before the shutdown: on a runtime with more than one thread the engine could
+                        // otherwise finish before the instant was written.
+                        *closed.lock().unwrap() = Some(tokio::time::Instant::now());
+                    }
                     Reply::Fill { byte, len } => {
                         let _ = sock.write_all(head(len).as_bytes()).await;
                         let block = vec![byte; 1 << 16];
@@ -122,7 +142,7 @@ async fn stub(reply: Reply) -> Stub {
             });
         }
     });
-    Stub { base, requests, sent }
+    Stub { base, requests, sent, accepted, closed }
 }
 
 fn engine_at(dir: &Path, stub: &Stub) -> Arc<TranscribeEngine> {
@@ -805,14 +825,20 @@ mod replace_against_load {
     }
 }
 
-// A failed download says why and when, and a server that stops answering is bounded (#298). Every
-// error here is the one `to_string()` gives, which is what both commands send. The tests whose case
-// is a stall set N to 1 s; the others run at production's N.
+// A failed download says why and when, and a server that stops answering is bounded (#298): the
+// connection at C, the headers at H, each gap in the body at G, and nothing the whole (#310). Every
+// error here is the one `to_string()` gives, which is what both commands send. The tests whose case is
+// a stall set G = 1 s, C = 2 s and H = 5 s, all different, so a timer wired to the wrong one fires at
+// the wrong time; the others run at production's values.
 mod a_failed_download_says_why {
     use super::*;
     use std::sync::OnceLock;
 
-    const N: Duration = Duration::from_secs(1);
+    const G: Duration = Duration::from_secs(1);
+    const C: Duration = Duration::from_secs(2);
+    const H: Duration = Duration::from_secs(5);
+    /// A slow start: after G and before H, and not C.
+    const LATE: Duration = Duration::from_secs(3);
 
     /// What `log` was given while this process ran, from the first `start_capture()`, at `Info`, as the
     /// app logs. A test that reads it calls `start_capture()` before it acts: the first test to read
@@ -867,7 +893,23 @@ mod a_failed_download_says_why {
     }
 
     fn stalling_engine(dir: &Path, stub: &Stub) -> Arc<TranscribeEngine> {
-        Arc::new(TranscribeEngine::new_with_models_dir(Some(dir.to_path_buf())).unwrap().with_base_url(&stub.base).with_read_timeout(N))
+        stalling_engine_at(dir, &stub.base)
+    }
+
+    fn stalling_engine_at(dir: &Path, base: &str) -> Arc<TranscribeEngine> {
+        Arc::new(
+            TranscribeEngine::new_with_models_dir(Some(dir.to_path_buf()))
+                .unwrap()
+                .with_base_url(base)
+                .with_read_timeout(H)
+                .with_connect_timeout(C)
+                .with_chunk_gap(G),
+        )
+    }
+
+    /// The temporary file of a download of `ROW`.
+    fn partial_of_row(dir: &Path) -> std::path::PathBuf {
+        dir.join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(ROW).unwrap().filename))
     }
 
     fn url_of(base: &str, name: &str) -> String {
@@ -905,7 +947,7 @@ mod a_failed_download_says_why {
     }
 
     /// Condition 2(i): a download that fails is logged once, at `warn`, with its URL, its error and the
-    /// seconds since it started, at production's N.
+    /// seconds since it started, at production's bounds.
     #[tokio::test]
     async fn a_failed_download_is_logged_with_its_seconds() {
         start_capture();
@@ -958,59 +1000,194 @@ mod a_failed_download_says_why {
         assert_eq!(failures_at(&url), Vec::new(), "a download that completed was logged as failed");
     }
 
-    /// Condition 3: the client is built in one place, with a read timeout of N and no total.
+    /// Condition 3, and #310 item 7: production's three bounds, H on the client, C and G on the engine,
+    /// and no total. A built client's `Debug` prints its read timeout but not its connect timeout, so C
+    /// and G are read from the fields; the census below pins the code that hands each to its timer.
     #[tokio::test]
     async fn the_client_has_a_read_timeout_and_no_total() {
         let dir = tempfile::tempdir().unwrap();
-        let production = format!("{:?}", TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap().client().unwrap());
-        assert!(production.contains("read_timeout: 30s"), "the production client is not bounded at 30 s: {production}");
+        let engine = TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+        let production = format!("{:?}", engine.client().unwrap());
+        assert!(production.contains("read_timeout: 300s"), "the production client does not wait 5 minutes for the headers: {production}");
         assert!(production.contains("proxies"), "the production client reads no system proxy: {production}");
+        assert_eq!(engine.connect_timeout, Duration::from_secs(30), "the production engine does not give a connection 30 s to open");
+        assert_eq!(engine.chunk_gap, Duration::from_secs(30), "the production engine does not give each part of the body 30 s");
         let test = format!("{:?}", engine_at_base(dir.path(), "http://127.0.0.1:9").client().unwrap());
         assert!(!test.contains("proxies"), "the test engine's client reads a proxy: {test}");
-        assert!(test.contains("read_timeout: 30s"), "the test engine's client is not built with the engine's N: {test}");
+        assert!(test.contains("read_timeout: 300s"), "the test engine's client is not built with the engine's H: {test}");
     }
 
-    /// Condition 3's census: one client construction in `engine.rs`, inside `download_client`, and no
-    /// timeout in it but the read timeout. Read with comments stripped, so a name in a comment is not
-    /// counted.
+    /// The byte range of the body of the one function whose signature starts with `signature`. A second
+    /// function of that name would let a decoy carry the pinned text (#310's gate adversary), so it is
+    /// refused. Braces inside string and char literals are skipped.
+    fn body_of(code: &str, signature: &str) -> std::ops::Range<usize> {
+        assert_eq!(code.matches(signature).count(), 1, "engine.rs has {} functions starting `{signature}`, not one", code.matches(signature).count());
+        let start = code.find(signature).unwrap();
+        let open = start + code[start..].find('{').unwrap();
+        let (b, mut depth, mut i) = (code.as_bytes(), 0i32, open);
+        while i < b.len() {
+            match b[i] {
+                b'"' => {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                }
+                b'\'' if b.get(i + 2) == Some(&b'\'') => i += 2,
+                b'\'' if b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'') => i += 3,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return open..i;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        panic!("{signature}'s body does not close")
+    }
+
+    /// Condition 3's census, rewritten as an allow-list (#310 item 8). `engine.rs` is read with comments
+    /// stripped; every match is case-sensitive, as `match_indices` is, so `DOWNLOAD_READ_TIMEOUT` and
+    /// its kin never match, and each `timeout` is judged by the whole identifier around it.
+    /// - One client construction, inside `download_client`.
+    /// - `read_timeout` and `connect_timeout` only as a field, `self.<field>`, an initialiser, a
+    ///   parameter, a value inside a setter or `download_client`, or a method call inside
+    ///   `download_client`. Never a bare call, a path call, or a name in a `use`.
+    /// - `with_read_timeout` and `with_connect_timeout` only as the setters' own names.
+    /// - Exactly one `tokio::time::timeout`, the loop's, `tokio::time::timeout(self.chunk_gap,
+    ///   stream.next())`, inside `download_inner`.
+    /// - `client()` builds the client as `download_client(self.read_timeout, self.connect_timeout,
+    ///   self.system_proxy)`, the one call besides the definition.
+    /// - Every `select`, `sleep` and `interval` inside `commit_download`'s one `tokio::select!` or its
+    ///   one 100 ms `tokio::time::sleep`, for its lock.
+    ///
+    /// Not held: a total written as an `elapsed()` check against a constant in the loop (`download_file`
+    /// already reads `started.elapsed()` for #298's line); a bound in a caller outside this file
+    /// (`commands.rs`, `diarization.rs`); a timer through a helper in another file whose name holds none
+    /// of these words.
     #[test]
     fn the_engine_builds_its_client_in_one_place() {
-        let code = without_comments(include_str!("engine.rs"));
+        // A raw string can hide `//` from the comment stripper below, which would drop the rest of its
+        // line, a bound included (#310's gate adversary). engine.rs has none; it may not gain one.
+        let raw = include_str!("engine.rs");
+        assert!(!has_raw_string(raw), "engine.rs holds a raw string, which this census cannot read past");
+        let code = without_comments(raw);
         let builds: Vec<usize> = ["Client::builder(", "Client::new(", "Client::default(", "ClientBuilder::new(", "ClientBuilder::default(", "reqwest::get("]
             .iter()
             .flat_map(|c| code.match_indices(c).map(|(i, _)| i).collect::<Vec<_>>())
             .collect();
         assert_eq!(builds.len(), 1, "engine.rs constructs a client {} times, not once", builds.len());
-        let start = code.find("fn download_client(").expect("no download_client in engine.rs");
-        let open = start + code[start..].find('{').unwrap();
-        let (mut depth, mut end) = (0i32, open);
-        for (i, ch) in code[open..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = open + i;
-                        break;
+        let client_fn = body_of(&code, "fn download_client(");
+        assert!(client_fn.contains(&builds[0]), "the one client construction is outside download_client");
+
+        let inner = body_of(&code, "fn download_inner(");
+        let commit = body_of(&code, "fn commit_download(");
+        let setters = [body_of(&code, "fn with_read_timeout("), body_of(&code, "fn with_connect_timeout(")];
+        let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let context = |i: usize| code[i.saturating_sub(60)..(i + 60).min(code.len())].split_whitespace().collect::<Vec<_>>().join(" ");
+        // The statement a position sits in starts after the last `;`, `{` or `}` before it.
+        let in_use = |i: usize| {
+            let from = code[..i].rfind([';', '{', '}']).map_or(0, |p| p + 1);
+            let stmt = code[from..i].trim_start();
+            ["use ", "pub use ", "pub(crate) use ", "pub(super) use "].iter().any(|u| stmt.starts_with(u))
+        };
+        let squash = |t: &str| t.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        const PIN: &str = "tokio::time::timeout(self.chunk_gap,stream.next())";
+        let (mut refused, mut pins) = (Vec::new(), 0);
+        for (i, _) in code.match_indices("timeout") {
+            let s = code[..i].rfind(|c: char| !is_ident(c)).map_or(0, |p| p + 1);
+            let e = i + code[i..].find(|c: char| !is_ident(c)).unwrap_or(code.len() - i);
+            let ident = &code[s..e];
+            let before = code[..s].trim_end();
+            let after = code[e..].trim_start();
+            let ok = match ident {
+                "timeout" => {
+                    let at_pin = before.ends_with("tokio::time::") && squash(&code[s - "tokio::time::".len()..(s + 80).min(code.len())]).starts_with(PIN);
+                    let ok = at_pin && inner.contains(&s);
+                    pins += ok as usize;
+                    ok
+                }
+                "read_timeout" | "connect_timeout" => {
+                    if in_use(s) || before.ends_with("::") {
+                        false
+                    } else if after.starts_with('(') {
+                        before.ends_with('.') && client_fn.contains(&s)
+                    } else {
+                        (after.starts_with(':') && !after.starts_with("::"))
+                            || before.ends_with("self.")
+                            || client_fn.contains(&s)
+                            || setters.iter().any(|r| r.contains(&s))
                     }
                 }
-                _ => {}
+                "with_read_timeout" | "with_connect_timeout" => before.ends_with("fn") && after.starts_with('('),
+                _ => false,
+            };
+            if !ok {
+                refused.push(format!("`{ident}` in: {}", context(i)));
             }
         }
-        assert!((open..end).contains(&builds[0]), "the one client construction is outside download_client");
-        // Any other bound named `timeout`: `.timeout(`, `ClientBuilder::timeout(`, `connect_timeout(`,
-        // `tokio::time::timeout(` or `timeout_at(` around the download, or an alias of one (#298's gate
-        // adversary, rounds 1 and 2). Not held: a `select!` against a sleep, the shape `commit_download`
-        // uses for its lock, and a bound in a caller outside this file (`commands.rs`, `diarization.rs`).
-        let other: Vec<&str> = code
-            .match_indices("timeout")
-            .filter(|(i, _)| !code[..*i].ends_with("read_"))
-            .map(|(i, _)| code[i.saturating_sub(50)..(i + 30).min(code.len())].trim())
-            .collect();
         assert!(
-            other.is_empty(),
-            "engine.rs names a timeout other than the read timeout, which is the only bound a download may have (#298): {other:#?}"
+            refused.is_empty(),
+            "engine.rs bounds a download other than by its three allowed timers, the headers' H, the connection's C and the loop's G (#298, #310): {refused:#?}"
         );
+        assert_eq!(pins, 1, "engine.rs has {pins} loop timers of the pinned text `{PIN}` inside download_inner, not one");
+        // The client gets exactly its two parameters, each once, as its two bounds: `.connect_timeout(
+        // connect_timeout.max(…))` would keep production's C out of every test (#310's gate adversary).
+        const BUILDER: &str = "reqwest::Client::builder().read_timeout(read_timeout).connect_timeout(connect_timeout)";
+        let squashed_client_fn = squash(&code[client_fn.clone()]);
+        assert!(squashed_client_fn.contains(BUILDER), "download_client does not build `{BUILDER}`: {}", context(client_fn.start));
+        for name in ["read_timeout", "connect_timeout"] {
+            let uses = squashed_client_fn.matches(&format!("({name})")).count() + squashed_client_fn.matches(&format!(",{name})")).count();
+            assert_eq!(uses, 1, "download_client hands `{name}` to the client {uses} times, not once, as itself");
+        }
+        // And the call that hands each field to its own timer, pinned by its text: the fields are read
+        // by #310 item 7, and this is what makes them the values the client is built with.
+        const CALL: &str = "download_client(self.read_timeout,self.connect_timeout,self.system_proxy)";
+        let client = body_of(&code, "fn client(");
+        assert!(squash(&code[client.clone()]).contains(CALL), "client() does not build the download's client as `{CALL}`: {}", context(client.start));
+        assert_eq!(squash(&code).matches("download_client(").count(), 2, "download_client is called other than once, from client(), beside its definition");
+
+        const SELECT: &str = "tokio::select!";
+        const SLEEP: &str = "tokio::time::sleep(std::time::Duration::from_millis(100))";
+        let allowed: Vec<std::ops::Range<usize>> = [SELECT, SLEEP]
+            .iter()
+            .flat_map(|t| code.match_indices(t).map(|(i, m)| i..i + m.len()).collect::<Vec<_>>())
+            .collect();
+        for t in [SELECT, SLEEP] {
+            let at: Vec<usize> = code.match_indices(t).map(|(i, _)| i).collect();
+            assert!(at.len() == 1 && commit.contains(&at[0]), "`{t}` occurs {} times in engine.rs, not once inside commit_download", at.len());
+        }
+        let stray: Vec<String> = ["select", "sleep", "interval"]
+            .iter()
+            .flat_map(|w| code.match_indices(w).map(|(i, _)| i).collect::<Vec<_>>())
+            .filter(|i| !allowed.iter().any(|r| r.contains(i)))
+            .map(context)
+            .collect();
+        assert!(stray.is_empty(), "engine.rs selects, sleeps or ticks outside commit_download's lock: {stray:#?}");
+    }
+
+    /// Whether Rust source holds a raw string literal, `r"…"` or `r#"…"#`: an `r` that starts a token,
+    /// outside a string or comment, followed by `"` or `#`.
+    fn has_raw_string(src: &str) -> bool {
+        let b = without_comments(src).into_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'"' => {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                }
+                b'r' if (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) && matches!(b.get(i + 1), Some(b'"') | Some(b'#')) => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Rust source with `//` and `/* */` comments removed, strings and char literals kept.
@@ -1060,18 +1237,38 @@ mod a_failed_download_says_why {
         String::from_utf8(out).unwrap()
     }
 
-    /// Condition 4(a): a server that never answers fails a fresh download within N, and it leaves
-    /// nothing behind.
+    /// #310 item 1: a slow start is waited for. The headers come after LATE, past G and short of H, then
+    /// the whole body at once.
     #[tokio::test]
-    async fn a_server_that_never_answers_fails_within_n() {
+    async fn a_slow_start_is_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..10_000u32).map(|i| (i * 7) as u8).collect();
+        let s = stub(Reply::After(LATE, Box::new(Reply::Body(body.clone())))).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let called = tokio::time::Instant::now();
+        tokio::time::timeout(LATE + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
+            .await
+            .expect("still running at LATE + 2 s")
+            .expect("a server that answered after LATE, inside H, was cut off");
+        assert!(called.elapsed() >= LATE, "the download took {:?}, so the stub never made it wait LATE", called.elapsed());
+        assert_eq!(bytes(&final_path(dir.path())), body, "the final path does not hold the bytes");
+    }
+
+    /// Condition 4(a), #310 item 2: a server that never answers fails a fresh download within H, not
+    /// before it, and it leaves nothing behind.
+    #[tokio::test]
+    async fn a_server_that_never_answers_fails_within_h() {
         let dir = tempfile::tempdir().unwrap();
         let s = stub(Reply::Silent).await;
         let engine = stalling_engine(dir.path(), &s);
-        let e = tokio::time::timeout(N + Duration::from_secs(2), engine.download_model(ROW, None))
+        let called = tokio::time::Instant::now();
+        let e = tokio::time::timeout(H + Duration::from_secs(2), engine.download_model(ROW, None))
             .await
-            .expect("still running at N + 2 s")
+            .expect("still running at H + 2 s")
             .expect_err("a silent server was taken for a download")
             .to_string();
+        let took = called.elapsed();
+        assert!(took >= H, "a silent server failed after {took:?}, before H");
         assert!(e.contains("Failed to start download") && e.contains("timed out"), "the error is not a start that timed out: {e}");
         assert!(!engine.downloads_in_flight().await.contains(ROW), "the row still reads as in flight");
         assert!(matches!(status(engine.discover_models().await.unwrap()), ModelStatus::Missing), "the row does not read Missing");
@@ -1079,60 +1276,119 @@ mod a_failed_download_says_why {
         assert_eq!(partials(dir.path()), Vec::<String>::new(), "a temporary file is left");
     }
 
-    /// Condition 4(b): a server that goes silent mid-body fails within N, through `download_file`, over
-    /// a damaged original it leaves as it was. Every failure is collected before asserting.
+    /// Condition 4(b), #310 items 3 and 4: a server that goes silent fails within G, after 1000 bytes or
+    /// before the first, through `download_file`, over a damaged original it leaves as it was. Every
+    /// failure is collected before asserting.
     #[tokio::test]
-    async fn a_server_that_goes_silent_mid_body_fails_within_n() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = original(dir.path());
-        let before = bytes(&path);
-        let s = stub(Reply::GoesSilent { sent: vec![1u8; 1000], claimed: 1_000_000 }).await;
-        let engine = stalling_engine(dir.path(), &s);
-        assert!(matches!(status(engine.discover_models().await.unwrap()), ModelStatus::Corrupted { .. }), "the fixture is not damaged");
+    async fn a_server_that_goes_silent_in_the_body_fails_within_g() {
         let mut fails = Vec::new();
-        match tokio::time::timeout(N + Duration::from_secs(2), engine.download_model(ROW, None)).await {
-            Err(_) => fails.push("still running at N + 2 s".to_string()),
-            Ok(Ok(())) => fails.push("a body that stopped at 1000 of 1 000 000 bytes was taken for a download".to_string()),
-            Ok(Err(e)) => {
-                let e = e.to_string();
-                if !(e.contains("Failed to read chunk") && e.contains("timed out")) {
-                    fails.push(format!("the error is not a chunk that timed out: {e}"));
+        for (what, sent) in [("after 1000 bytes", vec![1u8; 1000]), ("before the first byte", vec![])] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = original(dir.path());
+            let before = bytes(&path);
+            let s = stub(Reply::GoesSilent { sent, claimed: 1_000_000 }).await;
+            let engine = stalling_engine(dir.path(), &s);
+            assert!(matches!(status(engine.discover_models().await.unwrap()), ModelStatus::Corrupted { .. }), "the fixture is not damaged");
+            let called = tokio::time::Instant::now();
+            match tokio::time::timeout(G + Duration::from_secs(2), engine.download_model(ROW, None)).await {
+                Err(_) => fails.push(format!("{what}: still running at G + 2 s")),
+                Ok(Ok(())) => fails.push(format!("{what}: a body that stopped short was taken for a download")),
+                Ok(Err(e)) => {
+                    let took = called.elapsed();
+                    if !(G..G + Duration::from_secs(1)).contains(&took) {
+                        fails.push(format!("{what}: it failed after {took:?}, not within [G, G + 1 s)"));
+                    }
+                    if e.to_string() != "Failed to read chunk: timed out: no data for 1 s" {
+                        fails.push(format!("{what}: the error is not the loop's timeout: {e}"));
+                    }
                 }
             }
-        }
-        if bytes(&path) != before {
-            fails.push("the original changed".into());
-        }
-        if !partials(dir.path()).is_empty() {
-            fails.push(format!("a temporary file is left: {:?}", partials(dir.path())));
-        }
-        if engine.downloads_in_flight().await.contains(ROW) {
-            fails.push("the row still reads as in flight".into());
-        }
-        let after = status(engine.discover_models().await.unwrap());
-        if !matches!(after, ModelStatus::Corrupted { .. }) {
-            fails.push(format!("the row reads {after:?}, not Corrupted"));
+            if bytes(&path) != before {
+                fails.push(format!("{what}: the original changed"));
+            }
+            if !partials(dir.path()).is_empty() {
+                fails.push(format!("{what}: a temporary file is left: {:?}", partials(dir.path())));
+            }
+            if engine.downloads_in_flight().await.contains(ROW) {
+                fails.push(format!("{what}: the row still reads as in flight"));
+            }
+            let after = status(engine.discover_models().await.unwrap());
+            if !matches!(after, ModelStatus::Corrupted { .. }) {
+                fails.push(format!("{what}: the row reads {after:?}, not Corrupted"));
+            }
         }
         assert!(fails.is_empty(), "condition 4(b) failed:\n{}", fails.join("\n"));
     }
 
-    /// Condition 4(c), the sentinel: a server slower than N in total, but silent for no more than N/4
-    /// at a time, completes: nine chunks, eight gaps, 2N. The slack below N is for a loaded runner: CI's
+    /// Condition 4(c), the sentinel: a server slower than G in total, but silent for no more than G/4
+    /// at a time, completes: nine chunks, eight gaps, 2G. The slack below G is for a loaded runner: CI's
     /// macOS and Windows jobs run these tests too.
     #[tokio::test]
     async fn a_slow_server_that_never_goes_silent_completes() {
         let dir = tempfile::tempdir().unwrap();
         let body: Vec<u8> = (0..9000u32).map(|i| i as u8).collect();
-        let s = stub(Reply::Slow { body: body.clone(), chunk: 1000, delay: N / 4 }).await;
+        let s = stub(Reply::Slow { body: body.clone(), chunk: 1000, delay: G / 4 }).await;
         let engine = stalling_engine(dir.path(), &s);
-        tokio::time::timeout(N * 2 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
+        tokio::time::timeout(G * 2 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
             .await
             .expect("still running at its length + 2 s")
-            .expect("a server that sent a chunk every N/4 was cut off");
+            .expect("a server that sent a chunk every G/4 was cut off");
         assert_eq!(bytes(&final_path(dir.path())), body, "the final path does not hold the bytes");
     }
 
-    /// Condition 5(a): a cancel during a stall before the headers is answered when N fires, as the
+    /// #310 item 5(b): no total. A start past G, then a body never silent for G, together longer than
+    /// H: LATE, then 28 chunks G/4 apart, about 10 s. A total of H anywhere, on the request or around the
+    /// download, ends it.
+    #[tokio::test]
+    async fn a_slow_start_and_a_slow_body_run_past_h() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..28_000u32).map(|i| (i * 3) as u8).collect();
+        let s = stub(Reply::After(LATE, Box::new(Reply::Slow { body: body.clone(), chunk: 1000, delay: G / 4 }))).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let called = tokio::time::Instant::now();
+        tokio::time::timeout(LATE + G / 4 * 28 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
+            .await
+            .expect("still running at its length + 2 s")
+            .expect("a download that ran past H was cut off");
+        assert!(called.elapsed() > H, "the download took {:?}, so it never ran past H", called.elapsed());
+        assert_eq!(bytes(&final_path(dir.path())), body, "the final path does not hold the bytes");
+    }
+
+    /// #310 item 6: a connection that does not open fails within C, and says so. The stub accepts TCP
+    /// behind an `https://` URL and never writes, so the TLS handshake waits for a ServerHello.
+    #[tokio::test]
+    async fn a_connection_that_never_opens_fails_within_c() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::Silent).await;
+        let engine = stalling_engine_at(dir.path(), &s.base.replacen("http://", "https://", 1));
+        let called = tokio::time::Instant::now();
+        let e = tokio::time::timeout(H + Duration::from_secs(2), engine.download_model(ROW, None))
+            .await
+            .expect("still running at H + 2 s")
+            .expect_err("a connection that never opened was taken for a download")
+            .to_string();
+        let took = called.elapsed();
+        assert!(s.accepted.load(Ordering::SeqCst) >= 1, "the stub accepted no connection, so nothing waited on a handshake");
+        assert!((C..C + Duration::from_secs(1)).contains(&took), "it failed after {took:?}, not within [C, C + 1 s)");
+        assert!(e.contains("client error (Connect)") && e.contains("timed out"), "the error is not a connection that timed out: {e}");
+    }
+
+    /// #310 item 10, #298 condition 1 on the body-error branch: a connection closed mid-body says why.
+    #[tokio::test]
+    async fn a_connection_closed_mid_body_names_its_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::CloseMidBody { sent: vec![1u8; 1000], claimed: 1_000_000 }).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let e = tokio::time::timeout(G + Duration::from_secs(2), engine.download_model(ROW, None))
+            .await
+            .expect("still running at G + 2 s")
+            .expect_err("a body cut short was taken for a download")
+            .to_string();
+        println!("{e}");
+        assert!(e.starts_with("Failed to read chunk: ") && e.contains("end of file before message length reached"), "the error does not say the body was cut short: {e}");
+    }
+
+    /// Condition 5(a): a cancel during a stall before the headers is answered when H fires, as the
     /// timeout, and the flag it left does not cancel the next download of that name.
     #[tokio::test]
     async fn a_cancel_before_the_headers_is_answered_by_the_timeout() {
@@ -1143,34 +1399,60 @@ mod a_failed_download_says_why {
         let first = tokio::spawn({ let (e, b) = (engine.clone(), body.clone()); async move { download_body(&e, ROW, &b, None).await } });
         let asked = tokio::time::Instant::now();
         while s.requests.lock().unwrap().is_empty() {
-            assert!(asked.elapsed() < N, "the stub was not asked within N, so there is no stall to cancel");
+            assert!(asked.elapsed() < G, "the stub was not asked within G, so there is no stall to cancel");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         engine.cancel_download(ROW).await.expect("the download is in flight");
-        let e = tokio::time::timeout(N + Duration::from_secs(2), first).await.expect("still running at N + 2 s").unwrap().expect_err("the stall was taken for a download").to_string();
+        let e = tokio::time::timeout(H + Duration::from_secs(2), first).await.expect("still running at H + 2 s").unwrap().expect_err("the stall was taken for a download").to_string();
         assert!(e.contains("timed out") && e != "Download cancelled by user", "the stall ended as {e}, not as its timeout");
         download_body(&engine, ROW, &body, None).await.expect("the next download of the same name did not complete");
         assert_eq!(bytes(&final_path(dir.path())), body);
     }
 
-    /// Condition 5(b): a cancel while the body has stalled is answered when N fires, as the cancel.
+    /// Condition 5(b): a cancel while the body has stalled is answered when G fires, as the cancel.
     #[tokio::test]
     async fn a_cancel_mid_body_is_answered_as_the_cancel() {
         let dir = tempfile::tempdir().unwrap();
         let s = stub(Reply::GoesSilent { sent: vec![1u8; 1000], claimed: 1_000_000 }).await;
         let engine = stalling_engine(dir.path(), &s);
         let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
-        let partial = dir.path().join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(ROW).unwrap().filename));
+        let partial = partial_of_row(dir.path());
         // The reply's fixed length: the engine writes a chunk only after its flag check, so once all 1000
         // bytes are in the file the loop waits on the next frame.
         let asked = tokio::time::Instant::now();
         while std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) < 1000 {
-            assert!(asked.elapsed() < N, "the temporary file did not hold the 1000 bytes sent within N, so there is no stall mid-body to cancel");
+            assert!(asked.elapsed() < G, "the temporary file did not hold the 1000 bytes sent within G, so there is no stall mid-body to cancel");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         engine.cancel_download(ROW).await.expect("the download is in flight");
-        let e = tokio::time::timeout(N + Duration::from_secs(2), running).await.expect("still running at N + 2 s").unwrap().expect_err("the stall was taken for a download");
+        let e = tokio::time::timeout(G + Duration::from_secs(2), running).await.expect("still running at G + 2 s").unwrap().expect_err("the stall was taken for a download");
         assert_eq!(e.to_string(), "Download cancelled by user");
         assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
+    }
+
+    /// #310 item 11: a cancel that lands while the body waits, where the wait then ends in an error
+    /// rather than a timeout, is answered as the cancel. The reply closes G/2 after its bytes, and the
+    /// stub records the instant: the download must end at the close, not at the cancel and not at G.
+    #[tokio::test]
+    async fn a_cancel_then_a_close_is_answered_as_the_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::CloseAfter { sent: vec![1u8; 1000], claimed: 1_000_000, wait: G / 2 }).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let running = tokio::spawn({ let e = engine.clone(); async move { let r = e.download_model(ROW, None).await; (r, tokio::time::Instant::now()) } });
+        let partial = partial_of_row(dir.path());
+        // On the file, never on the stub's `sent`: that is bumped before the engine has read the bytes, so
+        // a cancel on it could land before the loop takes the chunk, whose own check would then answer.
+        let asked = tokio::time::Instant::now();
+        while std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) < 1000 {
+            assert!(asked.elapsed() < G / 2, "the temporary file did not hold the 1000 bytes sent within G/2, so the close may come first");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        engine.cancel_download(ROW).await.expect("the download is in flight");
+        let cancelled = tokio::time::Instant::now();
+        let (r, ended) = tokio::time::timeout(G + Duration::from_secs(2), running).await.expect("still running at G + 2 s").unwrap();
+        let closed = s.closed.lock().unwrap().expect("the reply never closed");
+        assert!(cancelled < closed, "the cancel came {:?} after the close, so the close was not what it waited on", cancelled - closed);
+        assert!(closed <= ended && ended < closed + G / 4, "the download ended {:?} after the close, not at it", ended.saturating_duration_since(closed));
+        assert_eq!(r.expect_err("a body cut short was taken for a download").to_string(), "Download cancelled by user");
     }
 }
