@@ -96,7 +96,8 @@ PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""; S
 cleanup() {
   # A second TERM or INT during the teardown would end the shell before the recordings are dropped.
   trap '' INT TERM
-  [ -n "$SESSION" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
+  # Bounded, since INT and TERM no longer end a hung teardown.
+  [ -n "$SESSION" ] && curl -s -m 10 -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
   [ -n "$DRIVER_PID" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null
   sleep 1
   [ -n "$DRIVER_PID" ] && kill -KILL -"$DRIVER_PID" 2>/dev/null

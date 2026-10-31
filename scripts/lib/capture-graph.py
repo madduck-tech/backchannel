@@ -8,11 +8,14 @@ samples the graph every 250 ms and records, for each sample:
   recorder stands for every capture that follows the default.
 - **the application's capture links:** every link into a `cpal-pulseaudio-<pid>` node, by where it
   comes from.
-- **`default.configured.audio.source`, `default.audio.source` and `default.audio.sink`.**
+- **`default.configured.audio.source`, `default.audio.source` and `default.audio.sink`,** and
+  `configured_present`: whether a node of the configured source's name is in the graph. When it is not,
+  WirePlumber falls back through its stack, which is the case a stacked harness name took over.
 - **foreign captures:** `Stream/Input/Audio` nodes that are neither the recorder's nor the pass's.
   With `--stop`, the first one stops the pass by sending TERM to its process group, so a gate never
   runs beside someone else's capture. A node whose pid is not on this host is `ended` for at most
-  `ENDED_GRACE` seconds, then foreign: a node outlives its process for a moment, and on 2026-10-31 the
+  `ENDED_GRACE` seconds, then foreign, counted per object (its id, `object.serial` and pid, since PipeWire
+  reuses ids): a node outlives its process for a moment, and on 2026-10-31 the
   harness's own level probe, sampled as its `timeout` ended it, stopped entries 28–29 that way. Past the
   grace it is foreign, because a sandboxed browser reports a pid from its own namespace, which is not on
   the host either, for as long as it records.
@@ -136,6 +139,8 @@ def sample(recorder, pass_pid, pattern, since=0.0, ended_seen=None):
     now = time.monotonic()
     ended_seen = {} if ended_seen is None else ended_seen
     rec = {'t': round(now, 3), **defaults(objs), 'recorder_from': [], 'app_links': [], 'pass_links': [], 'foreign': [], 'ended': []}
+    names = {tg.props(o).get('node.name') for o in objs if str(o.get('type', '')).endswith('Node')}
+    rec['configured_present'] = rec.get('default.configured.audio.source') in names
     pgids = pass_pgids(pattern, since)
     for node in capture_nodes(objs):
         who = tg.attribute(by_id, node.get('id'), pass_pid)
@@ -148,7 +153,7 @@ def sample(recorder, pass_pid, pattern, since=0.0, ended_seen=None):
             rec['app_links'] += [{'into': name, 'from': f} for f in into]
         elif ours(pid, recorder, pass_pid, pgids):
             rec['pass_links'] += [{'into': name, 'from': f} for f in into]
-        elif pid is not None and not os.path.exists(f'/proc/{pid}') and now - ended_seen.setdefault(node.get('id'), now) <= ENDED_GRACE:
+        elif pid is not None and not os.path.exists(f'/proc/{pid}') and now - ended_seen.setdefault((node.get('id'), tg.props(node).get('object.serial'), pid), now) <= ENDED_GRACE:
             rec['ended'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
         else:
             rec['foreign'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
@@ -226,6 +231,10 @@ def cmd_summary(path):
     print(f"  application capture links: {app or '-'}")
     harness = [r for r in samples if any('backchannel_harness' in (x or '') for x in r['recorder_from'])]
     print(f"  recorder linked from a harness node in {len(harness)} of {len(samples)} samples")
+    present = [r for r in samples if r.get('configured_present')]
+    print(f"  the configured default source was in the graph in {len(present)} of {len(samples)} samples")
+    probes = sorted({(l['into'], l['from']) for r in samples for l in r.get('pass_links', [])})
+    print(f"  the pass's own capture links: {probes or '-'}")
 
 
 HARNESS = 'backchannel_harness'

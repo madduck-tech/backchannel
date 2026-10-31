@@ -99,16 +99,35 @@ if (r.status !== 0 || r.stdout.trim() !== '[222]') failures.push(`18 a stale pid
 const live = spawnSync('bash', ['-c', 'sleep 30 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim();
 const passRoot = spawnSync('bash', ['-c', 'sleep 30 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim();
 const dead = String(spawnSync('true').pid);
-const input = (id, pid) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': `cap-${id}`, 'media.class': 'Stream/Input/Audio', 'application.process.id': pid } } });
+const input = (id, pid, serial) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': `cap-${id}`, 'media.class': 'Stream/Input/Audio', 'application.process.id': pid, ...(serial ? { 'object.serial': serial } : {}) } } });
 fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([meta, input(50, dead), input(51, live)])}\nX\n`, { mode: 0o755 });
 r = py(`rec = cg.sample(1, ${passRoot}, None); print(json.dumps([[x['pid'] for x in rec['ended']], [x['pid'] for x in rec['foreign']]]))`);
-// ... for a moment: past the grace, a pid that is not on the host is foreign, as a sandboxed browser's is.
-const late = py(`rec = cg.sample(1, ${passRoot}, None, 0.0, {50: time.monotonic() - 5}); print(json.dumps([[x['pid'] for x in rec['ended']], [x['pid'] for x in rec['foreign']]]))`);
+// ... for a moment: 1.5 s on, past the grace, a pid that is not on the host is foreign, as a sandboxed
+// browser's is.
+const late = py(`rec = cg.sample(1, ${passRoot}, None, 0.0, {(50, None, ${dead}): time.monotonic() - 1.5}); print(json.dumps([[x['pid'] for x in rec['ended']], [x['pid'] for x in rec['foreign']]]))`);
 const [lateEnded, lateForeign] = late.status === 0 ? JSON.parse(late.stdout) : [null, []];
 if (late.status !== 0 || lateEnded.length || JSON.stringify([...lateForeign].sort()) !== JSON.stringify([Number(dead), Number(live)].sort())) {
   failures.push(`19b a pid not on the host stayed ended past the grace: exit ${late.status}, [ended, foreign] = ${late.stdout.trim()} ${late.stderr}`);
 }
 if (r.status !== 0 || JSON.stringify(JSON.parse(r.stdout || 'null')) !== JSON.stringify([[Number(dead)], [Number(live)]])) failures.push(`19 an exited capture is not told from a live foreign one: exit ${r.status}, [ended, foreign] = ${r.stdout.trim()} (dead ${dead}, live ${live}) ${r.stderr}`);
+// The grace is the object's, not the id's: PipeWire reuses ids, and a new object under an old id has just
+// appeared.
+fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([meta, input(50, dead, 901)])}\nX\n`, { mode: 0o755 });
+r = py(`rec = cg.sample(1, ${passRoot}, None, 0.0, {(50, None, ${dead}): time.monotonic() - 5}); print(json.dumps([len(rec['ended']), len(rec['foreign'])]))`);
+if (r.status !== 0 || r.stdout.trim() !== '[1, 0]') failures.push(`19c a new object under a reused id inherited an old one's grace: exit ${r.status}, [ended, foreign] = ${r.stdout.trim()} ${r.stderr}`);
+
+// The pass's own capture is sampled with where it is linked from, and whether the configured default
+// source is in the graph is recorded.
+const pmeta = (configured) => ({ ...meta, metadata: [...meta.metadata, { subject: 0, key: 'default.configured.audio.source', type: 'Spa:String:JSON', value: { name: configured } }] });
+const probe = [node(41, MIC), input(52, passRoot), { id: 600, type: 'PipeWire:Interface:Link', info: { 'output-node-id': 41, 'input-node-id': 52, state: 'active' } }];
+fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([pmeta('bluez_input.headset'), ...probe])}\nX\n`, { mode: 0o755 });
+r = py(`rec = cg.sample(1, ${passRoot}, None); print(json.dumps([rec['pass_links'], rec['configured_present']]))`);
+const [passLinks, absentPresent] = r.status === 0 ? JSON.parse(r.stdout) : [[], null];
+if (r.status !== 0 || JSON.stringify(passLinks) !== JSON.stringify([{ into: 'cap-52', from: MIC }])) failures.push(`23 the pass's own capture was not sampled with its link: exit ${r.status}, ${r.stdout.trim()} ${r.stderr}`);
+if (absentPresent !== false) failures.push(`22 an absent configured source was not recorded as absent: ${r.stdout.trim()}`);
+fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([pmeta(MIC), ...probe])}\nX\n`, { mode: 0o755 });
+r = py(`rec = cg.sample(1, ${passRoot}, None); print(json.dumps(rec['configured_present']))`);
+if (r.stdout.trim() !== 'true') failures.push(`22b a present configured source was not recorded as present: exit ${r.status}, ${r.stdout.trim()} ${r.stderr}`);
 for (const pid of [live, passRoot]) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* gone */ } }
 
 fs.rmSync(root, { recursive: true, force: true });

@@ -22,6 +22,19 @@ say() { printf 'capture-watch: %s\n' "$*" | tee -a "$OUT/watch.log"; }
 BEFORE=$(python3 -I "$GRAPH" inputs) || { say "the audio graph could not be read, so nothing shows no other capture is in it"; exit 3; }
 [ -z "$BEFORE" ] || { say "a capture is already in the graph, so this entry would run beside it: $BEFORE"; exit 3; }
 
+# Stopped with the watch, however it ends: a recorder left behind would hold the person's default input
+# open with nothing to end it, and an entry left running would run unwatched.
+REC=""; SAMPLER=""; PASS=""; TORN=""
+teardown() {
+  [ -n "$TORN" ] && return
+  TORN=1
+  [ -n "$PASS" ] && kill -TERM -"$PASS" 2>/dev/null
+  [ -n "$SAMPLER" ] && kill -TERM "$SAMPLER" 2>/dev/null
+  [ -n "$REC" ] && kill -TERM "$REC" 2>/dev/null
+}
+trap teardown EXIT
+trap 'say "stopped by a signal: the entry, the sampler and the recorder are stopped with it"; teardown; exit 143' INT TERM
+
 pw-record --volume=0 - > /dev/null 2> "$OUT/recorder.err" &
 REC=$!
 # Linked before the entry starts, so every sample can require the link: a recorder still unlinked when

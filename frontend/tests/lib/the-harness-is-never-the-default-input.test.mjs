@@ -111,11 +111,11 @@ check('3c the record pass names it', rec.writes.length === 1 && /"preferred_mic_
   `the record seed is ${JSON.stringify(rec.writes.map((w) => w.text))}`);
 check('3d with the suffix', rec.assigns.length === 1 && rec.assigns[0] === 'MIC_SEED="$HARNESS_DESC (input)"', `MIC_SEED is assigned as ${JSON.stringify(rec.assigns)}`);
 // The program's first line is its own statement; nothing may precede `python3` on it, `&&` included, and
-// the code line before it may not carry it on with `&&`, `||`, `|` or a backslash.
+// the code line before it may not carry it on with `&&`, `||`, `|`, a backslash, or open a `{` block.
 const recLines = sources.get('stage2-record-check.sh').split('\n');
 const recOpen = recLines[(rec.writes[0]?.n ?? 0) - 2];
 const recBefore = code(recLines.slice(0, Math.max(0, (rec.writes[0]?.n ?? 0) - 2)).join('\n')).filter(({ line }) => line.trim()).pop()?.line ?? '';
-check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !/(&&|\|\||\||\\)\s*$/.test(recBefore),
+check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !/(&&|\|\||\||\\|\{)\s*$/.test(recBefore),
   `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), opens with '${recOpen}', and follows '${recBefore}'`);
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that

@@ -112,6 +112,17 @@ check('5 stops the entry when a capture from another pid namespace stays', elsew
   `pid ${elsewhere}: exit ${r.status} after ${r.secs}s, went on ${fs.existsSync(mark(5))}, ${ended} samples read it as ended, stopped ${r.rows.some((x) => x.stopped)}: ${r.log}${r.text}`);
 clear();
 
+// 7. A watch that is itself stopped takes the entry, the sampler and the recorder with it.
+const out7 = path.join(root, 'out-stopped');
+const r7 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out7)} -- 'sleep 20; touch ${mark(7)}' & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"`],
+  { env, encoding: 'utf8', timeout: 30_000, cwd: root });
+const passGroup = Number(fs.existsSync(path.join(out7, 'pass.pgid')) ? fs.readFileSync(path.join(out7, 'pass.pgid'), 'utf8').trim() : 0);
+spawnSync('sleep', ['1']);
+const groupAlive = passGroup > 0 && spawnSync('bash', ['-c', `kill -0 -${passGroup} 2>/dev/null`]).status === 0;
+const recorders = fs.readdirSync(live).filter((f) => f.startsWith('rec-') && fs.existsSync(`/proc/${f.slice(4)}`));
+check('7 a stopped watch stops what it started', /rc=143/.test(r7.stdout) && passGroup > 0 && !groupAlive && recorders.length === 0 && !fs.existsSync(mark(7)),
+  `${r7.stdout.trim()}, pass group ${passGroup} alive ${groupAlive}, recorders left ${JSON.stringify(recorders)}, went on ${fs.existsSync(mark(7))}: ${r7.stderr}`);
+
 // 6. The runner watches the entries that bring the harness up, found by what they run.
 const p = spawnSync('python3', ['-I', path.join(repo, 'scripts', 'stage2-watched.py'), root, '--plan'], { encoding: 'utf8' });
 const steps = p.stdout.trim().split('\n').map((l) => l.split('\t'));
@@ -126,10 +137,22 @@ check('6a the plan watches resumes, the core passes and the record pass, and not
 check('6b and joins the record pass to its up', steps.some((s) => /^\d+-\d+$/.test(s[0])) && !steps.some((s) => /stage2-record-check\.sh/.test(what(s)) && !/^\d+-\d+$/.test(s[0])),
   `steps: ${JSON.stringify(steps.map((s) => s[0]))}`);
 
+// ... and runs the record pass, joined to its up, under a trap holding the record entry's own tail, so a
+// TERM from the watch still stops its application and takes the harness down.
+const joined = spawnSync('python3', ['-I', '-c', `import importlib.util, json
+s = importlib.util.spec_from_file_location('w', ${JSON.stringify(path.join(repo, 'scripts', 'stage2-watched.py'))}); w = importlib.util.module_from_spec(s); s.loader.exec_module(w)
+cmds = json.load(open(${JSON.stringify(path.join(repo, 'gopnik.json'))}))['verification']['stage2']
+print(json.dumps([[l, c] for l, c, *_ in w.plan(cmds) if '-' in l]))`], { encoding: 'utf8' });
+const [jl, jc] = joined.status === 0 ? (JSON.parse(joined.stdout)[0] ?? []) : [];
+const lines = (jc ?? '').split('\n');
+check('6c the record pass runs under a trap holding its own tail', lines.length === 3 && /harness_guard_after_up/.test(lines[0])
+    && /^trap 'APID=\$\(cat "\$A2\/pid" 2>\/dev\/null\);.*scripts\/audio-harness\.sh down' EXIT$/.test(lines[1]) && /stage2-record-check\.sh/.test(lines[2]),
+  `exit ${joined.status}, ${jl}: ${JSON.stringify(lines)} ${joined.stderr}`);
+
 for (const pid of strays) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
 for (const f of fs.readdirSync(live)) {
   if (f.startsWith('rec-')) { try { process.kill(Number(f.slice(4)), 'SIGTERM'); } catch { /* gone */ } }
 }
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; and the runner watches resumes, the four core passes and the record pass joined to its up');
+console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');

@@ -170,6 +170,25 @@ fs.mkdirSync(path.join(outside, 'rec'));
 r = run(graph(), `harness_guard_drop_recordings ${q(outside)}`);
 if (r.status === 0 || !fs.existsSync(path.join(outside, 'rec'))) failures.push(`12b removed recordings outside a gate profile: exit ${r.status}`);
 fs.rmSync(outside, { recursive: true, force: true });
+// 17. The record pass's own exit path, run as the pass runs it, under `set -euo pipefail`: a failure after
+// Start stops the application's group and drops the recordings, whether the group is still there or has
+// already gone (round 3: a KILL that found nothing ended the trap there, before the drop).
+const REC_SRC = fs.readFileSync(path.join(repo, 'scripts', 'stage2-record-check.sh'), 'utf8');
+const onExit = REC_SRC.slice(REC_SRC.indexOf('on_exit() {'), REC_SRC.indexOf('\n}\n', REC_SRC.indexOf('on_exit() {')) + 3);
+for (const [id, alive] of [['17a', false], ['17b', true]]) {
+  const prof = path.join(root, `rec-${id}`);
+  fs.mkdirSync(path.join(prof, 'rec'), { recursive: true });
+  const group = alive ? spawnSync('bash', ['-c', 'setsid sleep 30 >/dev/null 2>&1 < /dev/null & echo $!'], { encoding: 'utf8' }).stdout.trim() : String(spawnSync('true').pid);
+  fs.writeFileSync(path.join(prof, 'pid'), group);
+  const r17 = spawnSync('bash', ['-c', `set -euo pipefail\n. ${q(GUARD)}\nPIDFILE=${q(path.join(prof, 'pid'))}; PROFILE=${q(prof)}; STARTED=0\n${onExit}\ntrap 'on_exit $?' EXIT\nSTARTED=1\nexit 1`],
+    { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 20_000 });
+  const groupLeft = spawnSync('bash', ['-c', `kill -0 -${group} 2>/dev/null`]).status === 0;
+  if (r17.status !== 1 || fs.existsSync(path.join(prof, 'rec')) || groupLeft) {
+    failures.push(`${id} the record pass's exit path with the application ${alive ? 'running' : 'gone'}: exit ${r17.status}, recordings left ${fs.existsSync(path.join(prof, 'rec'))}, group left ${groupLeft}: ${r17.stderr}`);
+  }
+  if (groupLeft) { try { process.kill(-Number(group), 'SIGKILL'); } catch { /* gone */ } }
+}
+
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - harness guard: accepts a run that kept the default and opened the harness by name, split dumps included; refuses a moved or unreadable default, a changed preference, a second or foreign Backchannel source, a start whose log lacks the harness stream, its creation or its Using line, names another microphone or fails on it, and a start with no link from the harness source into a capture under the root pid; removes the recordings from every save folder of a gate profile, and refuses any other path');
+console.log('ok - harness guard: accepts a run that kept the default and opened the harness by name, split dumps included; refuses a moved or unreadable default, a changed preference, a second or foreign Backchannel source, a start whose log lacks the harness stream, its creation or its Using line, names another microphone or fails on it, and a start with no link from the harness source into a capture under the root pid; removes the recordings from every save folder of a gate profile, and refuses any other path; and the exit path of the record pass stops the application and drops them under set -e, with the application running or gone');

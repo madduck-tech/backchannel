@@ -50,8 +50,15 @@ STARTED=0
 on_exit() {
   local rc=$1
   trap '' INT TERM
+  # Not under `-e`: a group TERM already emptied makes the KILL fail, and errexit would end the trap there,
+  # before the drop (round 3, measured with a stand-in for the application).
+  set +e
   if [ "$rc" -ne 0 ] && [ "$STARTED" = 1 ]; then
-    [ -s "$PIDFILE" ] && { kill -TERM -"$(cat "$PIDFILE")" 2>/dev/null; sleep 2; kill -KILL -"$(cat "$PIDFILE")" 2>/dev/null; }
+    if [ -s "$PIDFILE" ]; then
+      kill -TERM -"$(cat "$PIDFILE")" 2>/dev/null
+      sleep 2
+      kill -KILL -"$(cat "$PIDFILE")" 2>/dev/null
+    fi
     harness_guard_drop_recordings "$PROFILE"
   fi
   exit "$rc"
