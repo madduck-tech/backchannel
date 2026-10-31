@@ -261,7 +261,9 @@ mod tests {
     }
 
     /// The start as the app makes it, over a store on disk: a mock app with the store plugin, and
-    /// the preferences file at an absolute path in a temporary directory, never the app-data one.
+    /// the preferences file at an absolute path in a temporary directory, never the app-data one. Not on
+    /// Windows, where tauri's MockRuntime test binary does not start (`Cargo.toml`).
+    #[cfg(not(windows))]
     mod from_the_store {
         use super::*;
         use crate::audio::recording_preferences::{save_recording_preferences_to, RecordingPreferences};

@@ -206,8 +206,12 @@ tempfile = "3.3.0"
 # Parses the `-c developer_instructions=` value the Codex call builds, so its TOML quoting is held to
 # a real TOML reader (#212). Already in the build graph through tauri; MIT or Apache-2.0.
 toml = "0.8"
+
 # A mock app with the store plugin, so a recording start's read of the stored devices is tested over a
-# real store file (#242). The same crate the app builds with, plus its `test` feature (MockRuntime).
+# real store file (#242). The same crate the app builds with, plus its `test` feature (MockRuntime). Not
+# on Windows: there the test binary built with it did not start (STATUS_ENTRYPOINT_NOT_FOUND, CI run
+# 41208960212), so those tests are compiled out there.
+[target.'cfg(not(windows))'.dev-dependencies]
 tauri = { version = "2.6.2", features = ["test"] }
 
 # The cookie tests call the vendored client's lookup directly (#243, ADR 0034). The version is cpal's,
