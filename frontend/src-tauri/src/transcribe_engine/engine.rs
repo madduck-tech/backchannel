@@ -109,10 +109,12 @@ pub struct TranscribeEngine {
     stale: Arc<RwLock<bool>>,
     /// Where catalogue files are fetched from: `TRANSCRIBE_MODEL_BASE_URL`, or a test's local server.
     base_url: String,
-    /// A test's client, which reads no proxy. Production builds one per download, as before #195, so
-    /// the proxy settings are read each time, and a client that cannot be built fails that download
-    /// with an error rather than the engine's construction under `TRANSCRIBE_ENGINE`'s lock.
-    client: Option<reqwest::Client>,
+    /// How long a download waits for its response, and then for each next part of its body, before it
+    /// fails (#298). [`DOWNLOAD_READ_TIMEOUT`] in production; a test of a stall sets less.
+    read_timeout: std::time::Duration,
+    /// Whether a download's client reads the system proxy: production does, for each download, as
+    /// before #195; a test's local server is reached directly.
+    system_proxy: bool,
     #[cfg(test)]
     test_hooks: TestHooks,
 }
@@ -138,6 +140,35 @@ pub(crate) struct TestHooks {
 /// it only once it is whole (#195). No catalogue filename starts with this, and the startup sweep
 /// removes what a crash left.
 pub const PARTIAL_PREFIX: &str = ".partial-";
+
+/// A transcription download fails once it has waited this long for its response, or for the next part
+/// of its body (#298). Not a bound on the whole: the largest rows are 5 GB, and since #195 a failed
+/// download starts again from zero. Its basis is about 2 s to the headers, the one observation the
+/// gate's log holds, and the 30 s the summary download already allows a chunk.
+pub const DOWNLOAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The one place a download's HTTP client is built (#298): `read_timeout` bounds the wait for the
+/// response, across redirects, and then each gap between parts of the body, and nothing bounds the
+/// whole. Built for each download, so a proxy change is read at the next one, and a client that cannot
+/// be built fails that download rather than the engine's construction.
+pub(crate) fn download_client(read_timeout: std::time::Duration, system_proxy: bool) -> reqwest::Result<reqwest::Client> {
+    let builder = reqwest::Client::builder().read_timeout(read_timeout);
+    if system_proxy { builder } else { builder.no_proxy() }.build()
+}
+
+/// An error and every cause under it, `a: b: c`. reqwest prints a request error as "error sending
+/// request for url (…)" and keeps why it failed (refused, DNS, TLS, timed out) only in `source()`; the
+/// commands send `to_string()`, which prints no anyhow context either (#298).
+fn with_causes(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        text.push_str(": ");
+        text.push_str(&c.to_string());
+        cause = c.source();
+    }
+    text
+}
 
 /// The URL of a catalogue file under a base URL, at the commit it is pinned to (#179). `main` would
 /// serve whatever was uploaded last, which for 14 rows is no longer the file the catalogue describes.
@@ -206,7 +237,8 @@ impl TranscribeEngine {
             load_lock: tokio::sync::Mutex::new(()),
             stale: Arc::new(RwLock::new(false)),
             base_url: TRANSCRIBE_MODEL_BASE_URL.to_string(),
-            client: None,
+            read_timeout: DOWNLOAD_READ_TIMEOUT,
+            system_proxy: true,
             #[cfg(test)]
             test_hooks: TestHooks::default(),
         })
@@ -217,8 +249,20 @@ impl TranscribeEngine {
     #[cfg(test)]
     pub(crate) fn with_base_url(mut self, base_url: &str) -> Self {
         self.base_url = base_url.to_string();
-        self.client = Some(reqwest::Client::builder().no_proxy().build().expect("a client"));
+        self.system_proxy = false;
         self
+    }
+
+    /// The engine with a shorter [`DOWNLOAD_READ_TIMEOUT`], for a test whose case is a stall.
+    #[cfg(test)]
+    pub(crate) fn with_read_timeout(mut self, read_timeout: std::time::Duration) -> Self {
+        self.read_timeout = read_timeout;
+        self
+    }
+
+    /// The client a download of this engine's is built with.
+    pub(in crate::transcribe_engine) fn client(&self) -> reqwest::Result<reqwest::Client> {
+        download_client(self.read_timeout, self.system_proxy)
     }
 
     #[cfg(test)]
@@ -517,12 +561,19 @@ impl TranscribeEngine {
             }
         }
 
+        let url = file_url(&self.base_url, repo, pin.revision, filename);
+        // `download_inner` writes its "Downloading model file" line first, so this is that line's time.
+        let started = std::time::Instant::now();
         let result = self
             .download_inner(model_name, repo, filename, pin, progress_callback)
             .await;
 
         self.active_downloads.write().await.remove(model_name);
-        if result.is_err() {
+        if let Err(e) = &result {
+            // One line for every failure, the diarizer's too: until #298 a failed download and a hung
+            // one left the same log. It never reads "Downloading model file", which the onboarding pass
+            // takes for a download starting.
+            warn!("Download of {} failed after {:.1} s, from {}: {}", model_name, started.elapsed().as_secs_f64(), url, e);
             // Only the temporary file: the one already at the final path, if any, is untouched by a
             // download that failed or was cancelled (#195).
             let _ = fs::remove_file(self.partial_path(filename)).await;
@@ -638,18 +689,14 @@ impl TranscribeEngine {
         self.set_status(model_name, ModelStatus::Downloading { progress: 0 })
             .await;
 
-        let client = match &self.client {
-            Some(client) => client.clone(),
-            // `Client::new()` is this builder with an `expect`; the error is returned instead.
-            None => reqwest::Client::builder()
-                .build()
-                .map_err(|e| anyhow!("Failed to build the HTTP client: {}", e))?,
-        };
+        let client = self
+            .client()
+            .map_err(|e| anyhow!("Failed to build the HTTP client: {}", with_causes(&e)))?;
         let response = client
             .get(&url)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to start download: {}", e))?;
+            .map_err(|e| anyhow!("Failed to start download: {}", with_causes(&e)))?;
         if !response.status().is_success() {
             return Err(anyhow!("Download failed with status: {}", response.status()));
         }
@@ -677,7 +724,7 @@ impl TranscribeEngine {
                 return Err(anyhow!("Download cancelled by user"));
             }
 
-            let chunk = chunk.map_err(|e| anyhow!("Failed to read chunk: {}", e))?;
+            let chunk = chunk.map_err(|e| anyhow!("Failed to read chunk: {}", with_causes(&e)))?;
             file.write_all(&chunk).await?;
             hasher.update(&chunk);
             downloaded += chunk.len() as u64;
