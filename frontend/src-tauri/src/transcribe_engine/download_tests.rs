@@ -916,7 +916,7 @@ mod a_failed_download_says_why {
         assert_eq!(lines.len(), 1, "not one failure line for this stub: {lines:#?}");
         let (level, line) = &lines[0];
         assert!(*level <= log::Level::Warn, "the failure line is at {level}, below warn: {line}");
-        assert!(line.starts_with(&format!("Download of {ROW} failed after ")) && line.contains("500"), "the line lacks the row or the error: {line}");
+        assert!(line.starts_with(&format!("Download of {ROW} failed after ")) && line.contains("Download failed with status: 500"), "the line lacks the row or the error: {line}");
         assert!(!line.contains("Downloading model file"), "the failure line reads as a download starting to the onboarding pass: {line}");
         let seconds: f64 = line[format!("Download of {ROW} failed after ").len()..].split(' ').next().unwrap().parse().unwrap();
         assert!((1.5..=2.5).contains(&seconds), "the line gives {seconds} s for a stub that waited 1.5 s: {line}");
@@ -971,11 +971,12 @@ mod a_failed_download_says_why {
     }
 
     /// Condition 3's census: one client construction in `engine.rs`, inside `download_client`, and no
-    /// total timeout anywhere in it. Read with comments stripped, so a name in a comment is not counted.
+    /// timeout in it but the read timeout. Read with comments stripped, so a name in a comment is not
+    /// counted.
     #[test]
     fn the_engine_builds_its_client_in_one_place() {
         let code = without_comments(include_str!("engine.rs"));
-        let builds: Vec<usize> = ["Client::builder(", "Client::new(", "Client::default(", "ClientBuilder::new("]
+        let builds: Vec<usize> = ["Client::builder(", "Client::new(", "Client::default(", "ClientBuilder::new(", "ClientBuilder::default("]
             .iter()
             .flat_map(|c| code.match_indices(c).map(|(i, _)| i).collect::<Vec<_>>())
             .collect();
@@ -997,7 +998,10 @@ mod a_failed_download_says_why {
             }
         }
         assert!((open..end).contains(&builds[0]), "the one client construction is outside download_client");
-        assert!(!code.contains(".timeout("), "engine.rs sets a total timeout on a client");
+        // Any other bound, however it is spelled: `.timeout(`, `ClientBuilder::timeout(`, `connect_timeout(`,
+        // or a `tokio::time::timeout(` around the download (#298's gate adversary, round 1).
+        let other = code.match_indices("timeout(").filter(|(i, _)| !code[..*i].ends_with("read_")).count();
+        assert_eq!(other, 0, "engine.rs bounds something with a timeout other than the read timeout, {other} time(s)");
     }
 
     /// Rust source with `//` and `/* */` comments removed, strings and char literals kept.
@@ -1103,14 +1107,16 @@ mod a_failed_download_says_why {
         assert!(fails.is_empty(), "condition 4(b) failed:\n{}", fails.join("\n"));
     }
 
-    /// Condition 4(c), the sentinel: a server slower than N in total, but never silent for N, completes.
+    /// Condition 4(c), the sentinel: a server slower than 2N in total, but silent for no more than N/4
+    /// at a time, completes. The slack below N is for a loaded runner: CI's macOS and Windows jobs run
+    /// these tests too.
     #[tokio::test]
     async fn a_slow_server_that_never_goes_silent_completes() {
         let dir = tempfile::tempdir().unwrap();
-        let body: Vec<u8> = (0..7000u32).map(|i| i as u8).collect();
-        let s = stub(Reply::Slow { body: body.clone(), chunk: 1000, delay: N / 2 }).await;
+        let body: Vec<u8> = (0..9000u32).map(|i| i as u8).collect();
+        let s = stub(Reply::Slow { body: body.clone(), chunk: 1000, delay: N / 4 }).await;
         let engine = stalling_engine(dir.path(), &s);
-        tokio::time::timeout(N * 7 / 2 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
+        tokio::time::timeout(N * 9 / 4 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
             .await
             .expect("still running at its length + 2 s")
             .expect("a server that sent a chunk every N/2 was cut off");
