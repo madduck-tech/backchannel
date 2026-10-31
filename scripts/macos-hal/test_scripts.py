@@ -1,0 +1,63 @@
+"""What the sudo scripts may touch (#316): only Backchannel plug-ins and agents, and TCC only by id.
+
+They run with an administrator's password on the product owner's machine, so a mistake is
+machine-wide. These tests read and run them without sudo: the refusal must come before any sudo.
+"""
+import os
+import re
+import subprocess
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def text(name):
+    with open(os.path.join(HERE, name)) as f:
+        return f.read()
+
+
+class TheScripts(unittest.TestCase):
+
+    def test_install_refuses_a_bundle_that_is_not_backchannels_before_any_sudo(self):
+        # A fake sudo first on PATH records any call and fails, so even with the guard broken the
+        # test can never copy into /Library or restart coreaudiod.
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "BlackHole2ch.driver"))
+        fake = os.path.join(d, "bin")
+        os.makedirs(fake)
+        marker = os.path.join(d, "sudo-called")
+        with open(os.path.join(fake, "sudo"), "w") as f:
+            f.write(f"#!/bin/sh\necho \"$@\" >> {marker}\nexit 1\n")
+        os.chmod(os.path.join(fake, "sudo"), 0o755)
+        r = subprocess.run(["bash", os.path.join(HERE, "install.sh"), os.path.join(d, "BlackHole2ch.driver")],
+                           capture_output=True, text=True, env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("refusing to install BlackHole2ch.driver", r.stderr)
+        self.assertFalse(os.path.exists(marker), "sudo was called")
+
+    def test_every_removal_globs_only_backchannel(self):
+        for name in ("remove.sh", "recover.sh"):
+            for line in text(name).splitlines():
+                if "rm -rf" in line and "HAL" in line:
+                    self.assertRegex(line, r"HAL/Backchannel\*\.driver", (name, line))
+                if "bundles=(" in line:
+                    self.assertIn("Backchannel*.driver", line, (name, line))
+
+    def test_tcc_is_reset_only_by_bundle_id(self):
+        for name in ("install.sh", "remove.sh", "recover.sh"):
+            for line in text(name).splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                if "tccutil" in line:
+                    self.assertRegex(line, r'tccutil reset Microphone "\$BC_HELPER_BUNDLE_ID"', (name, line))
+
+    def test_agents_are_removed_only_by_the_backchannel_prefix(self):
+        for name in ("remove.sh", "recover.sh"):
+            for line in text(name).splitlines():
+                if "LaunchAgents/" in line and "for plist" in line:
+                    self.assertIn("LaunchAgents/tech.madduck.backchannel.", line, (name, line))
+
+
+if __name__ == "__main__":
+    unittest.main()
