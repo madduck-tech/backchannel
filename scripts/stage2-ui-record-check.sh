@@ -184,7 +184,10 @@ T=$(by_text "Recordings"); [ -n "$T" ] || die "no Recordings tab"
 click "$T" "the Recordings tab"
 await "[...document.querySelectorAll('[role=tab]')].some(t=>t.textContent.trim()==='Recordings'&&t.getAttribute('data-state')==='active')" \
       'the Recordings tab to become active'
-TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}'); [ -n "$TRIG" ] || die "no system-audio picker"
+# The picker renders only once `get_audio_devices` has settled (#296), so it is waited for, not sampled.
+await_present '#system-selection' 'the system-audio picker'
+TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}')
+[ -n "$TRIG" ] || die "the system-audio picker was there, and now Find Element finds none. The page now holds it: $(js '"return !!document.querySelector(\"#system-selection\")"'); Find Element answers $(wd_raw_find '#system-selection')"
 click "$TRIG" "the system-audio picker"
 await "document.querySelectorAll('[role=option]').length > 0" 'the dropdown to open'
 OPT=$(find_el "{\"using\":\"xpath\",\"value\":\"//*[@role=\\\"option\\\"][normalize-space()=\\\"$PICK\\\"]\"}")

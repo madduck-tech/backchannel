@@ -124,3 +124,64 @@ except Exception:
     v = None
 print(v if isinstance(v, str) else "(the page could not be asked why.)")'
 }
+
+# wd_raw_find <css-selector> — Find Element's whole answer for the selector, as the driver gave it. Not
+# `find_el`, which turns every miss into "" and so leaves a failure nothing to say (#296).
+wd_raw_find() {
+  local body
+  body=$(python3 -c 'import json,sys; print(json.dumps({"using": "css selector", "value": sys.argv[1]}))' "$1")
+  curl -s -m 20 -X POST "$BASE/element" -H 'Content-Type: application/json' -d "$body" | head -c 400
+}
+
+# wd_panel_state <css-selector> — what the active tab panel shows in place of the element: the element
+# itself, RecordingSettings' placeholder (the preferences are pending, `RecordingSettings.tsx:132-139`),
+# DeviceSelection's (the device list is pending, `DeviceSelection.tsx:103-113`), or a panel rendered
+# without it. Read from the DOM at the moment of asking, never inferred.
+wd_panel_state() {
+  local body
+  body=$(python3 -c 'import json,sys
+script = """return (function (sel) {
+  var p = Array.from(document.querySelectorAll("[role=tabpanel]")).find(function (t) { return t.getAttribute("data-state") === "active"; });
+  if (!p) return "no active tab panel";
+  if (p.querySelector(sel)) return "the element itself";
+  var a = p.querySelector(".animate-pulse");
+  if (a && a.parentElement && a.parentElement.classList.contains("p-4")) return "DeviceSelection’s placeholder: the device list is pending";
+  if (a) return "RecordingSettings’ placeholder: the preferences are pending";
+  return "the panel rendered without it";
+})(arguments[0]);"""
+print(json.dumps({"script": script, "args": [sys.argv[1]]}))' "$1")
+  curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" \
+    | python3 -c 'import json,sys
+try:
+    v = json.load(sys.stdin).get("value")
+except Exception:
+    v = None
+print(v if isinstance(v, str) else "(the page could not be asked: %r)" % (v,))'
+}
+
+# await_present <css-selector> <what> [seconds] — wait until the page holds an element matching the
+# selector, then return. It polls `!!document.querySelector(<selector>)`, which is false while a
+# placeholder renders in the element's place, so a lookup made the moment a tab opens no longer races
+# the render (#296: entry 13 looked for the system-audio picker once, and lost to its device list 3 of
+# 3 times on one artifact). It says how long it waited, and whether the element was absent at the first
+# check. On a timeout it dies with what the panel shows and Find Element's own answer.
+await_present() {
+  local sel="$1" what="$2" secs="${3:-30}" t0 first="" v body
+  t0=$(date +%s%3N)
+  body=$(python3 -c 'import json,sys; print(json.dumps({"script": "return !!document.querySelector(" + json.dumps(sys.argv[1]) + ")", "args": []}))' "$sel")
+  while :; do
+    v=$(curl -s -m 20 -X POST "$BASE/execute/sync" -H 'Content-Type: application/json' -d "$body" \
+      | python3 -c 'import json,sys
+try:
+    print(json.dumps(json.load(sys.stdin).get("value")))
+except Exception:
+    print("null")')
+    [ -z "$first" ] && first="$v"
+    [ "$v" = "true" ] && break
+    if [ $(( $(date +%s%3N) - t0 )) -ge $((secs * 1000)) ]; then
+      die "timed out after ${secs}s waiting for $what ($sel). The panel shows $(wd_panel_state "$sel"); Find Element answers $(wd_raw_find "$sel")"
+    fi
+    sleep 0.25
+  done
+  say "$what rendered after $(( $(date +%s%3N) - t0 )) ms; at the first check it was $([ "$first" = true ] && echo present || echo "absent ($first)")"
+}

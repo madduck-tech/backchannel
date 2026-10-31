@@ -241,8 +241,11 @@ printf '%s' "$TABS" | grep -q 'Recordings:active' \
 # (configure_linux_audio), so monitor-ness is warranted by that code rather than by anything
 # observed here -- and asserting the string "Monitor of" would be the display-string class
 # #9 and #10 are about.
+# The picker renders only once `get_audio_devices` has settled (`DeviceSelection.tsx:57-58`): looked up
+# the moment the tab reads active, it raced that list, and lost 3 of 3 times on one artifact (#296).
+await_present '#system-selection' 'the system-audio picker'
 TRIG=$(find_el '{"using":"css selector","value":"#system-selection"}')
-[ -n "$TRIG" ] || die "no #system-selection trigger behind the Recordings tab"
+[ -n "$TRIG" ] || die "the system-audio picker was there, and now Find Element finds none. The page now holds it: $(js '"return !!document.querySelector(\"#system-selection\")"'); Find Element answers $(wd_raw_find '#system-selection')"
 click "$TRIG" "the system-audio picker"
 await "document.querySelectorAll('[role=option]').length > 0" 'the dropdown to open'
 OPTIONS=$(js '"return [...document.querySelectorAll(\"[role=option]\")].map(o=>o.textContent.trim())"')

@@ -225,6 +225,14 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [ -z "$TRIG" ]; then
+  # What the panel shows now, read from the DOM (#296): the device list still pending is the hang the log
+  # check below looks for, and it shows even when an earlier listing at startup has returned, which the
+  # log check alone cannot tell apart.
+  PANEL=$(wd_panel_state '#system-selection')
+  say "the Recordings panel shows: $PANEL; Find Element answers $(wd_raw_find '#system-selection')"
+  case "$PANEL" in
+    DeviceSelection*) die "no system-audio picker after 60s, and the panel still shows DeviceSelection's placeholder: the device listing did not return, which is a hang rather than a missing control" ;;
+  esac
   L=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
   if [ -n "$L" ]; then
     say "the application's log ends with:"; tail -5 "$L" | sed 's/^/    /'
