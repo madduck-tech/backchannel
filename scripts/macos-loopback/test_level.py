@@ -70,6 +70,20 @@ class TheLevelSentinels(unittest.TestCase):
         self.assertEqual(code, 2, rep)
         self.assertTrue(any(r.startswith("floor") for r in rep["reasons"]), rep)
 
+    def test_a_loud_stream_does_not_leak_into_the_floor_before_it(self):
+        # A -100 dBFS floor before markers at full level must measure near -100, not near the
+        # stream: an FFT brick-wall filter over the whole recording measured it as -58.8 (#302).
+        x = np.concatenate([np.zeros(14 * 48000), self.clean * 3.0])
+        x = x + np.random.default_rng(3).standard_normal(x.size) * 1e-5
+        import level
+        xb = level.band(markers.read_audio(self._write("leak", x), 8000), 8000)
+        self.assertLess(level.dbfs(xb[3 * 8000:12 * 8000]), -95)
+
+    def _write(self, name, x):
+        path = os.path.join(self.tmp, f"{name}.wav")
+        markers.write_wav(path, x)
+        return path
+
     def test_l2d_a_floor_above_minus_45_is_a_noisy_room(self):
         code, rep = self.judge("noisy", -40, 0)
         self.assertEqual(code, 2, rep)

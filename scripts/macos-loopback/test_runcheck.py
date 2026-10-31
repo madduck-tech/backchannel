@@ -127,6 +127,15 @@ class TheVoidRules(unittest.TestCase):
              "void_before_capture": "no audioinput labelled 'No Such Device'"}
         self.assertEqual(runcheck.void_reasons(r), ["before capture: no audioinput labelled 'No Such Device'"])
 
+    def test_a_run_the_mac_slept_through_is_void(self):
+        r = with_(["power_events"], ["2026-10-31 12:22:04 +0300 Sleep  Entering Sleep state due to 'Idle Sleep'"])
+        self.assertEqual(len(runcheck.void_reasons(r)), 1)
+        self.assertIn("slept", runcheck.void_reasons(r)[0])
+
+    def test_an_independent_capture_of_zero_frames_is_void(self):
+        r = with_(["capture"], {"frames": 0, "gaps": 0, "gap_frames": 0})
+        self.assertEqual(runcheck.void_reasons(r), ["independent capture recorded nothing (0 frames)"])
+
     def test_a_connection_that_never_connected_is_void(self):
         reasons = runcheck.void_reasons(with_(["ice", "connectionState"], "failed"))
         self.assertEqual(reasons, ["connection 'failed', not connected"])
