@@ -3,6 +3,12 @@
 // and the shapes each of the runner's three ways of finding a file's processes misses alone; they run
 // here through `scripts/test-runner.mjs` with the bound shortened to S.
 //
+// Each run is sampled once, before any bound, to show its case's precondition was reached: a's sleep
+// running, h's helper gone. The sample waits for that rather than for a fixed time, since on a loaded
+// runner a fixture starts late (CI run 41150739546: h's helper was still alive at 2 s). It is taken at
+// SAMPLE_MS at the earliest and a second before S at the latest, and a case's signals, pauses and
+// terminal close are timed from it, so none can land before the state they are meant to interrupt.
+//
 // Why this exists beside the configuration test: the bound was observed once, by hand, for #268's
 // verdict. Without this, a later edit that drops one of the runner's kill steps leaves every test
 // green, and the first sign is a CI job held for hours again.
@@ -14,7 +20,7 @@
 // having checked nothing.
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +30,8 @@ assert.ok(fs.existsSync('/proc/self/stat'), 'this test reads /proc to find what 
 
 const frontend = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIX = 'scripts/test-runner-fixtures';
-const S = 4000;
+const S = 6000;
+const SAMPLE_MS = 2000;
 const DEADLINE_MS = S + 40_000;
 const OWN = `bc-runner-test-${process.pid}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-runner-test-'));
@@ -63,11 +70,15 @@ const kill = (pid) => {
 function marksFor(n) {
   return Object.fromEntries(['A', 'C', 'D', 'E', 'F', 'H'].map((k, i) => [k, `9${process.pid}${n}${i}`]));
 }
-const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const ALL_CASES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
 
 const outputs = [];
 
-async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt, pauseStdout, concurrency = 4, watchMarks = [] } = {}) {
+/** What a run's sample waits for, by the fixtures it runs: each one's sleep, d's stamp, h's orphan. */
+const READY = { a: ['a'], c: ['c'], d: ['stamp'], f: ['f'], h: ['h', 'hOrphaned'] };
+const readyFor = (files) => files.flatMap((f) => READY[/^([a-z])-/.exec(path.basename(f))?.[1]] ?? []);
+
+async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner = 'scripts/test-runner.mjs', signals = [], prefix = [], closeStdoutAt, pauseStdout, concurrency = 4, watchMarks = [], ready = readyFor(files) } = {}) {
   const marks = marksFor(n);
   const stamp = path.join(tmp, `stamp-${n}`);
   const stampH = path.join(tmp, `stamp-h-${n}`);
@@ -97,7 +108,7 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
     // Without this, a missing python3 threw past the `finally` and left the temp dir behind.
     child.once('error', (error) => resolve({ code: null, sig: null, error }));
   });
-  const mid = sleep(S / 2).then(() => {
+  const sample = () => {
     const a = sleepsWith(marks.A);
     const own = new Set(ownPids());
     return {
@@ -110,7 +121,16 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
       hOrphaned: fs.existsSync(stampH),
       stamp: fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : '',
     };
-  });
+  };
+  // Every file's bound starts when the file does, after the run's, so S - 1000 is before them all.
+  const mid = (async () => {
+    for (;;) {
+      const at = Date.now() - started;
+      const s = sample();
+      if ((at >= SAMPLE_MS && ready.every((k) => s[k])) || at >= S - 1000 || !s.running) return { ...s, at };
+      await sleep(50);
+    }
+  })();
   // Whether a process with any of these marks ever runs, sampled every 100 ms until the run ends.
   const seen = {};
   const watching = watchMarks.length
@@ -120,20 +140,23 @@ async function nested(name, n, files, { fileTimeout = S, env: extra = {}, runner
     : null;
   // A reader that goes away: the runner's next write fails with EPIPE.
   if (closeStdoutAt) setTimeout(() => child.stdout.destroy(), closeStdoutAt).unref();
-  // A reader that stops for a while and then goes on: the runner's write meets a full pipe.
-  if (pauseStdout) {
-    setTimeout(() => child.stdout.pause(), pauseStdout.from).unref();
-    setTimeout(() => child.stdout.resume(), pauseStdout.to).unref();
-  }
-  for (const { sig, ms } of signals) {
-    setTimeout(() => {
-      try {
-        process.kill(child.pid, sig);
-      } catch {
-        // gone
-      }
-    }, ms).unref();
-  }
+  // After the sample: a reader that stops for a while and then goes on, so the runner's write meets a
+  // full pipe, and the signals.
+  mid.then(() => {
+    if (pauseStdout) {
+      setTimeout(() => child.stdout.pause(), pauseStdout.from).unref();
+      setTimeout(() => child.stdout.resume(), pauseStdout.to).unref();
+    }
+    for (const { sig, after } of signals) {
+      setTimeout(() => {
+        try {
+          process.kill(child.pid, sig);
+        } catch {
+          // gone
+        }
+      }, after).unref();
+    }
+  });
   let deadlineFired = false;
   const deadline = setTimeout(() => {
     deadlineFired = true;
@@ -169,11 +192,11 @@ try {
   //    inside the grace.
   {
     const r = await nested('all', 1, [...HUNG, 'e-leaves-a-process.mjs', 'g-ends-its-child-soon.mjs', 'passes.mjs'].map(fixture));
-    check(r.mid.running, 'all: the run had ended by S/2, before any bound');
-    check(r.mid.a > 0, "all: a's sleep was not running at S/2, so its absence later would mean nothing");
+    check(r.mid.running, 'all: the run had ended by the sample, before any bound');
+    check(r.mid.a > 0, "all: a's sleep was not running at the sample, so its absence later would mean nothing");
     check(r.mid.aIsOwn, "all: a's sleep does not carry this test's marker, so the runner dropped the marker it inherited");
-    check(r.mid.c > 0, "all: c's sleep was not running at S/2, so its absence later would mean nothing");
-    check(/^[0-9]+$/.test(r.mid.stamp), "all: d's stamp holds no pid at S/2, so d never reached its spawn");
+    check(r.mid.c > 0, "all: c's sleep was not running at the sample, so its absence later would mean nothing");
+    check(/^[0-9]+$/.test(r.mid.stamp), "all: d's stamp holds no pid at the sample, so d never reached its spawn");
     check(r.ms <= S + 30_000, `all: the run took ${r.ms} ms, more than S + 30 s`);
     check(r.code !== 0, `all: the run exited ${r.code}, with four files that never end`);
     for (const f of HUNG) {
@@ -190,9 +213,9 @@ try {
   //     ended by a signal, and one with more output than is kept.
   {
     const r = await nested('f-j', 7, ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs', 'i-kills-its-runner.mjs', 'j-prints-a-lot.mjs'].map(fixture));
-    check(r.mid.f > 0, "f-j: f's sleep was not running at S/2, so its absence later would mean nothing");
-    check(r.mid.h > 0, "f-j: h's sleep was not running at S/2, so its absence later would mean nothing");
-    check(r.mid.hOrphaned, "f-j: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    check(r.mid.f > 0, "f-j: f's sleep was not running at the sample, so its absence later would mean nothing");
+    check(r.mid.h > 0, "f-j: h's sleep was not running at the sample, so its absence later would mean nothing");
+    check(r.mid.hOrphaned, "f-j: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     for (const f of ['f-hides-its-marker.mjs', 'h-orphans-a-hidden-child.mjs']) {
       check(line(fixture(f), `still running after the ${S} ms bound for one file; everything found of it was killed$`).test(r.out), `f-j: no ✖ line names ${f} at its bound, everything killed`);
     }
@@ -208,7 +231,7 @@ try {
   // 2. Where there is no /proc to read (macOS), a file's process group is all the runner can kill.
   {
     const r = await nested('no /proc', 2, [fixture('a-blocks-in-spawnsync.mjs')], { env: { BC_TEST_PROC_ROOT: path.join(tmp, 'no-proc') } });
-    check(r.mid.a > 0, "no /proc: a's sleep was not running at S/2");
+    check(r.mid.a > 0, "no /proc: a's sleep was not running at the sample");
     check(line(fixture('a-blocks-in-spawnsync.mjs'), `still running after the ${S} ms bound`).test(r.out), 'no /proc: no ✖ line names a at its bound');
     check(r.code !== 0, `no /proc: the run exited ${r.code}`);
     check(sleepsWith(r.marks.A).length === 0, "no /proc: a's sleep is still running after the run");
@@ -218,9 +241,9 @@ try {
   //    its orphan is made: only the runner's poll knows that orphan, so the file's watchdog, which
   //    also kills on the runner's death, cannot stand in for the runner's own kill.
   {
-    const r = await nested('SIGTERM', 3, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }] });
-    check(r.mid.h > 0, "SIGTERM: h's sleep was not running at S/2");
-    check(r.mid.hOrphaned, "SIGTERM: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    const r = await nested('SIGTERM', 3, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig: 'SIGTERM', after: 500 }] });
+    check(r.mid.h > 0, "SIGTERM: h's sleep was not running at the sample");
+    check(r.mid.hOrphaned, "SIGTERM: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.code === 143, `SIGTERM: the runner exited ${r.code} (${r.sig}), not 143`);
     check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'SIGTERM: no ✖ line names the file in flight');
     let left = sleepsWith(r.marks.H).length;
@@ -236,10 +259,10 @@ try {
   {
     const r = await nested('SIGHUP', 4, [fixture('h-orphans-a-hidden-child.mjs')], {
       fileTimeout: 60_000,
-      signals: [{ sig: 'SIGHUP', ms: S / 2 + 500 }, { sig: 'SIGHUP', ms: S / 2 + 505 }],
+      signals: [{ sig: 'SIGHUP', after: 500 }, { sig: 'SIGHUP', after: 505 }],
     });
-    check(r.mid.h > 0, "SIGHUP: h's sleep was not running at S/2");
-    check(r.mid.hOrphaned, "SIGHUP: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    check(r.mid.h > 0, "SIGHUP: h's sleep was not running at the sample");
+    check(r.mid.hOrphaned, "SIGHUP: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.code === 129, `SIGHUP: the runner exited ${r.code} (${r.sig}), not 129`);
     check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner received SIGHUP`, 'm').test(r.out), 'SIGHUP: no ✖ line names the file in flight');
     for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
@@ -249,8 +272,8 @@ try {
   // 5. SIGKILL, which nothing can handle: each file's watchdog kills what its file started once the
   //    runner is gone, inside the group (a) and outside it with no marker (f).
   {
-    const r = await nested('SIGKILL', 5, ['a-blocks-in-spawnsync.mjs', 'f-hides-its-marker.mjs'].map(fixture), { fileTimeout: 60_000, signals: [{ sig: 'SIGKILL', ms: S / 2 + 500 }] });
-    check(r.mid.a > 0 && r.mid.f > 0, "SIGKILL: a's or f's sleep was not running at S/2");
+    const r = await nested('SIGKILL', 5, ['a-blocks-in-spawnsync.mjs', 'f-hides-its-marker.mjs'].map(fixture), { fileTimeout: 60_000, signals: [{ sig: 'SIGKILL', after: 500 }] });
+    check(r.mid.a > 0 && r.mid.f > 0, "SIGKILL: a's or f's sleep was not running at the sample");
     const gone = async (mark) => {
       for (let i = 0; i < 30 && sleepsWith(mark).length; i++) await sleep(100);
       return sleepsWith(mark).length === 0;
@@ -264,10 +287,11 @@ try {
   {
     const r = await nested('closed terminal', 8, ['c-detached-child.mjs', 'h-orphans-a-hidden-child.mjs'].map(fixture), {
       fileTimeout: 60_000,
-      prefix: ['python3', path.join(frontend, FIX, 'close-the-terminal.py'), String((S / 2 + 500) / 1000)],
+      prefix: ['python3', path.join(frontend, FIX, 'close-the-terminal.py')],
+      signals: [{ sig: 'SIGUSR1', after: 500 }],
     });
-    check(r.mid.c > 0 && r.mid.h > 0, "closed terminal: c's or h's sleep was not running at S/2");
-    check(r.mid.hOrphaned, "closed terminal: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    check(r.mid.c > 0 && r.mid.h > 0, "closed terminal: c's or h's sleep was not running at the sample");
+    check(r.mid.hOrphaned, "closed terminal: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.code !== 99, 'closed terminal: the runner was still running 20 s after its terminal closed');
     for (const k of ['C', 'H']) {
       for (let i = 0; i < 20 && sleepsWith(r.marks[k]).length; i++) await sleep(100);
@@ -280,8 +304,8 @@ try {
   //    h's orphan is made.
   {
     const r = await nested('EPIPE', 9, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, closeStdoutAt: 300 });
-    check(r.mid.h > 0, "EPIPE: h's sleep was not running at S/2");
-    check(r.mid.hOrphaned, "EPIPE: h's helper had not exited by S/2, so its sleep was not yet an orphan");
+    check(r.mid.h > 0, "EPIPE: h's sleep was not running at the sample");
+    check(r.mid.hOrphaned, "EPIPE: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.ms < 15_000, `EPIPE: the runner ran on for ${r.ms} ms after its reader went away`);
     check(r.code !== 0, `EPIPE: the runner exited ${r.code}`);
     for (let i = 0; i < 20 && sleepsWith(r.marks.H).length; i++) await sleep(100);
@@ -314,8 +338,8 @@ try {
   {
     const r = await nested('slow reader', 11, [fixture('l-prints-then-hangs.mjs')], {
       fileTimeout: 60_000,
-      signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }],
-      pauseStdout: { from: S / 2, to: S / 2 + 1500 },
+      signals: [{ sig: 'SIGTERM', after: 500 }],
+      pauseStdout: { from: 0, to: 1500 },
     });
     check(r.code === 143, `slow reader: the runner exited ${r.code} (${r.sig}), not 143`);
     check(new RegExp(`^✖ ${FIX}/l-prints-then-hangs\\.mjs: the runner received SIGTERM`, 'm').test(r.out), 'slow reader: no ✖ line names l after the pipe filled');
@@ -330,7 +354,7 @@ try {
   for (const [n, fault, code] of [[12, 'report', 2], [13, 'uncaught', 1]]) {
     const name = `fault ${fault}`;
     const r = await nested(name, n, ['h-orphans-a-hidden-child.mjs', 'k-passes-late.mjs'].map(fixture), { fileTimeout: 60_000, env: { BC_TEST_RUNNER_FAULT: fault } });
-    check(r.mid.hOrphaned, `${name}: h's helper had not exited by S/2, so its sleep was not yet an orphan`);
+    check(r.mid.hOrphaned, `${name}: h's helper had not exited by the sample, so its sleep was not yet an orphan`);
     check(r.code === code, `${name}: the runner exited ${r.code} (${r.sig}), not ${code}`);
     check(/a fault injected/.test(r.err) && /\n {4}at /.test(r.err), `${name}: the runner did not print the fault's stack`);
     check(new RegExp(`^✖ ${FIX}/h-orphans-a-hidden-child\\.mjs: the runner failed while this file ran`, 'm').test(r.out), `${name}: no ✖ line names the file in flight`);
@@ -340,8 +364,8 @@ try {
 
   // 14. SIGQUIT (^\\) and SIGUSR2, handled like the others.
   for (const [n, sig, want] of [[14, 'SIGQUIT', 131], [20, 'SIGUSR2', 140]]) {
-    const r = await nested(sig, n, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig, ms: S / 2 + 500 }] });
-    check(r.mid.hOrphaned, `${sig}: h's helper had not exited by S/2, so its sleep was not yet an orphan`);
+    const r = await nested(sig, n, [fixture('h-orphans-a-hidden-child.mjs')], { fileTimeout: 60_000, signals: [{ sig, after: 500 }] });
+    check(r.mid.hOrphaned, `${sig}: h's helper had not exited by the sample, so its sleep was not yet an orphan`);
     check(r.code === want, `${sig}: the runner exited ${r.code} (${r.sig}), not ${want}`);
     for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
     check(sleepsWith(r.marks.H).length === 0, `${sig}: h's sleep is still running 1 s after the runner exited`);
@@ -351,11 +375,30 @@ try {
   {
     const r = await nested('stopped reader', 16, [fixture('l-prints-then-hangs.mjs')], {
       fileTimeout: 60_000,
-      signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }],
-      pauseStdout: { from: S / 2, to: DEADLINE_MS * 2 },
+      signals: [{ sig: 'SIGTERM', after: 500 }],
+      pauseStdout: { from: 0, to: DEADLINE_MS * 2 },
     });
     check(r.code === 143, `stopped reader: the runner exited ${r.code} (${r.sig}), not 143`);
-    check(r.ms < S / 2 + 500 + 8000, `stopped reader: the runner took ${r.ms} ms to end after SIGTERM with its reader stopped`);
+    check(r.ms < r.mid.at + 500 + 8000, `stopped reader: the runner took ${r.ms} ms to end, ${r.ms - r.mid.at - 500} ms after SIGTERM, with its reader stopped`);
+  }
+
+  // 11c. SIGTERM with a reader that is slow but never stops, 64 KiB a second on a pipe: the abort's
+  //      400 KiB for l take six seconds, three times the 2 s rule, and all of them arrive (#268's gate
+  //      adversary, round 7: they were cut, since Node hands the queued pieces over as one write). l
+  //      ends while that drains: it is still named once, and the run prints no summary, the abort's
+  //      line being the run's last word.
+  {
+    const r = await nested('steady reader', 21, [fixture('l-prints-then-hangs.mjs')], {
+      fileTimeout: 60_000,
+      prefix: ['python3', path.join(frontend, FIX, 'read-slowly-on-a-pipe.py'), String(64 * 1024)],
+      signals: [{ sig: 'SIGTERM', after: 500 }],
+    });
+    check(r.code === 143, `steady reader: the runner exited ${r.code} (${r.sig}), not 143`);
+    check(r.out.includes(`l: ${'y'.repeat(400 * 1024)}`), `steady reader: l's 400 KiB did not all arrive (${r.out.length} bytes did)`);
+    check(r.ms - r.mid.at > 500 + 5000, `steady reader: the run ended ${r.ms - r.mid.at - 500} ms after SIGTERM, too soon for 400 KiB at 64 KiB a second, so the reader was not slow`);
+    const named = r.out.match(new RegExp(`^✖ ${FIX}/l-prints-then-hangs\\.mjs`, 'gm')) ?? [];
+    check(named.length === 1, `steady reader: l is named ${named.length} times, where the abort names it once and nothing after`);
+    check(!/^ℹ files |^✖ failed: /m.test(r.out), 'steady reader: the aborted run printed a summary after the abort');
   }
 
   // 16. The queue stops at an abort: with one slot, l first and h waiting. SIGTERM while l runs, the
@@ -367,9 +410,10 @@ try {
     const r = await nested('queue', 17, [first, fixture('h-orphans-a-hidden-child.mjs')], {
       fileTimeout: 60_000,
       concurrency: 1,
-      signals: [{ sig: 'SIGTERM', ms: S / 2 + 500 }],
-      pauseStdout: { from: S / 2, to: S / 2 + 1500 },
+      signals: [{ sig: 'SIGTERM', after: 500 }],
+      pauseStdout: { from: 0, to: 1500 },
       watchMarks: ['H'],
+      ready: [],
     });
     check(r.code === 143, `queue: the runner exited ${r.code} (${r.sig}), not 143`);
     check(!r.seen.H, 'queue: h, waiting behind l, started after the abort');
@@ -382,6 +426,7 @@ try {
     const r = await nested('slow terminal', 18, ['h-orphans-a-hidden-child.mjs', 'j-prints-a-lot.mjs'].map(fixture), {
       prefix: ['python3', path.join(frontend, FIX, 'read-slowly-on-a-terminal.py'), String(4 * 1024 * 1024)],
     });
+    check(r.mid.hOrphaned, "slow terminal: h's helper had not exited by the sample, so its sleep was not yet an orphan");
     check(r.code !== 0, `slow terminal: the run exited ${r.code}, with h never ending`);
     for (let i = 0; i < 10 && sleepsWith(r.marks.H).length; i++) await sleep(100);
     check(sleepsWith(r.marks.H).length === 0, "slow terminal: h's sleep is still running after the run");
@@ -389,9 +434,17 @@ try {
 
   // 18. Too few file descriptors (EMFILE): Node returns before it sets up a child's stdio. Each file
   //     that could not start is named; the run does not fail as the runner's own bug.
+  //     The limit is two above what a fresh node holds once started: the middle of the range where Node
+  //     starts and a spawn, with its pipes, cannot, which ran from two below that count to six above it,
+  //     measured with io_uring and without. A fixed 28 was the top of that range here, and where the
+  //     kernel refuses io_uring (Docker's default seccomp profile) Node holds three fewer, and 28 let
+  //     the first file start (#268's gate adversary, round 7).
   {
+    const probe = spawnSync(process.execPath, ['-e', "process.stdout.write(String(require('fs').readdirSync('/proc/self/fd').length))"], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    const atStart = Number(probe.stdout);
+    check(Number.isInteger(atStart) && atStart >= 8 && atStart <= 64, `EMFILE: a fresh node holds ${probe.stdout} descriptors, so no limit can be set from it`);
     const files = ['passes.mjs', 'g-ends-its-child-soon.mjs', 'k-passes-late.mjs'];
-    const r = await nested('EMFILE', 19, files.map(fixture), { prefix: ['sh', '-c', 'ulimit -n 28; exec "$@"', 'sh'] });
+    const r = await nested('EMFILE', 19, files.map(fixture), { prefix: ['sh', '-c', `ulimit -n ${atStart + 2}; exec "$@"`, 'sh'] });
     check(r.code === 1, `EMFILE: the runner exited ${r.code}, not 1`);
     for (const f of files) check(line(fixture(f), 'could not be started: spawn .*EMFILE').test(r.out), `EMFILE: no ✖ line names ${f} as never started`);
     check(!/TypeError/.test(r.out), 'EMFILE: the runner failed with a TypeError');

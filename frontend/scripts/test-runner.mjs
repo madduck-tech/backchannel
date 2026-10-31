@@ -347,8 +347,8 @@ function pollNow() {
  * Write `text` in 64 KiB pieces, reading the running files' trees between them at the poll's pace.
  * Node writes to a terminal synchronously, so one 16 MiB report held the event loop, and the poll with
  * it, for as long as the terminal took to drain: an orphan made meanwhile was never seen (#268's gate
- * adversary, round 5, measured on a pty). In pieces, a stalled reader also shows progress to the
- * abort's 2 s rule, piece by piece rather than only once a whole report is out.
+ * adversary, round 5, measured on a pty). On a pipe the pieces do not show progress by themselves:
+ * Node hands the queued ones to the pipe as one write, so the abort counts bytes, not pieces (below).
  */
 function writeChunked(stream, text) {
   const buf = Buffer.from(text);
@@ -370,6 +370,11 @@ function writeChunked(stream, text) {
  * as everything before, so the lines keep their place and a slow reader gets the names before the
  * bulk. The runner exits once both streams have drained, or once nothing has moved for 2 s: a reader
  * that is slow but reading is waited for, one that has stopped or gone is not.
+ *
+ * What has moved is counted in bytes. `writableLength` falls only when a whole write completes, and on
+ * a pipe Node merges the queued pieces into one write: it stayed at 327 680 for 4 s while a reader took
+ * 80 KiB a second, and the bodies were cut (#268's gate adversary, round 7). What libuv has still to
+ * write of the write in flight, the handle's `writeQueueSize`, falls with every partial write.
  */
 function abort(why, code, error) {
   if (active.aborting) return;
@@ -382,13 +387,16 @@ function abort(why, code, error) {
     const text = body(outputOf(run));
     if (text) writeChunked(process.stdout, `--- what ${run.file} printed ---\n${text}\n`);
   }
-  let pending = Infinity;
+  const streams = [process.stdout, process.stderr];
+  let last = '';
   let moved = Date.now();
   setInterval(() => {
-    const now = process.stdout.writableLength + process.stderr.writableLength;
-    if (now === 0) process.exit(code);
-    if (now < pending) {
-      pending = now;
+    if (streams.every((s) => s.writableLength === 0)) process.exit(code);
+    // `writeQueueSize` is internal to Node, and absent where a write is synchronous (a file, a
+    // terminal): there it reads 0. Nothing else writes once the abort has, so any change is the reader's.
+    const now = streams.map((s) => `${s.writableLength}/${s._handle?.writeQueueSize ?? 0}`).join(' ');
+    if (now !== last) {
+      last = now;
       moved = Date.now();
     } else if (Date.now() - moved > 2000) {
       process.exit(code);

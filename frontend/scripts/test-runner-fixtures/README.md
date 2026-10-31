@@ -24,4 +24,4 @@ anything, so no run can fall back to a marker another run uses.
 | `passes.mjs` | ends by itself after about a second |
 | `l-prints-then-hangs.mjs` | no `node:test`; 400 KiB of output, then a hang, so an abort's write meets a full pipe |
 
-`close-the-terminal.py` and `read-slowly-on-a-terminal.py` are not fixtures: they run a command on a pseudo-terminal, the first closing it, the second draining it slowly, for the test's terminal cases.
+`close-the-terminal.py` and `read-slowly-on-a-terminal.py` are not fixtures: they run a command on a pseudo-terminal, the first closing it when it receives SIGUSR1, the second draining it slowly, for the test's terminal cases. `read-slowly-on-a-pipe.py` is the second's counterpart on a pipe.
