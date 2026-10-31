@@ -645,20 +645,26 @@ class TheRetry(unittest.TestCase):
             server.shutdown()
 
 
+# The summary engine's 9 files (#191). Written by hand from `summary_engine/models.rs`, which the Rust test
+# `the_summary_download_list_is_what_the_engine_requests` holds it to, since the generator writes only the
+# transcription catalogue's list.
+SUMMARY_URLS = gen.DOWNLOAD_URLS.parent / "summary_download_urls.tsv"
+
+
 class TheDownloads(unittest.TestCase):
     def test_every_download_url_resolves(self):
-        """Every line of `download_urls.tsv`, which a Rust test holds to the URLs the engine builds (#179):
-        the file at its pinned revision is the length and sha256 the line says, and the chain ends in 200.
-        A network error fails this, never skips it, so every gate that runs it depends on Hugging Face
-        answering."""
-        text = gen.DOWNLOAD_URLS.read_text(encoding="utf-8")
-        lines = text.splitlines()
+        """Every line of `download_urls.tsv` (#179) and of `summary_download_urls.tsv` (#191), each held by a
+        Rust test to the URLs its engine builds: the file at its pinned revision is the length and sha256
+        the line says, and the chain ends in 200. A network error fails this, never skips it, so every gate
+        that runs it depends on Hugging Face answering."""
+        texts = [gen.DOWNLOAD_URLS.read_text(encoding="utf-8"), SUMMARY_URLS.read_text(encoding="utf-8")]
+        lines = [line for text in texts for line in text.splitlines()]
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             problems = list(pool.map(check_line, lines))
         self.assertEqual([p for p in problems if p], [])
-        # Counted apart from the reader: a reader that dropped a line would check one URL fewer.
-        self.assertEqual(len(problems), text.count("\n"), "the URLs checked are not every line of the list")
-        self.assertEqual(len(problems), len(ROWS) + 1)
+        # Counted apart from the reader: a reader that dropped a line, or a list, would check fewer URLs.
+        self.assertEqual(len(problems), sum(text.count("\n") for text in texts), "the URLs checked are not every line of both lists")
+        self.assertEqual(len(problems), len(ROWS) + 1 + 9, "the transcription catalogue, the diarizer and the 9 summary files")
 
 
 if __name__ == "__main__":

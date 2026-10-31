@@ -129,6 +129,32 @@ impl SamplingParams {
     }
 }
 
+/// Where the summary models are fetched from: Hugging Face, with the organisation in each file's `repo`.
+pub const SUMMARY_MODEL_BASE_URL: &str = "https://huggingface.co";
+
+/// One file of a model as it is fetched: its repository, the commit, and the exact length and sha256 the
+/// file has there (#191). A download is kept only if it is exactly these bytes, as #179 does for the
+/// transcription catalogue.
+///
+/// **Pinned on 2026-10-31** to each repository's `main` of that day, the newest commit holding the bytes
+/// `main` served, read by `HEAD` on `resolve/main` (`x-repo-commit`, `x-linked-size`, `x-linked-etag`).
+/// For LFM2.5 that is the file of 2026-08-19, not the one the row was written against (`654a129`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedFile {
+    pub repo: String,
+    /// A full 40-hex commit: Hugging Face resolves a short one too, so only the length catches it.
+    pub revision: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+impl PinnedFile {
+    /// The file's URL under `base`, built by #179's function.
+    pub fn url(&self, base: &str, file: &str) -> String {
+        crate::transcribe_engine::engine::file_url(base, &self.repo, &self.revision, file)
+    }
+}
+
 /// Multimodal projector shipped alongside a model's weights.
 ///
 /// llama.cpp keeps the audio/vision encoders in a separate GGUF from the text
@@ -139,8 +165,8 @@ impl SamplingParams {
 pub struct Projector {
     /// Projector filename on disk (e.g. "mmproj-gemma-4-E2B-it-BF16.gguf")
     pub file: String,
-    /// Download URL for the projector
-    pub url: String,
+    /// Where the projector is fetched from, and what it must be (#191)
+    pub pin: PinnedFile,
     /// Projector size in MiB, counted separately so progress can span both files
     pub size_mb: u64,
 }
@@ -161,8 +187,8 @@ pub struct ModelDef {
     /// Template name for prompt formatting (e.g., "gemma4")
     pub template: String,
 
-    /// Download URL (HuggingFace or other source)
-    pub download_url: String,
+    /// Where the weights are fetched from, and what they must be (#191)
+    pub weights: PinnedFile,
 
     /// File size in MiB. The field name is kept for API compatibility.
     pub size_mb: u64,
@@ -225,7 +251,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Gemma 4 E2B (Audio + Text)".to_string(),
             gguf_file: "gemma-4-E2B-it-Q4_0.gguf".to_string(),
             template: "gemma4".to_string(),
-            download_url: "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf".to_string(),
+            weights: PinnedFile { repo: "ggml-org/gemma-4-E2B-it-GGUF".to_string(), revision: "6938c58e698502037401a5f19f6905f2fb2f7dee".to_string(), size_bytes: 2841481184, sha256: "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52".to_string() },
             size_mb: 2710,
             // ponytail: 8192 rather than the 32768 the model supports. The sidecar
             // builds a fresh context per request, so n_ctx is paid on every live
@@ -236,7 +262,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             description: "Transcribes audio and writes summaries on modest hardware. Needs ~3.6GB of downloads.".to_string(),
             mmproj: Some(Projector {
                 file: "mmproj-gemma-4-E2B-it-BF16.gguf".to_string(),
-                url: "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/mmproj-gemma-4-E2B-it-BF16.gguf".to_string(),
+                pin: PinnedFile { repo: "ggml-org/gemma-4-E2B-it-GGUF".to_string(), revision: "6938c58e698502037401a5f19f6905f2fb2f7dee".to_string(), size_bytes: 986833664, sha256: "711e1e8f43fa0664adbac493129be1e6c25b81af4b4cdea97c7d798b25c0a3a4".to_string() },
                 size_mb: 941,
             }),
         },
@@ -251,7 +277,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Gemma 4 E4B (Audio + Text)".to_string(),
             gguf_file: "gemma-4-E4B-it-Q4_0.gguf".to_string(),
             template: "gemma4".to_string(),
-            download_url: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_0.gguf".to_string(),
+            weights: PinnedFile { repo: "ggml-org/gemma-4-E4B-it-GGUF".to_string(), revision: "a69f018d7678a2b9f5e705f8903d6fb29b9b25dc".to_string(), size_bytes: 4590807392, sha256: "a555b900214b477d8880e7832e0b8925e139b0159640036b09fe472b6f2097f2".to_string() },
             size_mb: 4378,
             context_size: 8192,
             layer_count: 35,
@@ -259,7 +285,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             description: "Transcribes audio and writes summaries. Best accuracy of the audio-capable models. Needs ~5.2GB of downloads.".to_string(),
             mmproj: Some(Projector {
                 file: "mmproj-gemma-4-E4B-it-BF16.gguf".to_string(),
-                url: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/mmproj-gemma-4-E4B-it-BF16.gguf".to_string(),
+                pin: PinnedFile { repo: "ggml-org/gemma-4-E4B-it-GGUF".to_string(), revision: "a69f018d7678a2b9f5e705f8903d6fb29b9b25dc".to_string(), size_bytes: 991552256, sha256: "f77995e4b6a569ab8f0d1bfdb7e8da4a0fa5b9e6f309b9bf3bdb76164d75e29f".to_string() },
                 size_mb: 946,
             }),
         },
@@ -280,7 +306,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "LFM2.5 2.6B (Text only)".to_string(),
             gguf_file: "LFM2.5-2.6B-Q4_K_M.gguf".to_string(),
             template: "lfm2_nonthinking".to_string(),
-            download_url: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/main/LFM2.5-2.6B-Q4_K_M.gguf".to_string(),
+            weights: PinnedFile { repo: "LiquidAI/LFM2.5-2.6B-GGUF".to_string(), revision: "e7caca5d835a3901a8e0d63e94009429bafafdfc".to_string(), size_bytes: 1674455040, sha256: "02a8b7e17487d326e46d68ce0ba24211e1b80a14c4cd0597fa73c1cd697f52ed".to_string() },
             size_mb: 1597,
             context_size: 32768,
             layer_count: 30,
@@ -306,7 +332,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Qwen 3.5 2B (Text only)".to_string(),
             gguf_file: "Qwen3.5-2B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
-            download_url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf".to_string(),
+            weights: PinnedFile { repo: "unsloth/Qwen3.5-2B-GGUF".to_string(), revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae".to_string(), size_bytes: 1280835840, sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223".to_string() },
             size_mb: 1222,
             context_size: 32768,
             layer_count: 24,
@@ -323,7 +349,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Qwen 3.5 4B (Text only)".to_string(),
             gguf_file: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
-            download_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+            weights: PinnedFile { repo: "unsloth/Qwen3.5-4B-GGUF".to_string(), revision: "e87f176479d0855a907a41277aca2f8ee7a09523".to_string(), size_bytes: 2740937888, sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".to_string() },
             size_mb: 2614,
             context_size: 32768,
             layer_count: 32,
@@ -340,7 +366,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Qwen 3.5 9B (Text only)".to_string(),
             gguf_file: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
             template: "qwen3.5_nonthinking".to_string(),
-            download_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+            weights: PinnedFile { repo: "unsloth/Qwen3.5-9B-GGUF".to_string(), revision: "3885219b6810b007914f3a7950a8d1b469d598a5".to_string(), size_bytes: 5680522464, sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8".to_string() },
             size_mb: 5417,
             context_size: 32768,
             layer_count: 32,
@@ -374,7 +400,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             // empty thought channel on the generation prompt. Without that it thinks
             // into the summary.
             template: "gemma4_nothink".to_string(),
-            download_url: "https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/main/gemma-4-26B_q4_0-it.gguf".to_string(),
+            weights: PinnedFile { repo: "google/gemma-4-26B-A4B-it-qat-q4_0-gguf".to_string(), revision: "d1c082be9cf3c8a514acf63b8761f4b41935842e".to_string(), size_bytes: 14439363584, sha256: "3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d".to_string() },
             size_mb: 13770,
             context_size: 8192,
             layer_count: 30,
@@ -592,7 +618,7 @@ mod tests {
                 model.name,
                 projector.file
             );
-            assert!(projector.url.ends_with(&projector.file));
+            assert!(projector.pin.url(SUMMARY_MODEL_BASE_URL, &projector.file).ends_with(&format!("/{}", projector.file)));
             // The quoted size has to cover both files or the progress bar lies.
             assert_eq!(
                 model.total_size_mb(),
@@ -637,14 +663,15 @@ mod tests {
                 other => panic!("{} uses unknown template {}", model.name, other),
             };
             assert_eq!(model.sampling, expected, "{}", model.name);
-            assert!(model.download_url.starts_with("https://huggingface.co/"));
+            let url = model.weights.url(SUMMARY_MODEL_BASE_URL, &model.gguf_file);
+            assert!(url.starts_with("https://huggingface.co/"));
             // The URL has to actually point at the file we look for on disk, or
             // the download lands under a name the manager never finds.
             assert!(
-                model.download_url.ends_with(&model.gguf_file),
+                url.ends_with(&format!("/{}", model.gguf_file)),
                 "{} downloads {} but expects {}",
                 model.name,
-                model.download_url,
+                url,
                 model.gguf_file
             );
         }
@@ -825,5 +852,68 @@ mod tests {
         let sanitized = sampling.sanitize_for_llama_helper();
 
         assert_eq!(sanitized.top_k, 64);
+    }
+
+    /// Every file the summary engine downloads, in the order `get_available_models` lists them: each
+    /// model's weights, then its projector (#191).
+    fn every_file() -> Vec<(String, String, PinnedFile)> {
+        get_available_models()
+            .into_iter()
+            .flat_map(|m| {
+                let mut files = vec![(m.name.clone(), m.gguf_file.clone(), m.weights.clone())];
+                if let Some(p) = m.mmproj {
+                    files.push((m.name.clone(), p.file.clone(), p.pin.clone()));
+                }
+                files
+            })
+            .collect()
+    }
+
+    /// #191 condition 2: every URL as built names a full 40-hex commit, which also excludes `main`.
+    /// Hugging Face resolves a short revision too, so only the length catches a truncated one.
+    #[test]
+    fn every_summary_download_is_pinned_to_a_full_commit() {
+        let files = every_file();
+        assert_eq!(files.len(), 9, "the summary engine downloads {} files, not the 9 this pins", files.len());
+        let wrong: Vec<String> = files
+            .iter()
+            .filter_map(|(model, file, pin)| {
+                let url = pin.url(SUMMARY_MODEL_BASE_URL, file);
+                let rev = url.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+                (rev.len() != 40 || !rev.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()))
+                    .then(|| format!("{model}: {url} is not pinned to a full commit"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+        let src = include_str!("models.rs");
+        let code: String = src.split("#[cfg(test)]").next().unwrap().to_string();
+        assert!(!code.contains("/resolve/"), "models.rs still holds a download URL as a string; every one is built from its pin");
+    }
+
+    /// #191 condition 3: the list the online check reads is what the summary engine requests, line for
+    /// line, with each file's size and sha256. The online check reads only the list, so a file the engine
+    /// requests that is not on it would go unchecked.
+    #[test]
+    fn the_summary_download_list_is_what_the_engine_requests() {
+        let list = include_str!("../../../scripts/summary_download_urls.tsv");
+        let lines: Vec<&str> = list.lines().collect();
+        let files = every_file();
+        assert_eq!(lines.len(), files.len(), "summary_download_urls.tsv has {} lines, but the engine downloads {} files", lines.len(), files.len());
+        let wrong: Vec<String> = files
+            .iter()
+            .zip(&lines)
+            .filter_map(|((model, file, pin), line)| {
+                let want = format!("{}\t{}\t{}", pin.url(SUMMARY_MODEL_BASE_URL, file), pin.size_bytes, pin.sha256);
+                (**line != want).then(|| format!("{model} {file}: the list says {line:?}, the engine requests {want:?}"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "summary_download_urls.tsv is not what the engine requests");
+        // Each pin's length is the one `size_mb` was written for, inside the window a scan reads Available.
+        for (model, file, pin) in &files {
+            let size_mb = get_available_models().into_iter().find(|m| &m.name == model).map(|m| if &m.gguf_file == file { m.size_mb } else { m.mmproj.unwrap().size_mb }).unwrap();
+            let mib = pin.size_bytes as f64 / (1024.0 * 1024.0);
+            assert!((mib - size_mb as f64).abs() / (size_mb as f64) < 0.01, "{model} {file}: {} bytes is {mib:.1} MiB, not near its {size_mb} MiB", pin.size_bytes);
+            assert!(pin.sha256.len() == 64 && pin.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{model} {file}: {} is not a sha256", pin.sha256);
+        }
     }
 }
