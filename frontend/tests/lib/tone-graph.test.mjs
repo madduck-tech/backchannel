@@ -19,10 +19,11 @@
 //
 // It must not hang (#294). On CI one run of it held the step until the job was cancelled: the stub
 // truncated its counter before writing it, the wrapper read it empty, raised and died without stopping
-// `watch`, and `watch` held `spawnSync`'s pipes. So the stub writes its counter whole; the wrapper reads
-// an empty one as "not yet", stops `watch` in a `finally` with a bounded wait, and keeps `watch` off its
+// `watch`, and `watch` held `spawnSync`'s pipes. So the wrapper no longer reads the counter: it counts the
+// lines `watch` has written, stops `watch` in a `finally` with bounded waits, and keeps `watch` off its
 // pipes; Node kills a `watch` a dead wrapper left; each case's runs are bounded, failing by name; and a
-// case fails unless every graph it served was sampled.
+// case fails unless every graph it served was sampled. The stub still writes its counter whole, though
+// only the next stub, which runs after it has exited, reads it.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -106,7 +107,11 @@ finally:
         try:
             p.wait(timeout=${WATCH_EXIT_S})
         except subprocess.TimeoutExpired:
-            p.kill(); p.wait()
+            p.kill()
+            try:
+                p.wait(timeout=${WATCH_EXIT_S})
+            except subprocess.TimeoutExpired:
+                pass  # unreapable: Node's search below kills what is left
 sys.exit(0 if sampled() >= ${graphs.length} else 4)
 `], { env, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
   killLeftWatch(out);
@@ -118,7 +123,10 @@ sys.exit(0 if sampled() >= ${graphs.length} else 4)
   if (r.error) throw new Error(`${name}: judge ${r.error.code} after ${CASE_TIMEOUT_MS} ms`);
   const line = r.stdout.trim();
   // The positive sentinel: every graph served was sampled, so a verdict never rests on a sample missing.
-  const [, taken, notTaken] = /^(\d+) samples, (\d+) not taken/.exec(line) ?? [];
+  // A line it cannot read fails too, rather than leaving the sentinel nothing to compare.
+  const head = /^(\d+) samples, (\d+) not taken/.exec(line);
+  if (!head) throw new Error(`${name}: judge's line does not say how many samples it read: ${line || '(nothing)'}${r.stderr ? `\n  judge said: ${r.stderr.trim().slice(-600)}` : ''}`);
+  const [, taken, notTaken] = head;
   if (Number(taken) + Number(notTaken) < graphs.length) throw new Error(`${name}: judge read ${taken} samples and ${notTaken} not taken, of ${graphs.length} graphs served: ${line}`);
   return { code: r.status, line };
 }
@@ -139,13 +147,14 @@ function killLeftWatch(out) {
   const mine = `tone-graph.py\0watch\0${SINK}\0${ROOT}\0${out}\0`;
   for (const n of fs.readdirSync('/proc')) {
     if (!/^[0-9]+$/.test(n)) continue;
-    let cmd = '';
+    let cmd;
     try {
-      cmd = fs.readFileSync(`/proc/${n}/cmdline`, 'latin1');
+      cmd = fs.readFileSync(`/proc/${n}/cmdline`);
     } catch {
       continue; // gone
     }
-    if (cmd.includes(mine)) {
+    // As bytes: a path with a non-ASCII letter is UTF-8 there (#294's gate adversary, round 2).
+    if (cmd.includes(Buffer.from(mine))) {
       try {
         process.kill(Number(n), 'SIGKILL');
       } catch {
