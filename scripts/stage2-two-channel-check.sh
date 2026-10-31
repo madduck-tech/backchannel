@@ -160,14 +160,8 @@ HARNESS_SRC=$(scripts/audio-harness.sh src-name) || die "the harness names no so
 # `node.description=Backchannel harness microphone` and PipeWire reports `Backchannel` --
 # for the sink too. The application logs the description, so a guard built on the requested
 # string refuses a run in which the swap worked perfectly, which is what happened here.
-HARNESS_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == sys.argv[1]:
-        print(p.get("node.description") or "")
-        break
-' "$HARNESS_SRC")
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/harness-guard.sh"
+HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
 [ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph after a successful 'up'"
 say "the harness source presents itself as '$HARNESS_DESC'"
 say "harness up: the default input is now the virtual source playing $(basename "$MIC_SAMPLE")"

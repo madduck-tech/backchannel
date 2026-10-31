@@ -19,7 +19,7 @@ GRAPH="$HERE/lib/capture-graph.py"
 mkdir -p "$OUT"
 say() { printf 'capture-watch: %s\n' "$*" | tee -a "$OUT/watch.log"; }
 
-BEFORE=$(python3 -I "$GRAPH" inputs)
+BEFORE=$(python3 -I "$GRAPH" inputs) || { say "the audio graph could not be read, so nothing shows no other capture is in it"; exit 3; }
 [ -z "$BEFORE" ] || { say "a capture is already in the graph, so this entry would run beside it: $BEFORE"; exit 3; }
 
 pw-record --volume=0 - > /dev/null 2> "$OUT/recorder.err" &
@@ -35,7 +35,9 @@ PGIDFILE="$OUT/pass.pgid"
 setsid bash -c 'echo $$ > "$1"; shift; exec bash -c "$*"' bash "$PGIDFILE" "$@" > "$OUT/pass.log" 2>&1 &
 WAITER=$!
 for _ in $(seq 1 40); do [ -s "$PGIDFILE" ] && break; sleep 0.05; done
-PASS=$(cat "$PGIDFILE")
+PASS=$(cat "$PGIDFILE" 2>/dev/null)
+# Without its group nothing could stop the entry, so it does not run on.
+[ -n "$PASS" ] || { kill -TERM -"$WAITER" 2>/dev/null || kill -TERM "$WAITER" 2>/dev/null; kill -TERM "$REC" 2>/dev/null; say "the entry's session never reported its group; stopped"; exit 3; }
 say "the entry runs as session $PASS: $*"
 
 python3 -I "$GRAPH" watch "$OUT/graph.jsonl" "$REC" "$PASS" --stop ${GLOB:+--app-pgid-glob "$GLOB"} &

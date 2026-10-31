@@ -78,23 +78,17 @@ require_tools() {
   done
 }
 
-# Nodes matching one of our names, as "id name" lines.
+# Nodes matching one of our names, as "id name" lines. Read through `lib/capture-graph.py`, which reads a
+# split `pw-dump` (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).
+GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/capture-graph.py"
 harness_nodes() {
-  pw-dump 2>/dev/null | python3 -c '
-import json, sys
-try:
-    dump = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-for obj in dump:
-    if not str(obj.get("type", "")).endswith("Node"):
-        continue
-    props = (obj.get("info") or {}).get("props") or {}
-    name = props.get("node.name", "")
+  python3 -I "$GRAPH" nodes 2>/dev/null | awk -F'\t' -v fam="$SRC_FAMILY" -v a="$SINK_NAME" -v b="$SYS_SINK_NAME" -v c="$SYS_SRC_NAME" '
     # The source by its family, so a leftover of either era is found.
-    if name in sys.argv[2:] or name == sys.argv[1] or name.startswith(sys.argv[1] + "_"):
-        print(obj["id"], name)
-' "$SRC_FAMILY" "$SINK_NAME" "$SYS_SINK_NAME" "$SYS_SRC_NAME"
+    $2 == a || $2 == b || $2 == c || $2 == fam || index($2, fam "_") == 1 { print $1, $2 }'
+}
+# An unreadable graph is not an empty one: both checks that read "no harness nodes" as a fact ask first.
+graph_readable() {
+  python3 -I "$GRAPH" nodes >/dev/null 2>&1
 }
 
 current_default_source() {
@@ -147,6 +141,7 @@ cmd_up() {
 
   # Refuse rather than duplicate. Two nodes with one name is worse than no harness,
   # because everything downstream still looks like it worked.
+  graph_readable || die "the audio graph could not be read, so nothing shows the harness is not already up"
   if [ -n "$(harness_nodes || true)" ]; then
     die "already up — run 'down' first (running twice creates duplicate nodes with the same name)"
   fi
@@ -171,7 +166,8 @@ cmd_up() {
   UP_COMPLETED=0
   trap 'if [ "$UP_COMPLETED" != 1 ]; then note "bringing the machine back after a failed up"; cmd_down >/dev/null 2>&1 || true; fi' EXIT
   current_default_source > "$STATE_DIR/original-default-source"
-  [ -s "$STATE_DIR/original-default-source" ] || die "could not read the current default input; refusing to change it"
+  # Only a run that writes the default needs it to put back; `--system-only` keeps it for `down`'s report.
+  [ "$system_only" -eq 1 ] || [ -s "$STATE_DIR/original-default-source" ] || die "could not read the current default input; refusing to change it"
   cp -f "$WP_STATE" "$STATE_DIR/wireplumber-default-nodes.before" 2>/dev/null || : > "$STATE_DIR/wireplumber-default-nodes.before"
   printf '%s\n' "$sample" > "$STATE_DIR/sample"
   printf '%s\n' "$SRC_NAME" > "$STATE_DIR/src-name"
@@ -204,6 +200,9 @@ cmd_up() {
     >/dev/null 2>&1 &
   echo $! > "$STATE_DIR/player.pid"
 
+  # A second for WirePlumber to see the source before the probe targets it by name: a target it does not
+  # know yet falls back to the default input, and the probe would measure the person's microphone.
+  [ "$system_only" -eq 1 ] && sleep 1
   local level; level="$(probe_level "$SRC_NAME")"
   case "$level" in
     silent:*) die "the microphone source is delivering silence (max_volume ${level#silent:} dB) — check the sample and the sink" ;;
@@ -298,6 +297,7 @@ cmd_down() {
   fi
   sleep 1
 
+  graph_readable || die "the audio graph could not be read, so nothing shows the teardown removed the harness"
   local left; left="$(harness_nodes || true)"
   [ -n "$left" ] && die "nodes still present after teardown: $left"
 

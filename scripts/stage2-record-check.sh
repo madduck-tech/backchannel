@@ -116,13 +116,7 @@ fi
 # settled by experiment, both easy to get wrong.
 HARNESS_SRC=$("$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" src-name 2>/dev/null) \
   || die "no harness is up, so there is no microphone to name; bring the audio harness up with --system-only first, as gopnik.json's stage 2 does"
-HARNESS_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == sys.argv[1]:
-        print(p.get("node.description") or ""); break
-' "$HARNESS_SRC")
+HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
 [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
 MIC_SEED="$HARNESS_DESC (input)"
 store="$APPDATA"
@@ -183,7 +177,7 @@ for _ in $(seq 1 40); do [ "$(grep -c 'CALLED start_recording_with_devices_and_m
 [ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] || die "the app logged no CALLED line for this start; see $LOG"
 N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
 for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep 'Microphone stream created successfully' >/dev/null && break; sleep 0.5; done
-GUARD=$(harness_guard_after_start "$LOG" "$N" "$HARNESS_DESC" "$HARNESS_SRC" 20 2>&1) || die "after Start (#293): $GUARD"
+GUARD=$(harness_guard_after_start "$LOG" "$N" "$HARNESS_DESC" "$HARNESS_SRC" 20 "$(cat "$PIDFILE")" 2>&1) || die "after Start (#293): $GUARD"
 say "the start opened the harness microphone by name, and the graph links $HARNESS_SRC into the application"
 
 say "recording; waiting for the transcript"

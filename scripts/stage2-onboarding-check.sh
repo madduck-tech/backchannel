@@ -832,13 +832,7 @@ except Exception: print("")' 2>/dev/null)
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
   # The picker's first entry is whatever the machine lists first, not the default input, so the
   # harness is picked by the description PipeWire reports, as `stage2-core-check.sh` does.
-  HARNESS_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == sys.argv[1]:
-        print(p.get("node.description") or ""); break
-' "$HARNESS_SRC")
+  HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
   [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
   TRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Microphone\"]"}')
   [ -n "$TRIG" ] || die "no microphone picker on the audio check"
@@ -853,6 +847,8 @@ for o in json.load(sys.stdin):
   case "$MIC" in *"$HARNESS_DESC"*) ;; *) die "the microphone picker holds '$MIC', not the harness; the check would hear the room" ;; esac
   audio_check_press
   OUT=$( (audio_check_require_body_answer) 2>&1 ) || FAILS+=("the check: $OUT")
+  # The harness is picked and speaking, so anything but HEARD means the check listened elsewhere (#293).
+  [ "$(audio_check_field "$AUDIO_CHECK" kind)" = HEARD ] || FAILS+=("the check did not hear the harness: $(audio_check_shown "$AUDIO_CHECK")")
   [ "$(stat -c %s "$LOG")" -ge "$OFFSET" ] || die "the log is shorter than before the relaunch: it rotated, and the relaunch's lines are lost"
   L="$PROFILE/after-relaunch.log"
   tail -c +$((OFFSET + 1)) "$LOG" > "$L"

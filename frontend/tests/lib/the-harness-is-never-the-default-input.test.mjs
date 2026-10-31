@@ -61,7 +61,8 @@ const ups = [];
 for (const [where, src] of sources) {
   if (where === TWO_CHANNEL || where === 'audio-harness.sh') continue;
   for (const { line, n } of code(src)) {
-    for (const m of line.matchAll(/audio-harness\.sh"?\s+up\b([^;|&]*)/g)) ups.push({ where: `${where}:${n}`, args: m[1] });
+    // The arguments stop at a comment too: `up  # --system-only` is a call without the flag.
+    for (const m of line.matchAll(/audio-harness\.sh"?\s+up\b([^;|&#]*)/g)) ups.push({ where: `${where}:${n}`, args: m[1] });
   }
 }
 const upWhere = (w) => ups.filter((u) => u.where.startsWith(w)).length;
@@ -109,8 +110,55 @@ const rec = seedOf('stage2-record-check.sh');
 check('3c the record pass names it', rec.writes.length === 1 && /"preferred_mic_device":sys\.argv\[2\]/.test(rec.writes[0].text) && /"\$MIC_SEED"/.test(rec.writes[0].text),
   `the record seed is ${JSON.stringify(rec.writes.map((w) => w.text))}`);
 check('3d with the suffix', rec.assigns.length === 1 && rec.assigns[0] === 'MIC_SEED="$HARNESS_DESC (input)"', `MIC_SEED is assigned as ${JSON.stringify(rec.assigns)}`);
-check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0,
-  `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s)`);
+// The program's first line is its own statement; nothing may precede `python3` on it, `&&` included.
+const recOpen = sources.get('stage2-record-check.sh').split('\n')[(rec.writes[0]?.n ?? 0) - 2];
+check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys",
+  `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), and opens with '${recOpen}'`);
+
+// 6. The guard, where each pass needs it. Without these the census above can go green on a pass that
+// moves the default: the guard after `up` is the only check that sees the default move, since a source
+// under the constant name still passes the checks around Start.
+const lineOf = (src, re) => code(src).find(({ line }) => re.test(line))?.n ?? -1;
+const stmtWith = (src, re) => statements(src).find((st) => re.test(st.text));
+const failsClosed = (st) => !!st && /\|\|\s*(die\b|\{)/.test(st.text);
+const UP = /audio-harness\.sh"?\s+up\b/;
+function wiring(name, sites) {
+  const src = sources.get(name);
+  for (const [id, what, ok] of sites) check(id, ok(src), `${name}: ${what}`);
+}
+const CORE_SRC = sources.get('stage2-core-check.sh');
+const coreClick = lineOf(CORE_SRC, /click "\$R" "Start recording"/);
+wiring('stage2-core-check.sh', [
+  ['6a the core pass checks the default after up', 'no harness_guard_after_up after its up, failing closed',
+    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP); }],
+  ['6b and checks the seed before Start', 'no harness_guard_before_start before the Start click, failing closed',
+    (src) => { const st = stmtWith(src, /harness_guard_before_start /); return failsClosed(st) && coreClick > 0 && st.n < coreClick; }],
+  ['6c and what opened after Start', "no harness_guard_after_start after the start's CALLED offset, under the driver's pid, failing closed",
+    (src) => { const st = stmtWith(src, /harness_guard_after_start /); return failsClosed(st) && /"\$DRIVER_PID"/.test(st.text) && st.n > lineOf(src, /^N=\$\(grep -n 'CALLED start_recording_with_devices_and_meeting'/); }],
+  ['6d and drops the recordings on any failure after Start', 'STARTED=1 is not set before the click, or cleanup() does not drop the recordings when it is',
+    (src) => { const body = src.slice(src.indexOf('cleanup() {'), src.indexOf('\n}\n', src.indexOf('cleanup() {')));
+      return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < coreClick && /\[ "\$PASSED" != 1 \] && \[ -n "\$STARTED" \] && \{ harness_guard_drop_recordings "\$PROFILE"/.test(body); }],
+]);
+wiring('stage2-onboarding-check.sh', [
+  ['6e the resumes mode checks the default after up', 'no harness_guard_after_up after its up, failing closed',
+    (src) => { const st = stmtWith(src, /harness_guard_after_up /); return failsClosed(st) && st.n > lineOf(src, UP); }],
+]);
+const REC_SRC = sources.get('stage2-record-check.sh');
+const recClick = lineOf(REC_SRC, /click_labelled "Start recording"/);
+wiring('stage2-record-check.sh', [
+  ['6f the record pass checks the seed before Start', 'no harness_guard_before_start before the Start click, failing closed',
+    (src) => { const st = stmtWith(src, /harness_guard_before_start /); return failsClosed(st) && recClick > 0 && st.n < recClick; }],
+  ['6g and what opened after Start', "no harness_guard_after_start after the click, under the application's pid, failing closed",
+    (src) => { const st = stmtWith(src, /harness_guard_after_start /); return failsClosed(st) && /"\$\(cat "\$PIDFILE"\)"/.test(st.text) && st.n > recClick; }],
+  ['6h and drops the recordings on any failure after Start', 'STARTED=1 is not set before the click, or the EXIT trap does not drop the recordings when it is',
+    (src) => lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < recClick
+      && /trap '[^']*"\$STARTED" = 1[^']*harness_guard_drop_recordings "\$PROFILE"[^']*' EXIT/.test(src)],
+]);
+const upEntry = stage2.find((e) => UP.test(e) && !/two-channel/.test(e));
+check('6i the record pass\'s up entry checks the default, and takes the harness down when it moved',
+  !!upEntry && upEntry.indexOf('harness_guard_after_up') > upEntry.search(/up --system-only/)
+    && /harness_guard_after_up "\$B"[^}]*\|\|\s*\{[^}]*scripts\/audio-harness\.sh down;\s*exit 1;\s*\}/.test(upEntry),
+  `gopnik.json's up entry is ${JSON.stringify(upEntry)}`);
 
 // --- the harness, run -------------------------------------------------------------------------------
 
@@ -154,10 +202,17 @@ for pid in os.listdir(LIVE):
         out.append({'id': i, 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': n['name'], 'media.class': n['class'], 'node.description': 'Backchannel'}}})
 print(json.dumps(out))
 `);
+// The metadata is kept in a file, so a write is what a later read returns, as WirePlumber's is.
 shim('pw-metadata', `
-if len(a) <= 3: print(${JSON.stringify(`update: id:0 key:'default.configured.audio.source' value:'${CONFIGURED}' type:'Spa:String:JSON'`)})
+M = os.environ['SHIM_META']
+meta = json.load(open(M))
+if len(a) >= 5:
+    meta[a[3]] = a[4]; json.dump(meta, open(M, 'w'))
+elif '-d' not in a:
+    for k in ([a[3]] if len(a) >= 4 else list(meta)):
+        if k in meta: print(f"update: id:0 key:'{k}' value:'{meta[k]}' type:'Spa:String:JSON'")
 `);
-// \`-p\` blocks, as playing a file does, and ends once its loop is killed; \`-r\` records nothing.
+// `-p` blocks, as playing a file does, and ends once its loop is killed; `-r` records nothing.
 shim('pw-cat', `
 if '-p' in a:
     parent = os.getppid()
@@ -171,7 +226,10 @@ const sample = path.join(root, 'sample.wav');
 fs.writeFileSync(sample, 'RIFF');
 const gitDir = path.join(root, 'git');
 spawnSync('git', ['init', '-q', '--bare', gitDir]);
-const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, SHIM_LOG: LOG, SHIM_LIVE: live, GIT_DIR: gitDir, XDG_STATE_HOME: path.join(root, 'state') };
+const META = path.join(root, 'meta.json');
+fs.writeFileSync(META, JSON.stringify({ 'default.configured.audio.source': CONFIGURED }));
+const configured = () => JSON.parse(read(META))['default.configured.audio.source'];
+const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, SHIM_LOG: LOG, SHIM_LIVE: live, SHIM_META: META, GIT_DIR: gitDir, XDG_STATE_HOME: path.join(root, 'state') };
 const harness = (...args) => spawnSync('bash', [path.join(SCRIPTS, 'audio-harness.sh'), ...args], { cwd: root, env, encoding: 'utf8', timeout: 60_000 });
 const calls = () => (fs.existsSync(LOG) ? read(LOG).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
@@ -197,9 +255,20 @@ for (const cycle of [1, 2]) {
 }
 check('5 two cycles, two names', names[0] && names[1] && names[0] !== names[1], `both cycles made '${names[0]}' and '${names[1]}'`);
 
+// 7. The mode the two-channel passes use still writes the default, and `down` still puts it back.
+fs.rmSync(LOG, { force: true });
+const upD = harness('up', '--sample', sample);
+const wrote = calls().filter((c) => c[0] === 'pw-metadata' && c.length >= 6 && c[4] === 'default.configured.audio.source');
+const during = configured();
+const downD = harness('down');
+check('7a the default-writing mode writes the constant source as the default', upD.status === 0 && wrote.length === 1 && during === '{"name":"backchannel_harness_src"}',
+  `up ${upD.status}, writes ${JSON.stringify(wrote)}, configured during ${during}: ${upD.stdout}${upD.stderr}`);
+check('7b and down puts the original back', downD.status === 0 && configured() === CONFIGURED,
+  `down ${downD.status}, configured after ${configured()}: ${downD.stdout}${downD.stderr}`);
+
 // Anything a shim left running is stopped, by the pids the shims wrote, and nothing else.
 for (const pid of fs.readdirSync(live)) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* gone */ } }
 fs.rmSync(root, { recursive: true, force: true });
 
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log(`ok - ${ups.length} harness ups reachable from the gate leave the default input alone, two-channel excepted; no caller names the source by its constant; the core and record passes name "$HARNESS_DESC (input)", the record pass on every run; and up --system-only then down, twice, wrote no default and made two per-run sources: ${names.join(', ')}`);
+console.log(`ok - ${ups.length} harness ups reachable from the gate leave the default input alone, two-channel excepted; no caller names the source by its constant; the core and record passes name "$HARNESS_DESC (input)", the record pass on every run; every pass checks the default after up, the seed before Start and what opened after it, and drops the recordings on a failure after Start; up --system-only then down, twice, wrote no default and made two per-run sources (${names.join(', ')}); and the default-writing mode still writes the default and puts it back`);

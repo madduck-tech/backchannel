@@ -92,7 +92,7 @@ fi
 [ -d "$CACHE/models/summary" ] || die "no summary model in $CACHE/models/summary; this pass summarises and will not download 2.7 GB inside a gate"
 [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample to play"
 
-PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""
+PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""; STARTED=""
 cleanup() {
   [ -n "$SESSION" ] && curl -s -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
   [ -n "$DRIVER_PID" ] && kill -TERM -"$DRIVER_PID" 2>/dev/null
@@ -102,6 +102,9 @@ cleanup() {
   # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
   type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
+  # From the Start click on, any failure may have recorded a microphone the guard did not prove, so the
+  # recordings go before the profile is kept (#293).
+  [ -n "$PROFILE" ] && [ "$PASSED" != 1 ] && [ -n "$STARTED" ] && { harness_guard_drop_recordings "$PROFILE" || say "the recordings in $PROFILE were NOT removed"; }
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
 }
@@ -118,13 +121,7 @@ HARNESS_UP=1
 GUARD=$(harness_guard_after_up "$DEFAULT_SRC_BEFORE" 2>&1) || die "the harness moved the default input (#293): $GUARD"
 HARNESS_SRC=$(scripts/audio-harness.sh src-name) || die "the harness names no source"
 # Its description, read from the graph: pw-loopback keeps only `Backchannel` of the one it asks for.
-HARNESS_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == sys.argv[1]:
-        print(p.get("node.description") or ""); break
-' "$HARNESS_SRC")
+HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
 [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
 MIC_SEED="$HARNESS_DESC (input)"
 # Before the application starts, so the audio check's device list contains the tone sink's monitor.
@@ -132,13 +129,8 @@ MIC_SEED="$HARNESS_DESC (input)"
 tone_sink_create
 
 # The system side is the harness's own sink, so nothing from the machine's speakers is recorded.
-SINK_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == "backchannel_harness_sink":
-        print(p.get("node.description") or ""); break
-')
+# Through the shared reader: one `json.load` of a split `pw-dump` failed entry 27 on 2026-10-31.
+SINK_DESC=$(harness_description backchannel_harness_sink) || die "the audio graph could not be read"
 [ -n "$SINK_DESC" ] || die "the harness sink is not in the graph after a successful 'up'"
 PICK="Monitor of $SINK_DESC"
 say "system audio pinned to '$PICK' — this pass records its own sample, never the room"
@@ -426,6 +418,7 @@ R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording control"
 GUARD=$(harness_guard_before_start "$APPDATA/recording_preferences.json" "$MIC_SEED" "$HARNESS_SRC" 2>&1) \
   || die "before Start (#293): $GUARD"
 BEFORE=$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)
+STARTED=1
 click "$R" "Start recording"
 await "[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='Stop recording')" \
       'the recording to start' 30
@@ -438,12 +431,12 @@ N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 |
 for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep 'Creating microphone stream: ' >/dev/null && break; sleep 0.5; done
 STARTED_MIC=$(tail -n +"$N" "$LOG" | grep -o "Creating microphone stream: [^(]*" | head -1 | sed 's/Creating microphone stream: //; s/ *$//' || true)
 say "after its CALLED line the start opened microphone '${STARTED_MIC:-<none>}'"
-[ "$STARTED_MIC" = "$HARNESS_DESC" ] || { harness_guard_drop_recordings "$PROFILE"; die "the start opened microphone '${STARTED_MIC:-<none>}', not the harness's '$HARNESS_DESC'; see $LOG"; }
-# What opened, from the log after the start, and the link that shows it did (#293). A failure here may have
-# recorded the person's own microphone, so the recordings go before the profile is kept.
+[ "$STARTED_MIC" = "$HARNESS_DESC" ] || die "the start opened microphone '${STARTED_MIC:-<none>}', not the harness's '$HARNESS_DESC'; see $LOG"
+# What opened, from the log after the start, and the link from this run's source into a capture of the
+# application under the driver that launched it, which shows it did (#293).
 for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep 'Microphone stream created successfully' >/dev/null && break; sleep 0.5; done
-GUARD=$(harness_guard_after_start "$LOG" "$N" "$HARNESS_DESC" "$HARNESS_SRC" 20 2>&1) \
-  || { harness_guard_drop_recordings "$PROFILE"; die "after Start (#293): $GUARD"; }
+GUARD=$(harness_guard_after_start "$LOG" "$N" "$HARNESS_DESC" "$HARNESS_SRC" 20 "$DRIVER_PID" 2>&1) \
+  || die "after Start (#293): $GUARD"
 say "the start opened the harness microphone by name, and the graph links $HARNESS_SRC into the application"
 RECORD_S="${BC_CORE_SECONDS:-$([ "$MODE" = long ] && echo 150 || echo 70)}"
 say "recording for ${RECORD_S}s"

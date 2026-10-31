@@ -2,18 +2,34 @@
 # harness's microphone by name. Sourced by the core pass, `onboarding resumes` and the record pass's two
 # entries. Each check prints why it failed on stderr and returns 1; the caller dies with it.
 #
+#   harness_description <src>                             the description of the node named <src>
 #   harness_effective_source                              default.audio.source's name, or nothing
 #   harness_guard_after_up <before>                       after `up`: the effective default is the one read
 #                                                         before `up`, and not empty
 #   harness_guard_before_start <prefs> <seed> <src>       before Start: the stored microphone is the seed, and
 #                                                         exactly one Audio/Source carries the harness's
 #                                                         description, the node named <src>
-#   harness_guard_after_start <log> <from-line> <desc> <src> [secs]
+#   harness_guard_after_start <log> <from-line> <desc> <src> [secs] [root-pid]
 #                                                         after Start: what the start opened, read from the
 #                                                         log after <from-line>, and a link from <src> into
-#                                                         the application within [secs]
+#                                                         the application within [secs]: a capture of a
+#                                                         process under [root-pid], when it is given
 #   harness_guard_drop_recordings <profile>               on a failure after Start: the recordings go before
-#                                                         the profile is kept
+#                                                         the profile is kept, the application's default
+#                                                         save folders under the profile's HOME included
+#
+# The graph is read through `capture-graph.py`, which reads a split `pw-dump` (two arrays, 8 samples in
+# 688 on 2026-10-31) as one graph and fails on an unreadable one.
+
+HARNESS_GUARD_GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capture-graph.py"
+
+# The description PipeWire reports for the node named <src>, or nothing; non-zero on an unreadable graph.
+# pw-loopback keeps only `Backchannel` of the one the harness asks for, so it is read, never assumed.
+harness_description() {
+  local nodes
+  nodes=$(python3 -I "$HARNESS_GUARD_GRAPH" nodes 2>/dev/null) || return 1
+  printf '%s\n' "$nodes" | awk -F'\t' -v n="$1" '$2 == n { print $4; exit }'
+}
 
 harness_effective_source() {
   pw-metadata -n default 0 default.audio.source 2>/dev/null \
@@ -46,13 +62,11 @@ except Exception: print("")' "$prefs")
     echo "the stored microphone is '$stored', not the seed '$seed'" >&2
     return 1
   fi
-  nodes=$(pw-dump 2>/dev/null | python3 -c 'import json,sys
-desc=sys.argv[1].removesuffix(" (input)")
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-for o in d:
-    p=(o.get("info") or {}).get("props") or {}
-    if p.get("media.class")=="Audio/Source" and p.get("node.description")==desc: print(p.get("node.name",""))' "$seed")
+  if ! nodes=$(python3 -I "$HARNESS_GUARD_GRAPH" nodes 2>/dev/null); then
+    echo "the graph could not be read, so nothing shows the seed names one source" >&2
+    return 1
+  fi
+  nodes=$(printf '%s\n' "$nodes" | awk -F'\t' -v d="${seed% (input)}" '$3 == "Audio/Source" && $4 == d { print $2 }')
   if [ "$(printf '%s\n' "$nodes" | grep -c .)" != 1 ]; then
     echo "$(printf '%s\n' "$nodes" | grep -c .) Audio/Source nodes carry the seed's description, not one: $(printf '%s ' $nodes)" >&2
     return 1
@@ -64,7 +78,7 @@ for o in d:
 }
 
 harness_guard_after_start() {
-  local log="$1" from="$2" desc="$3" src="$4" secs="${5:-20}" after i
+  local log="$1" from="$2" desc="$3" src="$4" secs="${5:-20}" root="${6:-}" after i
   # Here-strings, not pipes: `grep -q` closing a pipe early fails the writer under pipefail, and the
   # form is what `a-gate-oracle-reads-a-line-the-app-writes` reads as a grep of the log.
   after=$(tail -n +"$from" "$log")
@@ -85,28 +99,24 @@ harness_guard_after_start() {
   fi
   # The log names only the device asked for; the link is what shows it opened.
   for i in $(seq 1 $((secs * 4))); do
-    if pw-dump 2>/dev/null | python3 -c 'import json,sys
-src=sys.argv[1]
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(1)
-names={o["id"]:((o.get("info") or {}).get("props") or {}).get("node.name","") for o in d if str(o.get("type","")).endswith("Node")}
-for o in d:
-    if str(o.get("type","")).endswith("Link"):
-        i=o.get("info") or {}
-        if names.get(i.get("output-node-id"))==src and names.get(i.get("input-node-id"),"").startswith("cpal-pulseaudio-"): sys.exit(0)
-sys.exit(1)' "$src"; then
+    if python3 -I "$HARNESS_GUARD_GRAPH" app-linked "$src" $root 2>/dev/null; then
       return 0
     fi
     sleep 0.25
   done
-  echo "no link from '$src' into the application within ${secs}s of the start" >&2
+  echo "no link from '$src' into the application${root:+ under pid $root} within ${secs}s of the start" >&2
   return 1
 }
 
 harness_guard_drop_recordings() {
   local profile="$1"
   case "$profile" in
-    /tmp/backchannel-*) [ -d "$profile/rec" ] && rm -rf -- "$profile/rec" ;;
+    */..|*/../*) echo "refusing a profile path that climbs: $profile" >&2; return 1 ;;
+    # `$PROFILE/rec` is the seeded save folder; the other two are where the application saves when it
+    # could not read the seed (`recording_preferences.rs`, Linux), which is also when it records the
+    # default microphone.
+    /tmp/backchannel-*)
+      rm -rf -- "$profile/rec" "$profile/home/Documents/backchannel-recordings" "$profile/home/backchannel-recordings" ;;
     *) echo "refusing to remove recordings outside a gate profile: $profile" >&2; return 1 ;;
   esac
 }
