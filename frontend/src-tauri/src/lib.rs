@@ -65,6 +65,8 @@ pub mod tray;
 pub mod utils;
 #[cfg(test)]
 mod measure;
+#[cfg(test)]
+mod test_http_stub;
 
 use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
