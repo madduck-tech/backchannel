@@ -115,7 +115,9 @@ check('3d with the suffix', rec.assigns.length === 1 && rec.assigns[0] === 'MIC_
 const recLines = sources.get('stage2-record-check.sh').split('\n');
 const recOpen = recLines[(rec.writes[0]?.n ?? 0) - 2];
 const recBefore = code(recLines.slice(0, Math.max(0, (rec.writes[0]?.n ?? 0) - 2)).join('\n')).filter(({ line }) => line.trim()).pop()?.line ?? '';
-check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !/(&&|\|\||\||\\|\{)\s*$/.test(recBefore),
+// Nor may it be the body of a block whose `then`, `do`, `else` or `case` arm stands on a line of its own.
+const opensBlock = (l) => /(&&|\|\||\||\\|\{)\s*$/.test(l) || /^\s*(then|do|else)\s*$/.test(l) || /\bin\s*$/.test(l) || /^\s*[^#()]*\)\s*$/.test(l);
+check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !opensBlock(recBefore),
   `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), opens with '${recOpen}', and follows '${recBefore}'`);
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that
@@ -160,12 +162,14 @@ wiring('stage2-record-check.sh', [
     (src) => { const st = stmtWith(src, /harness_guard_before_start /); return failsClosed(st) && recClick > 0 && st.n < recClick; }],
   ['6g and what opened after Start', "no harness_guard_after_start after the click, under the application's pid, failing closed",
     (src) => { const st = stmtWith(src, /harness_guard_after_start /); return failsClosed(st) && /"\$\(cat "\$PIDFILE"\)"/.test(st.text) && st.n > recClick; }],
-  ['6h and drops the recordings on any failure after Start', "STARTED=1 is not set before the click, or the pass's one EXIT trap does not stop the application and drop the recordings when it is, with a second signal ignored",
+  ['6h and drops the recordings on any failure after Start', "STARTED=1 is not set before the click, or the pass's one EXIT trap does not stop the application and drop the recordings unless the pass passed, with INT and TERM ending the pass and a second signal ignored",
     (src) => { const traps = code(src).filter(({ line }) => /\btrap\b.*\bEXIT\b/.test(line));
       const body = src.slice(src.indexOf('on_exit() {'), src.indexOf('\n}\n', src.indexOf('on_exit() {')));
       return lineOf(src, /^STARTED=1$/) > 0 && lineOf(src, /^STARTED=1$/) < recClick
         && traps.length === 1 && traps[0].line === "trap 'on_exit $?' EXIT"
-        && /trap '' INT TERM/.test(body) && /\[ "\$STARTED" = 1 \]/.test(body)
+        && code(src).some(({ line }) => line === "trap 'exit 130' INT") && code(src).some(({ line }) => line === "trap 'exit 143' TERM")
+        && /trap '' INT TERM/.test(body) && /if \[ "\$PASSED" != 1 \] && \[ "\$STARTED" = 1 \]; then/.test(body)
+        && /\n\s*PASSED=1\n\s*exit 0\n/.test(src)
         && body.search(/kill -TERM -"\$\(cat "\$PIDFILE"\)"/) > 0 && body.search(/kill -TERM -"\$\(cat "\$PIDFILE"\)"/) < body.indexOf('harness_guard_drop_recordings "$PROFILE"'); }],
 ]);
 const upEntry = stage2.find((e) => UP.test(e) && !/two-channel/.test(e));

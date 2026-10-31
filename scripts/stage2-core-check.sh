@@ -94,7 +94,7 @@ fi
 
 PROFILE=""; SESSION=""; DRIVER_PID=""; HARNESS_UP=""; PASSED=""; GRAPH_PID=""; STARTED=""
 cleanup() {
-  # A second TERM or INT during the teardown would end the shell before the recordings are dropped.
+  # A second TERM or INT before the recordings are dropped would end the shell first.
   trap '' INT TERM
   # Bounded, since INT and TERM no longer end a hung teardown.
   [ -n "$SESSION" ] && curl -s -m 10 -X DELETE "http://127.0.0.1:$PORT/session/$SESSION" >/dev/null 2>&1
@@ -104,6 +104,9 @@ cleanup() {
   # From the Start click on, any failure may have recorded a microphone the guard did not prove, so the
   # recordings go as soon as the application can no longer write them, before the profile is kept (#293).
   [ -n "$PROFILE" ] && [ "$PASSED" != 1 ] && [ -n "$STARTED" ] && { harness_guard_drop_recordings "$PROFILE" || say "the recordings in $PROFILE were NOT removed"; }
+  # The rest of the teardown calls PipeWire with no bound, so a signal may end it again; the tone sink and
+  # the harness each have a repair of their own.
+  trap - INT TERM
   [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
   # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
   type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }

@@ -33,7 +33,24 @@ teardown() {
   [ -n "$REC" ] && kill -TERM "$REC" 2>/dev/null
 }
 trap teardown EXIT
-trap 'say "stopped by a signal: the entry, the sampler and the recorder are stopped with it"; teardown; exit 143' INT TERM
+# Stopped, it waits for the entry's own teardown, so whatever runs next does not start beside it: up to a
+# minute, then the entry's group is killed.
+stopped() {
+  trap '' INT TERM
+  say "stopped by a signal: the entry, the sampler and the recorder are stopped with it"
+  teardown
+  if [ -n "$WAITER" ]; then
+    # The entry is this script's child, so once it ends it is a zombie until reaped: `kill -0` alone would
+    # find it alive for the whole minute.
+    ended() { ! kill -0 "$WAITER" 2>/dev/null || [ "$(cut -d' ' -f3 "/proc/$WAITER/stat" 2>/dev/null)" = Z ]; }
+    for _ in $(seq 1 240); do ended && break; sleep 0.25; done
+    ended || { say "the entry did not end within a minute; killing its group"; kill -KILL -"$PASS" 2>/dev/null; }
+    wait "$WAITER" 2>/dev/null
+  fi
+  exit 143
+}
+WAITER=""
+trap stopped INT TERM
 
 pw-record --volume=0 - > /dev/null 2> "$OUT/recorder.err" &
 REC=$!

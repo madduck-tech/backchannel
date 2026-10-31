@@ -154,7 +154,7 @@ def sample(recorder, pass_pid, pattern, since=0.0, ended_seen=None):
         elif ours(pid, recorder, pass_pid, pgids):
             rec['pass_links'] += [{'into': name, 'from': f} for f in into]
         elif pid is not None and not os.path.exists(f'/proc/{pid}') and now - ended_seen.setdefault((node.get('id'), tg.props(node).get('object.serial'), pid), now) <= ENDED_GRACE:
-            rec['ended'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
+            rec['ended'].append({'node': node.get('id'), 'serial': tg.props(node).get('object.serial'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
         else:
             rec['foreign'].append({'node': node.get('id'), 'name': name, 'pid': pid, 'binary': who.get('binary')})
     return rec
@@ -274,7 +274,7 @@ def cmd_check(path, systems, default_sink, recording):
     ended = {}
     for r in samples:
         for e in r.get('ended', []):
-            ended.setdefault(e['node'], [r['t'], r['t'], e])[1] = r['t']
+            ended.setdefault((e['node'], e.get('serial'), e.get('pid')), [r['t'], r['t'], e])[1] = r['t']
     for first, last, e in ended.values():
         if last - first > ENDED_GRACE:
             bad.append(f"t={first}: node {e['node']} ({e['name']}, pid {e['pid']}) was read as ended for {last - first:.2f} s, longer than an exit takes")

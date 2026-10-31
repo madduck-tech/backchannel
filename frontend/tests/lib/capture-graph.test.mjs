@@ -64,6 +64,7 @@ const record = () => good().map((r) => ({ ...r, app_links: r.app_links.map((l) =
 held('13 the record pass\'s system side is the default sink of that sample', check(record(), '--system-default-sink', '--recording'));
 broken('13b a sink that is not the sample\'s default', check(at(record(), 3, { 'default.audio.sink': 'alsa_output.hdmi' }), '--system-default-sink', '--recording'), /is linked from alsa_output\.speakers, neither/);
 broken('20 a node read as ended for longer than an exit takes', check(good().map((r) => ({ ...r, ended: [{ node: 77, name: 'Firefox', pid: 160, binary: 'firefox' }] })), ...CORE), /node 77 \(Firefox, pid 160\) was read as ended for 5\.00 s/);
+held('20c two objects under one id, each ended for a moment', check(at(at(good(), 1, { ended: [{ node: 77, serial: 900, name: 'pw-cat', pid: 160 }] }), 4, { ended: [{ node: 77, serial: 901, name: 'pw-cat', pid: 161 }] }), ...CORE));
 held('20b one read as ended for a moment', check(at(at(good(), 2, { ended: [{ node: 77, name: 'pw-cat', pid: 160 }] }), 3, { ended: [{ node: 77, name: 'pw-cat', pid: 160 }] }), ...CORE));
 broken('21 the pass\'s own capture on the person\'s microphone', check(at(good(), 1, { pass_links: [{ into: 'pw-cat', from: MIC }] }), ...CORE), /the pass's own capture pw-cat is linked from alsa_input\.builtin/);
 held('21b and on the harness source', check(at(good(), 1, { pass_links: [{ into: 'pw-cat', from: SRC }] }), ...CORE));
@@ -111,9 +112,18 @@ if (late.status !== 0 || lateEnded.length || JSON.stringify([...lateForeign].sor
 }
 if (r.status !== 0 || JSON.stringify(JSON.parse(r.stdout || 'null')) !== JSON.stringify([[Number(dead)], [Number(live)]])) failures.push(`19 an exited capture is not told from a live foreign one: exit ${r.status}, [ended, foreign] = ${r.stdout.trim()} (dead ${dead}, live ${live}) ${r.stderr}`);
 // The grace is the object's, not the id's: PipeWire reuses ids, and a new object under an old id has just
-// appeared.
-fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify([meta, input(50, dead, 901)])}\nX\n`, { mode: 0o755 });
-r = py(`rec = cg.sample(1, ${passRoot}, None, 0.0, {(50, None, ${dead}): time.monotonic() - 5}); print(json.dumps([len(rec['ended']), len(rec['foreign'])]))`);
+// appeared. Two samples through the sampler's own bookkeeping: an object seen ended 5 s ago, then another
+// object under its id.
+const G = path.join(root, 'graph.json');
+fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat ${JSON.stringify(G)}\n`, { mode: 0o755 });
+r = py(`G = ${JSON.stringify(G)}
+es = {}
+open(G, 'w').write(json.dumps(${JSON.stringify([meta, input(50, dead, 900)])}))
+cg.sample(1, ${passRoot}, None, 0.0, es)
+for k in es: es[k] -= 5
+open(G, 'w').write(json.dumps(${JSON.stringify([meta, input(50, dead, 901)])}))
+rec = cg.sample(1, ${passRoot}, None, 0.0, es)
+print(json.dumps([len(rec['ended']), len(rec['foreign'])]))`);
 if (r.status !== 0 || r.stdout.trim() !== '[1, 0]') failures.push(`19c a new object under a reused id inherited an old one's grace: exit ${r.status}, [ended, foreign] = ${r.stdout.trim()} ${r.stderr}`);
 
 // The pass's own capture is sampled with where it is linked from, and whether the configured default

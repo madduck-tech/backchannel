@@ -120,8 +120,19 @@ const passGroup = Number(fs.existsSync(path.join(out7, 'pass.pgid')) ? fs.readFi
 spawnSync('sleep', ['1']);
 const groupAlive = passGroup > 0 && spawnSync('bash', ['-c', `kill -0 -${passGroup} 2>/dev/null`]).status === 0;
 const recorders = fs.readdirSync(live).filter((f) => f.startsWith('rec-') && fs.existsSync(`/proc/${f.slice(4)}`));
-check('7 a stopped watch stops what it started', /rc=143/.test(r7.stdout) && passGroup > 0 && !groupAlive && recorders.length === 0 && !fs.existsSync(mark(7)),
-  `${r7.stdout.trim()}, pass group ${passGroup} alive ${groupAlive}, recorders left ${JSON.stringify(recorders)}, went on ${fs.existsSync(mark(7))}: ${r7.stderr}`);
+// The sampler, by its command line naming this watch's output, read from /proc.
+const samplers = fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).filter((d) => {
+  try { const c = fs.readFileSync(`/proc/${d}/cmdline`, 'utf8'); return c.includes('capture-graph.py') && c.includes(out7); } catch { return false; }
+});
+check('7 a stopped watch stops what it started', /rc=143/.test(r7.stdout) && passGroup > 0 && !groupAlive && recorders.length === 0 && samplers.length === 0 && !fs.existsSync(mark(7)),
+  `${r7.stdout.trim()}, pass group ${passGroup} alive ${groupAlive}, recorders left ${JSON.stringify(recorders)}, samplers left ${JSON.stringify(samplers)}, went on ${fs.existsSync(mark(7))}: ${r7.stderr}`);
+for (const pid of samplers) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* gone */ } }
+
+// 8. ... and returns only once the entry's own teardown is done, so the next entry never starts beside it.
+const out8 = path.join(root, 'out-teardown');
+const r8 = spawnSync('bash', ['-c', `bash ${JSON.stringify(WATCH)} ${JSON.stringify(out8)} -- "trap 'sleep 2; touch ${mark(8)}' EXIT; sleep 20" & w=$!; sleep 2.5; kill -TERM $w; wait $w; echo "rc=$?"; [ -e ${JSON.stringify(mark(8))} ] && echo torn-down-first`],
+  { env, encoding: 'utf8', timeout: 40_000, cwd: root });
+check('8 a stopped watch waits for the entry\'s teardown', /rc=143/.test(r8.stdout) && /torn-down-first/.test(r8.stdout), `${r8.stdout.trim()}: ${r8.stderr}`);
 
 // 6. The runner watches the entries that bring the harness up, found by what they run.
 const p = spawnSync('python3', ['-I', path.join(repo, 'scripts', 'stage2-watched.py'), root, '--plan'], { encoding: 'utf8' });
@@ -146,7 +157,7 @@ print(json.dumps([[l, c] for l, c, *_ in w.plan(cmds) if '-' in l]))`], { encodi
 const [jl, jc] = joined.status === 0 ? (JSON.parse(joined.stdout)[0] ?? []) : [];
 const lines = (jc ?? '').split('\n');
 check('6c the record pass runs under a trap holding its own tail', lines.length === 3 && /harness_guard_after_up/.test(lines[0])
-    && /^trap 'APID=\$\(cat "\$A2\/pid" 2>\/dev\/null\);.*scripts\/audio-harness\.sh down' EXIT$/.test(lines[1]) && /stage2-record-check\.sh/.test(lines[2]),
+    && /^trap 'trap "" INT TERM; APID=\$\(cat "\$A2\/pid" 2>\/dev\/null\);.*scripts\/audio-harness\.sh down' EXIT$/.test(lines[1]) && /stage2-record-check\.sh/.test(lines[2]),
   `exit ${joined.status}, ${jl}: ${JSON.stringify(lines)} ${joined.stderr}`);
 
 for (const pid of strays) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
@@ -155,4 +166,4 @@ for (const f of fs.readdirSync(live)) {
 }
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');
+console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the entry has torn down; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');

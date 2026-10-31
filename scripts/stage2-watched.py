@@ -10,7 +10,8 @@ the wrong entry. Every other entry runs as the gate runs it.
 
 - **The record pass is two entries,** the harness's `up` and the pass. They run in one shell, the first
   unchanged, the second unchanged under `trap '<its own tail, from APID= to down>' EXIT`, so a TERM from
-  the watch still stops its application and runs `down`. Its application leads a group of its own, found
+  the watch still stops its application and runs `down`; the trap ignores INT and TERM, so a second
+  signal does not cut that `down` short. Its application leads a group of its own, found
   by the pid file the pass writes.
 - **The system device each check allows:** the harness sink and the tone sink in the core passes, the
   default sink of each sample in the record pass, none in `resumes`. The core and record passes record,
@@ -52,7 +53,7 @@ def plan(cmds):
         if i == up[0]:
             continue
         if i == rec[0]:
-            out.append((f'{n - 1:02d}-{n:02d}', f"{e28}\ntrap '{tail}' EXIT\n{e29}", RECORD, RECORD_PIDS))
+            out.append((f'{n - 1:02d}-{n:02d}', f"{e28}\ntrap 'trap \"\" INT TERM; {tail}' EXIT\n{e29}", RECORD, RECORD_PIDS))
         elif re.search(r'stage2-onboarding-check\.sh "\$APP" resumes$', c):
             out.append((f'{n:02d}', c, [], None))
         elif re.search(r'stage2-core-check\.sh "\$APP" \w+$', c):

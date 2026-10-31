@@ -46,14 +46,18 @@ die() { printf 'stage2-record-check: %s\n' "$*" >&2; exit 1; }
 # From the Start click on, a failure may have recorded a microphone, so the recordings go before the
 # profile is kept (#293): the application's group first, so nothing writes after them, and with INT and
 # TERM ignored, so a second signal cannot cut the drop short.
-STARTED=0
+# Keyed on whether the pass passed, not on `$?`: when bash ends on a signal the EXIT trap sees the last
+# command's status, 0 after a group TERM (round 4, measured). INT and TERM exit with their own status, so a
+# Ctrl-C ends the pass instead of returning to it.
+STARTED=0; PASSED=0
 on_exit() {
   local rc=$1
   trap '' INT TERM
   # Not under `-e`: a group TERM already emptied makes the KILL fail, and errexit would end the trap there,
   # before the drop (round 3, measured with a stand-in for the application).
   set +e
-  if [ "$rc" -ne 0 ] && [ "$STARTED" = 1 ]; then
+  [ "$PASSED" = 1 ] || [ "$rc" -ne 0 ] || rc=1
+  if [ "$PASSED" != 1 ] && [ "$STARTED" = 1 ]; then
     if [ -s "$PIDFILE" ]; then
       kill -TERM -"$(cat "$PIDFILE")" 2>/dev/null
       sleep 2
@@ -64,6 +68,8 @@ on_exit() {
   exit "$rc"
 }
 trap 'on_exit $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 tree() {
   orca-ide computer get-app-state --app "pid:$(cat "$PIDFILE")" --no-screenshot --json 2>/dev/null \
@@ -214,6 +220,7 @@ while [ $SECONDS -lt $deadline ]; do
       say "cached models to $CACHE — later runs will not download them"
     fi
     printf '%s' "$text" | grep -io -- "${EXPECTED[0]}[^,]*" | head -2 | sed 's/^/    /'
+    PASSED=1
     exit 0
   fi
   sleep 10
