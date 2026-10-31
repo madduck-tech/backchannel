@@ -1047,6 +1047,8 @@ mod a_failed_download_says_why {
     /// - `with_read_timeout` and `with_connect_timeout` only as the setters' own names.
     /// - Exactly one `tokio::time::timeout`, the loop's, `tokio::time::timeout(self.chunk_gap,
     ///   stream.next())`, inside `download_inner`.
+    /// - `client()` builds the client as `download_client(self.read_timeout, self.connect_timeout,
+    ///   self.system_proxy)`, the one call besides the definition.
     /// - Every `select`, `sleep` and `interval` inside `commit_download`'s one `tokio::select!` or its
     ///   one 100 ms `tokio::time::sleep`, for its lock.
     ///
@@ -1116,6 +1118,12 @@ mod a_failed_download_says_why {
             "engine.rs bounds a download other than by its three allowed timers, the headers' H, the connection's C and the loop's G (#298, #310): {refused:#?}"
         );
         assert_eq!(pins, 1, "engine.rs has {pins} loop timers of the pinned text `{PIN}` inside download_inner, not one");
+        // And the call that hands each field to its own timer, pinned by its text: the fields are read
+        // by #310 item 7, and this is what makes them the values the client is built with.
+        const CALL: &str = "download_client(self.read_timeout,self.connect_timeout,self.system_proxy)";
+        let client = body_of(&code, "fn client(");
+        assert!(squash(&code[client.clone()]).contains(CALL), "client() does not build the download's client as `{CALL}`: {}", context(client.start));
+        assert_eq!(squash(&code).matches("download_client(").count(), 2, "download_client is called other than once, from client(), beside its definition");
 
         const SELECT: &str = "tokio::select!";
         const SLEEP: &str = "tokio::time::sleep(std::time::Duration::from_millis(100))";
