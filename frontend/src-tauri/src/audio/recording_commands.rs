@@ -254,40 +254,28 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Create new recording manager
     let mut manager = RecordingManager::new();
 
-    // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name, save_folder) =
-        match super::recording_preferences::load_recording_preferences(&app).await {
-            Ok(prefs) => {
-                info!("📋 Loaded recording preferences: auto_save={}, save_folder={:?}, preferred_mic={:?}, preferred_system={:?}",
-                      prefs.auto_save, prefs.save_folder, prefs.preferred_mic_device, prefs.preferred_system_device);
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device, Some(prefs.save_folder))
-            }
-            Err(e) => {
-                warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None, None)
-            }
-        };
-
     // The devices stored at this moment, on every route (#242). Default is the default device; a
     // named microphone that is missing fails the start rather than recording another (#9); a named
     // system device that is missing leaves the system side out, with a warning.
-    let devices = match super::start_devices::resolve(
-        preferred_mic_name.as_deref(),
-        preferred_system_name.as_deref(),
+    let super::start_devices::Start { devices, auto_save, save_folder } = match super::start_devices::from_store(
+        &app,
+        std::path::Path::new(super::recording_preferences::PREFERENCES_STORE),
         parse_audio_device,
         default_input_device,
         default_output_device,
-    ) {
-        Ok(devices) => devices,
+    )
+    .await
+    {
+        Ok(start) => start,
         Err(e) => {
             error!("❌ {}", e);
             return Err(fail_start(&app, e));
         }
     };
-    info!("✅ Using microphone: '{}' (preference: {:?})", devices.microphone.name, preferred_mic_name);
+    info!("✅ Using microphone: '{}'", devices.microphone.name);
     match &devices.system {
-        Some(device) => info!("✅ Using system audio: '{}' (preference: {:?})", device.name, preferred_system_name),
-        None => info!("ℹ️ No system audio for this recording (preference: {:?})", preferred_system_name),
+        Some(device) => info!("✅ Using system audio: '{}'", device.name),
+        None => info!("ℹ️ No system audio for this recording"),
     }
     if let Some(warning) = &devices.warning {
         warn!("⚠️ {}", warning);

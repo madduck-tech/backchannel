@@ -40,15 +40,23 @@ function splitTop(s) {
   return out.map((p) => p.trim()).filter(Boolean);
 }
 
-/** Every command function: its name, the keys it accepts, and where it is. */
+/** Every command function: its name, the keys it accepts, and where it is. An attribute this cannot
+ * follow to its function is in `unparsed`, so a form it does not know fails the census rather than
+ * leaving the command out of it. */
 export function commandSignatures() {
   const commands = new Map();
+  commands.unparsed = [];
   for (const f of walk(rustRoot).filter((f) => f.endsWith('.rs'))) {
     const text = fs.readFileSync(f, 'utf8');
     for (const m of text.matchAll(/#\[(?:tauri::)?command(\s*\(([^)]*)\))?\]/g)) {
       const after = text.slice(m.index + m[0].length);
-      const fn = after.match(/^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^{(]*>)?\s*\(/);
-      if (!fn) continue;
+      // Other attributes and comments may sit between the attribute and the function: a doc comment
+      // after `#[command]` hid `transcribe_get_current_model` from the first version of this census.
+      const fn = after.match(/^\s*(?:(?:#\[[^\]]*\]|\/\/[^\n]*)\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^{(]*>)?\s*\(/);
+      if (!fn) {
+        commands.unparsed.push(`${path.relative(root, f)}:${text.slice(0, m.index).split('\n').length}`);
+        continue;
+      }
       // The parameter list, bracket-balanced from the opening parenthesis.
       let i = fn.index + fn[0].length; let depth = 1; const start = i;
       while (depth > 0 && i < after.length) { if (after[i] === '(') depth++; if (after[i] === ')') depth--; i++; }
@@ -99,6 +107,7 @@ const bare = [...commands.values()].length;
 test(`every invoke names a command, and every key it sends names a parameter (${calls.length} calls, ${bare} commands)`, () => {
   assert.ok(calls.length >= 200, `only ${calls.length} invoke calls parsed`);
   assert.ok(commands.size >= 120, `only ${commands.size} commands parsed`);
+  assert.deepEqual(commands.unparsed, [], 'command attributes this census could not follow to their function');
   const unknown = calls.filter((c) => c.command && !commands.has(c.command)).map((c) => `${c.at}: ${c.command}`);
   assert.deepEqual(unknown, [], 'calls naming a command that does not exist');
   const unnamed = calls.filter((c) => !c.command).map((c) => c.at);
