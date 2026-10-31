@@ -16,6 +16,12 @@
 //     the adversary's round 2). Pid 1 is anybody else.
 //   - **`pw-dump` can print two arrays** when the graph changes while it reads (one sample in 39 across
 //     the first press). The second is an update, and `info: null` removes an object.
+//
+// It must not hang (#294). On CI one run of it held the step until the job was cancelled: the stub
+// truncated its counter before writing it, the wrapper read it empty, raised and died without stopping
+// `watch`, and `watch` held `spawnSync`'s pipes. So the stub writes its counter whole; the wrapper reads
+// an empty one as "not yet", stops `watch` in a `finally` with a bounded wait, and keeps `watch` off its
+// pipes; Node kills a `watch` a dead wrapper left; and each case's runs are bounded, failing by name.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,6 +34,10 @@ const TOOL = path.join(repo, 'scripts', 'lib', 'tone-graph.py');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tone-graph-'));
 
 const SINK = 50;
+// Above the wrapper's own 30 s deadline plus `watch`'s bounded exit, so even 13 cases at the bound end
+// inside #268's 480 s for one file.
+const CASE_TIMEOUT_MS = 35_000;
+const WATCH_EXIT_S = 2;
 const ROOT = process.pid;
 const descendant = spawn('sleep', ['120'], { stdio: 'ignore' });
 const OURS = descendant.pid;
@@ -57,27 +67,72 @@ function judge(name, graphs) {
 import json, os, sys
 graphs = json.load(open(${JSON.stringify(seq)}))
 n = int(open(${JSON.stringify(counter)}).read()) if os.path.exists(${JSON.stringify(counter)}) else 0
-open(${JSON.stringify(counter)}, 'w').write(str(n + 1))
+# Whole or not at all: a reader never sees it truncated (#294).
+open(${JSON.stringify(counter + '.tmp')}, 'w').write(str(n + 1))
+os.replace(${JSON.stringify(counter + '.tmp')}, ${JSON.stringify(counter)})
 g = graphs[min(n, len(graphs) - 1)]
 if g == 'fail': sys.exit(3)
 sys.stdout.write(g if isinstance(g, str) else json.dumps(g))
 `, { mode: 0o755 });
   const out = path.join(dir, `${name}.jsonl`);
+  const watchPid = path.join(dir, `${name}.watch-pid`);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
   // Stopped once every graph has been served, counted by the stub, not timed: a slow machine takes
   // fewer samples in a fixed time, and a case would then pass without its second graph being seen.
+  // `watch` writes to a file of its own, not to this `spawnSync`'s pipes, which a `watch` left running
+  // would hold open for ever; and the wrapper stops it in a `finally`, SIGTERM included.
   const child = spawnSync('python3', ['-I', '-c', `
 import os, signal, subprocess, sys, time
-p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}])
-served = lambda: int(open(${JSON.stringify(counter)}).read()) if os.path.exists(${JSON.stringify(counter)}) else 0
-deadline = time.monotonic() + 30
-while served() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
-p.send_signal(signal.SIGTERM); p.wait()
+def stop(*_): raise SystemExit(5)
+signal.signal(signal.SIGTERM, stop)
+with open(${JSON.stringify(out + '.log')}, 'w') as log:
+    p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+open(${JSON.stringify(watchPid)}, 'w').write(str(p.pid))
+def served():
+    try:
+        return int(open(${JSON.stringify(counter)}).read())
+    except (OSError, ValueError):
+        return 0  # not written yet
+try:
+    deadline = time.monotonic() + 30
+    while served() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
+finally:
+    p.send_signal(signal.SIGTERM)
+    try:
+        p.wait(timeout=${WATCH_EXIT_S})
+    except subprocess.TimeoutExpired:
+        p.kill(); p.wait()
 sys.exit(0 if served() >= ${graphs.length} else 4)
-`], { env });
-  assert.equal(child.status, 0, String(child.stderr));
-  const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8' });
+`], { env, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  killLeftWatch(watchPid);
+  if (child.error || child.status !== 0) throw new Error(`${name}: the wrapper ${child.error ? `${child.error.code} after ${CASE_TIMEOUT_MS} ms` : `exited ${child.status}`}: ${child.stderr}`);
+  const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  if (r.error) throw new Error(`${name}: judge ${r.error.code} after ${CASE_TIMEOUT_MS} ms`);
   return { code: r.status, line: r.stdout.trim() };
+}
+
+/** A wrapper that died without its `finally` (CI's shape) leaves `watch` running: kill it by its pid,
+ *  once its command line shows it is this case's `watch` and not a pid reused since. */
+function killLeftWatch(file) {
+  let pid;
+  try {
+    pid = Number(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return;
+  }
+  let cmd = '';
+  try {
+    cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'latin1');
+  } catch {
+    return; // gone
+  }
+  if (cmd.includes('tone-graph.py\0watch\0')) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // gone meanwhile
+    }
+  }
 }
 
 const cases = [
@@ -98,12 +153,21 @@ const cases = [
 ];
 
 const failures = [];
-for (const [name, graphs, code, line] of cases) {
-  const got = judge(name.replace(/\W+/g, '-'), graphs);
-  if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
+try {
+  for (const [name, graphs, code, line] of cases) {
+    let got;
+    try {
+      got = judge(name.replace(/\W+/g, '-'), graphs);
+    } catch (e) {
+      failures.push(e.message);
+      continue;
+    }
+    if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
+  }
+} finally {
+  descendant.kill();
+  fs.rmSync(dir, { recursive: true, force: true });
 }
-descendant.kill();
-fs.rmSync(dir, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 // Sanity: the tool is the one the pass runs.
 assert.match(execFileSync('grep', ['-c', 'scripts/lib/tone-graph.py', path.join(repo, 'scripts', 'stage2-core-check.sh')], { encoding: 'utf8' }), /^[1-9]/);
