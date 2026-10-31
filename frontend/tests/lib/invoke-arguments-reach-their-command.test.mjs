@@ -71,13 +71,27 @@ export function commandSignatures() {
   return commands;
 }
 
-/** Every invoke call: the command it names and the top-level keys of its argument object. */
+/** The names `invoke` is imported under in a file: `invoke` itself, and any `invoke as <alias>`. */
+function invokeNames(sf) {
+  const names = new Set();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || st.moduleSpecifier.text !== '@tauri-apps/api/core') continue;
+    const b = st.importClause?.namedBindings;
+    if (b && ts.isNamedImports(b)) for (const el of b.elements) if ((el.propertyName ?? el.name).text === 'invoke') names.add(el.name.text);
+  }
+  return names;
+}
+
+/** Every invoke call: the command it names and the top-level keys of its argument object. A call is found
+ * under whatever name its file imports `invoke` as, not under a list of names. */
 export function invokeCalls(files = sourceFiles()) {
   const calls = [];
   for (const f of files.filter((f) => /\.(ts|tsx)$/.test(f))) {
     const sf = ts.createSourceFile(f, fs.readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true, f.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    // A dynamic `await import('@tauri-apps/api/core')` destructures `invoke` by its own name.
+    const names = new Set(['invoke', ...invokeNames(sf)]);
     const visit = (node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ['invoke', 'invokeTauri'].includes(node.expression.text)) {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.has(node.expression.text)) {
         const [first, second] = node.arguments;
         const line = sf.getLineAndCharacterOfPosition(node.getStart()).line + 1;
         if (first && (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first))) {
@@ -112,6 +126,8 @@ test(`every invoke names a command, and every key it sends names a parameter (${
   assert.deepEqual(unknown, [], 'calls naming a command that does not exist');
   const unnamed = calls.filter((c) => !c.command).map((c) => c.at);
   assert.deepEqual(unnamed, [], 'calls whose command is not a literal, which this census cannot check');
+  const opaque = calls.filter((c) => c.command && c.opaque).map((c) => `${c.at}: ${c.command}`);
+  assert.deepEqual(opaque, [], 'calls whose arguments are not an object literal of named keys (a variable, a spread), which this census cannot check');
   const stray = calls.filter((c) => c.command && commands.has(c.command)).flatMap((c) => {
     const cmd = commands.get(c.command);
     return c.keys.filter((k) => !cmd.keys.has(k)).map((k) => `${c.at}: ${c.command} receives '${k}', which it would drop; it takes ${[...cmd.keys].map((x) => `'${x}'`).join(', ') || 'nothing'} (${cmd.snake ? 'snake_case' : 'camelCase'}, ${cmd.where})`);

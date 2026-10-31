@@ -73,6 +73,12 @@ pub async fn lookup(name: String) -> Result<AudioDevice> {
     let device = parse_audio_device(&name)?;
     if opens_by_name(&device.device_type, get_current_backend(), Platform::CURRENT) {
         get_device_and_config(&device).await?;
+    } else if let Ok(default) = super::default_output_device() {
+        // The tap records the default output whatever was picked: say so when that is not the pick,
+        // the substitution the product owner asked to be logged. Read from source; never run on macOS.
+        if default.name != device.name {
+            warn!("⚠️ The system audio device '{}' is not the default output; the Core Audio tap records the default output, '{}'", name, default.name);
+        }
     }
     Ok(device)
 }
@@ -239,14 +245,19 @@ mod tests {
     #[ignore]
     async fn the_start_lookup_refuses_a_device_that_is_not_there() {
         crate::audio::devices::host::tests::use_the_real_sound_server();
-        let gone = "Backchannel no such device 7f3e9c (input)";
-        assert!(crate::audio::devices::parse_audio_device(gone).is_ok(), "the name does not even parse, so this proves nothing about presence");
-        let e = lookup(gone.to_string()).await.expect_err("a device nothing carries was found");
-        println!("refused: {e}");
-        let default = crate::audio::default_input_device().expect("this machine has no default input; the positive half cannot run");
-        let name = format!("{} (input)", default.name);
-        lookup(name.clone()).await.unwrap_or_else(|e| panic!("the default input's own name, {name}, was refused: {e}"));
-        println!("found: {name}");
+        // Both kinds: a system device is found by another path on Linux, a monitor among the inputs.
+        for kind in ["input", "output"] {
+            let gone = format!("Backchannel no such device 7f3e9c ({kind})");
+            assert!(crate::audio::devices::parse_audio_device(&gone).is_ok(), "{gone} does not even parse, so this proves nothing about presence");
+            let e = lookup(gone.clone()).await.expect_err("a device nothing carries was found");
+            println!("refused: {gone}: {e}");
+        }
+        let input = crate::audio::default_input_device().expect("this machine has no default input; the positive half cannot run");
+        let output = crate::audio::default_output_device().expect("this machine has no default output; the positive half cannot run");
+        for name in [format!("{} (input)", input.name), format!("{} (output)", output.name)] {
+            lookup(name.clone()).await.unwrap_or_else(|e| panic!("the default device's own name, {name}, was refused: {e}"));
+            println!("found: {name}");
+        }
     }
 
     /// The start as the app makes it, over a store on disk: a mock app with the store plugin, and

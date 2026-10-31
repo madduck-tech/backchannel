@@ -98,12 +98,8 @@ say "mode $MODE: microphone plays $(basename "$MIC_SAMPLE") (${MIC_WORDS[*]}), s
 # The sink whose monitor will be picked for system audio.
 SEEDED=""
 if [ "$MODE" = changed ]; then
+  # The sinks are made after `trap cleanup EXIT`, below, so a failure making B still removes A.
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/gate-sinks.sh"
-  gate_sinks_create
-  TARGET_SINK=$GATE_SINK_B
-  PICK="Monitor of $GATE_DESC_B"
-  SEEDED="Monitor of $GATE_DESC_A (output)"
-  say "monitor A '${SEEDED% (output)}' is stored before launch; monitor B '$PICK' is picked in session"
 else
   read -r TARGET_SINK TARGET_DESC <<<"$(pw-dump | python3 -c '
 import json, sys
@@ -116,8 +112,10 @@ speaker = next((s for s in sinks if "Speaker" in s[1]), None) or (sinks[0] if si
 print(speaker[0], "|".join(speaker[1].split()) if speaker else "")')"
   [ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
   PICK="Monitor of ${TARGET_DESC//|/ }"
+  # These modes play into a real sink and record its monitor (#30), so a profile of theirs can hold
+  # whatever else played there. It is never kept, passed or not.
+  REAL_OUTPUT_RECORDED=1
 fi
-say "system audio will be '$PICK' (playing into $TARGET_SINK)"
 
 PROFILE=""; PLAYER=""; PASSED=""; HARNESS_UP=""; PGIDFILE=""
 cleanup() {
@@ -140,6 +138,15 @@ cleanup() {
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-two-channel: profile kept: %s\n' "$PROFILE" >&2; fi
 }
 trap cleanup EXIT
+
+if [ "$MODE" = changed ]; then
+  gate_sinks_create
+  TARGET_SINK=$GATE_SINK_B
+  PICK="Monitor of $GATE_DESC_B"
+  SEEDED="Monitor of $GATE_DESC_A (output)"
+  say "monitor A '${SEEDED% (output)}' is stored before launch; monitor B '$PICK' is picked in session"
+fi
+say "system audio will be '$PICK' (playing into $TARGET_SINK)"
 
 # --- the microphone side: the harness's virtual source, made the default input ----------
 scripts/audio-harness.sh down >/dev/null 2>&1 || true
@@ -264,6 +271,9 @@ start_oracles() {  # <which start> <the CALLED count before it>
   [ "$MIC_OPENED" = "$HARNESS_DESC" ] || fail_or_record "$which: after its CALLED line the app opened microphone '${MIC_OPENED:-<none>}', not the harness's '$HARNESS_DESC'. If it is the real device, the default-input swap did not take; see $LOG"
   SYS_OPENED=$(printf '%s\n' "$after" | grep -o "Creating system audio stream: .* (backend" | head -1 | sed 's/^Creating system audio stream: //; s/ (backend$//' || true)
   say "$which: the app opened system audio '${SYS_OPENED:-<none>}'"
+  if [ "$MODE" = changed ] && [ "$SYS_OPENED" != "Monitor of $GATE_DESC_A" ] && [ "$SYS_OPENED" != "Monitor of $GATE_DESC_B" ]; then
+    REAL_OUTPUT_RECORDED=1
+  fi
   [ "$SYS_OPENED" = "$PICK" ] || { fail_or_record "$which: after its CALLED line the app opened system audio '${SYS_OPENED:-<none>}', not the device picked, '$PICK'"; return 0; }
   # The Creating line is written before the device is opened; the line after it says whether it was.
   rest=$(printf '%s\n' "$after" | sed -n '/Creating system audio stream: /,$p')
@@ -302,6 +312,36 @@ command_start() {  # <meeting name> <what this start is, for the messages>
 try: print(json.load(sys.stdin).get("value"))
 except Exception: print("")')
   [ "$answer" = RESOLVED ] || fail_or_record "$2 was refused: '${answer:-<no answer>}'"
+}
+
+# What plays on the default output, by application, or why that cannot be read. A start in `changed`
+# mode that opened the default output's monitor, by design in step f or by a defect before it, records
+# everything listed here; so each start refuses to run while it is not empty. A graph with no default
+# sink fails closed: nothing can be shown silent there.
+default_output_players() {
+  pw-dump | python3 -c 'import json,sys
+d=json.load(sys.stdin); nodes={o["id"]:o for o in d if o.get("type","").endswith("Node")}
+sink=None
+for o in d:
+    if o.get("type","").endswith("Metadata") and ((o.get("props") or {}).get("metadata.name")=="default"):
+        for m in o.get("metadata") or []:
+            if m.get("key")=="default.audio.sink": sink=(m.get("value") or {}).get("name")
+sid=next((i for i,o in nodes.items() if ((o.get("info") or {}).get("props") or {}).get("node.name")==sink), None)
+if sid is None:
+    print("(no default sink in the graph, so nothing shows it silent)"); sys.exit()
+out=[]
+for o in d:
+    if o.get("type","").endswith("Link"):
+        inf=o.get("info") or {}
+        if inf.get("input-node-id")==sid:
+            p=((nodes.get(inf.get("output-node-id")) or {}).get("info") or {}).get("props") or {}
+            if str(p.get("media.class","")).startswith("Stream/Output"): out.append(p.get("application.name") or p.get("node.name") or "?")
+print(", ".join(sorted(set(out))))' || echo "(the graph could not be read)"
+}
+refuse_if_the_default_output_plays() {  # <which start>
+  local playing
+  playing=$(default_output_players)
+  [ -z "$playing" ] || die "something plays on the default output ($playing); $1 could record it, so the pass refuses to make it"
 }
 
 # --- pick the system-audio monitor through the dropdown ----------------------------------
@@ -378,6 +418,7 @@ R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording button"
 LOG=$(ls -t "$APPDATA"/logs/*.log 2>/dev/null | head -1 || true)
 [ -n "$LOG" ] || die "no application log under $APPDATA/logs"
 if [ "$MODE" = changed ] && gate_sink_is_default "$GATE_SINK_B"; then die "monitor B's sink is the default output, so a both-Default start would open it too; this run cannot judge"; fi
+[ "$MODE" = changed ] && refuse_if_the_default_output_plays "the start"
 BEFORE=$(called_count)
 click "$R" "Start recording"
 # A click that landed is a Stop control on screen. Everything below this line reads the application's
@@ -504,6 +545,7 @@ if [ "$MODE" = changed ]; then
         'the first meeting to stop' 30
   await_saved 'the first meeting'
   if gate_sink_is_default "$GATE_SINK_B"; then die "monitor B's sink became the default output before the second start; this run cannot judge it"; fi
+  refuse_if_the_default_output_plays "the second start, by the tray's route"
   BEFORE=$(called_count)
   js '"sessionStorage.setItem(\"autoStartRecording\", \"true\"); return true"' >/dev/null
   js '"window.location.assign(\"/\"); return true"' >/dev/null || true
@@ -524,6 +566,7 @@ if [ "$MODE" = changed ]; then
   # it the way the frontend does, through `__TAURI_INTERNALS__`, and reads the expression's own value.
   NAME="Gate meeting $(date +%s)"
   go_home 'the tray-route meeting'
+  refuse_if_the_default_output_plays "the named start"
   BEFORE=$(called_count)
   command_start "$NAME" "the named start"
   for _ in $(seq 1 40); do [ "$(called_count)" -gt "$BEFORE" ] && break; sleep 0.5; done
@@ -565,23 +608,7 @@ if [ "$MODE" = changed ]; then
   # The default output here is the machine's own, so this start records whatever plays on it. Nothing
   # may be playing there, the pass's own players included, or the step refuses rather than record it.
   # The recording is removed as soon as it stops, and the profile is not kept (cleanup).
-  PLAYING=$(pw-dump | python3 -c 'import json,sys
-d=json.load(sys.stdin); nodes={o["id"]:o for o in d if o.get("type","").endswith("Node")}
-sink=None
-for o in d:
-    if o.get("type","").endswith("Metadata") and ((o.get("props") or {}).get("metadata.name")=="default"):
-        for m in o.get("metadata") or []:
-            if m.get("key")=="default.audio.sink": sink=(m.get("value") or {}).get("name")
-sid=next((i for i,o in nodes.items() if ((o.get("info") or {}).get("props") or {}).get("node.name")==sink), None)
-out=[]
-for o in d:
-    if o.get("type","").endswith("Link"):
-        inf=o.get("info") or {}
-        if inf.get("input-node-id")==sid:
-            p=((nodes.get(inf.get("output-node-id")) or {}).get("info") or {}).get("props") or {}
-            if str(p.get("media.class","")).startswith("Stream/Output"): out.append(p.get("application.name") or p.get("node.name") or "?")
-print(", ".join(sorted(set(out))))')
-  [ -z "$PLAYING" ] || die "something plays on the default output ($PLAYING); the start with B gone would record it, so this step refuses to run"
+  refuse_if_the_default_output_plays "the start with B gone"
   REAL_OUTPUT_RECORDED=1
   gate_sink_remove "$GATE_SINK_B"
   say "removed B's sink; the stored device now names nothing"
