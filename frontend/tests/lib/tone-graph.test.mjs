@@ -21,7 +21,8 @@
 // truncated its counter before writing it, the wrapper read it empty, raised and died without stopping
 // `watch`, and `watch` held `spawnSync`'s pipes. So the stub writes its counter whole; the wrapper reads
 // an empty one as "not yet", stops `watch` in a `finally` with a bounded wait, and keeps `watch` off its
-// pipes; Node kills a `watch` a dead wrapper left; and each case's runs are bounded, failing by name.
+// pipes; Node kills a `watch` a dead wrapper left; each case's runs are bounded, failing by name; and a
+// case fails unless every graph it served was sampled.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -75,62 +76,81 @@ if g == 'fail': sys.exit(3)
 sys.stdout.write(g if isinstance(g, str) else json.dumps(g))
 `, { mode: 0o755 });
   const out = path.join(dir, `${name}.jsonl`);
-  const watchPid = path.join(dir, `${name}.watch-pid`);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  // Stopped once every graph has been served, counted by the stub, not timed: a slow machine takes
-  // fewer samples in a fixed time, and a case would then pass without its second graph being seen.
+  // Stopped once `watch` has written a line for every graph, counted in its own file, not timed: a slow
+  // machine takes fewer samples in a fixed time, and a case would then pass without its second graph
+  // being seen. Not the stub's counter either: the stub bumps it before it prints, so a stop on the
+  // counter could kill `watch` before its last sample was written (#294's gate adversary, round 1).
   // `watch` writes to a file of its own, not to this `spawnSync`'s pipes, which a `watch` left running
-  // would hold open for ever; and the wrapper stops it in a `finally`, SIGTERM included.
+  // would hold open for ever; and the wrapper stops it in a `finally`, SIGTERM included, which a second
+  // SIGTERM cannot cut short.
   const child = spawnSync('python3', ['-I', '-c', `
 import os, signal, subprocess, sys, time
 def stop(*_): raise SystemExit(5)
 signal.signal(signal.SIGTERM, stop)
-with open(${JSON.stringify(out + '.log')}, 'w') as log:
-    p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
-open(${JSON.stringify(watchPid)}, 'w').write(str(p.pid))
-def served():
+def sampled():
     try:
-        return int(open(${JSON.stringify(counter)}).read())
-    except (OSError, ValueError):
-        return 0  # not written yet
+        return open(${JSON.stringify(out)}).read().count('\\n')
+    except OSError:
+        return 0
+p = None
 try:
+    with open(${JSON.stringify(out + '.log')}, 'w') as log:
+        p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
     deadline = time.monotonic() + 30
-    while served() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
+    while sampled() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
 finally:
-    p.send_signal(signal.SIGTERM)
-    try:
-        p.wait(timeout=${WATCH_EXIT_S})
-    except subprocess.TimeoutExpired:
-        p.kill(); p.wait()
-sys.exit(0 if served() >= ${graphs.length} else 4)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if p is not None:
+        p.send_signal(signal.SIGTERM)
+        try:
+            p.wait(timeout=${WATCH_EXIT_S})
+        except subprocess.TimeoutExpired:
+            p.kill(); p.wait()
+sys.exit(0 if sampled() >= ${graphs.length} else 4)
 `], { env, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
-  killLeftWatch(watchPid);
-  if (child.error || child.status !== 0) throw new Error(`${name}: the wrapper ${child.error ? `${child.error.code} after ${CASE_TIMEOUT_MS} ms` : `exited ${child.status}`}: ${child.stderr}`);
+  killLeftWatch(out);
+  if (child.error || child.status !== 0) {
+    const how = child.error ? `${child.error.code} after ${CASE_TIMEOUT_MS} ms` : child.status === null ? `was ended by ${child.signal}` : `exited ${child.status}`;
+    throw new Error(`${name}: the wrapper ${how}: ${child.stderr}${tail(`${out}.log`)}`);
+  }
   const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
   if (r.error) throw new Error(`${name}: judge ${r.error.code} after ${CASE_TIMEOUT_MS} ms`);
-  return { code: r.status, line: r.stdout.trim() };
+  const line = r.stdout.trim();
+  // The positive sentinel: every graph served was sampled, so a verdict never rests on a sample missing.
+  const [, taken, notTaken] = /^(\d+) samples, (\d+) not taken/.exec(line) ?? [];
+  if (Number(taken) + Number(notTaken) < graphs.length) throw new Error(`${name}: judge read ${taken} samples and ${notTaken} not taken, of ${graphs.length} graphs served: ${line}`);
+  return { code: r.status, line };
 }
 
-/** A wrapper that died without its `finally` (CI's shape) leaves `watch` running: kill it by its pid,
- *  once its command line shows it is this case's `watch` and not a pid reused since. */
-function killLeftWatch(file) {
-  let pid;
+/** What `watch` said, if it said anything: its traceback, when it died. */
+function tail(file) {
   try {
-    pid = Number(fs.readFileSync(file, 'utf8'));
+    const text = fs.readFileSync(file, 'utf8').trim();
+    return text ? `\n  watch said: ${text.slice(-600)}` : '';
   } catch {
-    return;
+    return '';
   }
-  let cmd = '';
-  try {
-    cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'latin1');
-  } catch {
-    return; // gone
-  }
-  if (cmd.includes('tone-graph.py\0watch\0')) {
+}
+
+/** A wrapper that died without its `finally` (CI's shape) leaves `watch` running: find this case's by
+ *  its command line, which names the case's own output file, and kill it. */
+function killLeftWatch(out) {
+  const mine = `tone-graph.py\0watch\0${SINK}\0${ROOT}\0${out}\0`;
+  for (const n of fs.readdirSync('/proc')) {
+    if (!/^[0-9]+$/.test(n)) continue;
+    let cmd = '';
     try {
-      process.kill(pid, 'SIGKILL');
+      cmd = fs.readFileSync(`/proc/${n}/cmdline`, 'latin1');
     } catch {
-      // gone meanwhile
+      continue; // gone
+    }
+    if (cmd.includes(mine)) {
+      try {
+        process.kill(Number(n), 'SIGKILL');
+      } catch {
+        // gone meanwhile
+      }
     }
   }
 }
