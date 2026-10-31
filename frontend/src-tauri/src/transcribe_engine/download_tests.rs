@@ -26,6 +26,14 @@ enum Reply {
     Slow { body: Vec<u8>, chunk: usize, delay: Duration },
     /// `len` copies of `byte`, written without holding them all: the diarizer's 139 MB.
     Fill { byte: u8, len: usize },
+    /// Reads the request and never answers, holding the connection open (#298).
+    Silent,
+    /// Headers that promise `claimed` bytes, then `sent`, then nothing, the connection held open (#298).
+    GoesSilent { sent: Vec<u8>, claimed: usize },
+    /// Waits, then gives the reply (#298).
+    After(Duration, Box<Reply>),
+    /// The n-th connection gets the n-th reply, and every later one the last (#298).
+    Sequence(Vec<Reply>),
 }
 
 struct Stub {
@@ -41,8 +49,14 @@ async fn stub(reply: Reply) -> Stub {
     let sent = Arc::new(AtomicUsize::new(0));
     let (requests_in, sent_in) = (requests.clone(), sent.clone());
     tokio::spawn(async move {
+        let mut connections = 0usize;
         while let Ok((mut sock, _)) = listener.accept().await {
-            let (reply, requests, sent) = (reply.clone(), requests_in.clone(), sent_in.clone());
+            let mut reply = reply.clone();
+            if let Reply::Sequence(replies) = &reply {
+                reply = replies[connections.min(replies.len() - 1)].clone();
+            }
+            connections += 1;
+            let (requests, sent) = (requests_in.clone(), sent_in.clone());
             tokio::spawn(async move {
                 let (mut buf, mut got) = (vec![0u8; 8192], Vec::new());
                 while !got.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -53,7 +67,20 @@ async fn stub(reply: Reply) -> Stub {
                 }
                 requests.lock().unwrap().push(String::from_utf8_lossy(&got).lines().next().unwrap_or("").to_string());
                 let head = |len: usize| format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n");
+                if let Reply::After(wait, then) = reply {
+                    tokio::time::sleep(wait).await;
+                    reply = *then;
+                }
                 match reply {
+                    Reply::Silent => std::future::pending::<()>().await,
+                    Reply::GoesSilent { sent: part, claimed } => {
+                        let _ = sock.write_all(head(claimed).as_bytes()).await;
+                        let _ = sock.write_all(&part).await;
+                        let _ = sock.flush().await;
+                        sent.fetch_add(part.len(), Ordering::SeqCst);
+                        std::future::pending::<()>().await
+                    }
+                    Reply::After(..) | Reply::Sequence(_) => unreachable!("resolved above"),
                     Reply::Body(body) => {
                         let _ = sock.write_all(head(body.len()).as_bytes()).await;
                         let _ = sock.write_all(&body).await;
@@ -775,5 +802,375 @@ mod replace_against_load {
         drop(job);
 
         assert!(fails.is_empty(), "condition 7 failed: {fails:#?}");
+    }
+}
+
+// A failed download says why and when, and a server that stops answering is bounded (#298). Every
+// error here is the one `to_string()` gives, which is what both commands send. The tests whose case
+// is a stall set N to 1 s; the others run at production's N.
+mod a_failed_download_says_why {
+    use super::*;
+    use std::sync::OnceLock;
+
+    const N: Duration = Duration::from_secs(1);
+
+    /// What `log` was given while this process ran, from the first `start_capture()`, at `Info`, as the
+    /// app logs. A test that reads it calls `start_capture()` before it acts: the first test to read
+    /// would otherwise install the logger after its own lines were logged. Tests run in parallel and
+    /// three #195 tests fail `ROW` with a 500 too, so a test finds its own failure line by its marker and
+    /// its stub's URL, never by the row's name alone.
+    fn start_capture() -> &'static Mutex<Vec<(log::Level, String)>> {
+        struct Capture(Mutex<Vec<(log::Level, String)>>);
+        impl log::Log for Capture {
+            fn enabled(&self, m: &log::Metadata<'_>) -> bool {
+                m.level() <= log::Level::Info
+            }
+            fn log(&self, r: &log::Record<'_>) {
+                if self.enabled(r.metadata()) {
+                    self.0.lock().unwrap().push((r.level(), r.args().to_string()));
+                }
+            }
+            fn flush(&self) {}
+        }
+        static CAPTURE: OnceLock<&'static Capture> = OnceLock::new();
+        &CAPTURE
+            .get_or_init(|| {
+                let c: &'static Capture = Box::leak(Box::new(Capture(Mutex::new(Vec::new()))));
+                log::set_logger(c).expect("another logger was installed in this test process first");
+                log::set_max_level(log::LevelFilter::Info);
+                c
+            })
+            .0
+    }
+
+    fn captured() -> Vec<(log::Level, String)> {
+        start_capture().lock().unwrap().clone()
+    }
+
+    /// The failure lines that name `url`: those opening with the line's marker.
+    fn failures_at(url: &str) -> Vec<(log::Level, String)> {
+        captured().into_iter().filter(|(_, l)| l.starts_with("Download of ") && l.contains(" failed after ") && l.contains(url)).collect()
+    }
+
+    /// A port nothing listens on, and the OS's own words for connecting to it: the refusal is the
+    /// sentinel that the port is dead, and its text is the oracle on every platform.
+    fn dead_port() -> (String, String) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let refused = std::net::TcpStream::connect(addr).expect_err("something listens on the port just dropped");
+        (format!("http://{addr}"), refused.to_string())
+    }
+
+    fn engine_at_base(dir: &Path, base: &str) -> Arc<TranscribeEngine> {
+        Arc::new(TranscribeEngine::new_with_models_dir(Some(dir.to_path_buf())).unwrap().with_base_url(base))
+    }
+
+    fn stalling_engine(dir: &Path, stub: &Stub) -> Arc<TranscribeEngine> {
+        Arc::new(TranscribeEngine::new_with_models_dir(Some(dir.to_path_buf())).unwrap().with_base_url(&stub.base).with_read_timeout(N))
+    }
+
+    fn url_of(base: &str, name: &str) -> String {
+        let r = crate::config::transcribe_model(name).unwrap();
+        file_url(base, r.hf_repo, r.revision, r.filename)
+    }
+
+    fn diarizer_url(base: &str) -> String {
+        let d = &crate::config::SPEAKER_DIARIZER;
+        file_url(base, d.hf_repo, d.revision, d.filename)
+    }
+
+    fn status(models: Vec<ModelInfo>) -> ModelStatus {
+        models.into_iter().find(|m| m.name == ROW).unwrap().status
+    }
+
+    /// Condition 1: a download that cannot connect says why, through both ways to the network.
+    #[tokio::test]
+    async fn a_download_that_cannot_connect_names_the_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let (base, refused) = dead_port();
+        let engine = engine_at_base(dir.path(), &base);
+        let model = engine.download_model(ROW, None).await.expect_err("download_model reached a dead port");
+        let diarizer = engine.download_diarizer(None).await.expect_err("the diarizer reached a dead port");
+        let mut fails = Vec::new();
+        for (what, e) in [("download_model", model.to_string()), ("the diarizer", diarizer.to_string())] {
+            if !e.contains("Failed to start download") {
+                fails.push(format!("{what}: the error lacks `Failed to start download`: {e}"));
+            }
+            if !e.contains(&refused) {
+                fails.push(format!("{what}: the error lacks the OS's `{refused}`: {e}"));
+            }
+        }
+        assert!(fails.is_empty(), "condition 1 failed:\n{}", fails.join("\n"));
+    }
+
+    /// Condition 2(i): a download that fails is logged once, at `warn`, with its URL, its error and the
+    /// seconds since it started, at production's N.
+    #[tokio::test]
+    async fn a_failed_download_is_logged_with_its_seconds() {
+        start_capture();
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::After(Duration::from_millis(1500), Box::new(Reply::Status500))).await;
+        engine_at(dir.path(), &s).download_model(ROW, None).await.expect_err("the 500 was taken for a download");
+        let lines = failures_at(&url_of(&s.base, ROW));
+        assert_eq!(lines.len(), 1, "not one failure line for this stub: {lines:#?}");
+        let (level, line) = &lines[0];
+        assert!(*level <= log::Level::Warn, "the failure line is at {level}, below warn: {line}");
+        assert!(line.starts_with(&format!("Download of {ROW} failed after ")) && line.contains("Download failed with status: 500"), "the line lacks the row or the error: {line}");
+        assert!(!line.contains("Downloading model file"), "the failure line reads as a download starting to the onboarding pass: {line}");
+        let seconds: f64 = line[format!("Download of {ROW} failed after ").len()..].split(' ').next().unwrap().parse().unwrap();
+        assert!((1.5..=2.5).contains(&seconds), "the line gives {seconds} s for a stub that waited 1.5 s: {line}");
+    }
+
+    /// Condition 2(ii): the diarizer's failure is logged by the same line.
+    #[tokio::test]
+    async fn the_diarizers_failure_is_logged_too() {
+        start_capture();
+        let dir = tempfile::tempdir().unwrap();
+        let (base, refused) = dead_port();
+        engine_at_base(dir.path(), &base).download_diarizer(None).await.expect_err("the diarizer reached a dead port");
+        let lines = failures_at(&diarizer_url(&base));
+        assert_eq!(lines.len(), 1, "not one failure line for the diarizer: {lines:#?}");
+        let (level, line) = &lines[0];
+        assert!(*level <= log::Level::Warn, "the failure line is at {level}, below warn: {line}");
+        assert!(line.starts_with(&format!("Download of {} failed after ", crate::config::SPEAKER_DIARIZER_NAME)), "the line does not name the diarizer: {line}");
+        assert!(line.contains(&refused), "the line lacks the OS's `{refused}`: {line}");
+        assert!(!line.contains("Downloading model file"), "the failure line reads as a download starting to the onboarding pass: {line}");
+    }
+
+    /// Condition 2(iii): a download that completes logs no failure. The two above hold that a failure
+    /// line never reads as a download starting to the onboarding pass's nine greps.
+    #[tokio::test]
+    async fn a_completed_download_logs_no_failure() {
+        start_capture();
+        let dir = tempfile::tempdir().unwrap();
+        let body = vec![9u8; 10_000];
+        let s = stub(Reply::Body(body.clone())).await;
+        let r = crate::config::transcribe_model(ROW).unwrap();
+        let sha256 = sha256_of(&body);
+        let name = "a-name-of-its-own-298";
+        let pin = FilePin { revision: r.revision, size_bytes: body.len() as u64, sha256: &sha256 };
+        engine_at(dir.path(), &s).download_file(name, r.hf_repo, r.filename, pin, None).await.expect("the download completes");
+        let url = url_of(&s.base, ROW);
+        let all = captured();
+        assert!(all.iter().any(|(_, l)| l.starts_with(&format!("Downloading model file {url} -> "))), "the capture holds no download line for this stub, so its silence means nothing");
+        assert!(all.iter().any(|(_, l)| l.starts_with(&format!("Downloaded {name} ("))), "the capture holds no Downloaded line for {name}");
+        assert_eq!(failures_at(&url), Vec::new(), "a download that completed was logged as failed");
+    }
+
+    /// Condition 3: the client is built in one place, with a read timeout of N and no total.
+    #[tokio::test]
+    async fn the_client_has_a_read_timeout_and_no_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let production = format!("{:?}", TranscribeEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap().client().unwrap());
+        assert!(production.contains("read_timeout: 30s"), "the production client is not bounded at 30 s: {production}");
+        assert!(production.contains("proxies"), "the production client reads no system proxy: {production}");
+        let test = format!("{:?}", engine_at_base(dir.path(), "http://127.0.0.1:9").client().unwrap());
+        assert!(!test.contains("proxies"), "the test engine's client reads a proxy: {test}");
+        assert!(test.contains("read_timeout: 30s"), "the test engine's client is not built with the engine's N: {test}");
+    }
+
+    /// Condition 3's census: one client construction in `engine.rs`, inside `download_client`, and no
+    /// timeout in it but the read timeout. Read with comments stripped, so a name in a comment is not
+    /// counted.
+    #[test]
+    fn the_engine_builds_its_client_in_one_place() {
+        let code = without_comments(include_str!("engine.rs"));
+        let builds: Vec<usize> = ["Client::builder(", "Client::new(", "Client::default(", "ClientBuilder::new(", "ClientBuilder::default(", "reqwest::get("]
+            .iter()
+            .flat_map(|c| code.match_indices(c).map(|(i, _)| i).collect::<Vec<_>>())
+            .collect();
+        assert_eq!(builds.len(), 1, "engine.rs constructs a client {} times, not once", builds.len());
+        let start = code.find("fn download_client(").expect("no download_client in engine.rs");
+        let open = start + code[start..].find('{').unwrap();
+        let (mut depth, mut end) = (0i32, open);
+        for (i, ch) in code[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!((open..end).contains(&builds[0]), "the one client construction is outside download_client");
+        // Any other bound named `timeout`: `.timeout(`, `ClientBuilder::timeout(`, `connect_timeout(`,
+        // `tokio::time::timeout(` or `timeout_at(` around the download, or an alias of one (#298's gate
+        // adversary, rounds 1 and 2). Not held: a `select!` against a sleep, the shape `commit_download`
+        // uses for its lock, and a bound in a caller outside this file (`commands.rs`, `diarization.rs`).
+        let other: Vec<&str> = code
+            .match_indices("timeout")
+            .filter(|(i, _)| !code[..*i].ends_with("read_"))
+            .map(|(i, _)| code[i.saturating_sub(50)..(i + 30).min(code.len())].trim())
+            .collect();
+        assert!(
+            other.is_empty(),
+            "engine.rs names a timeout other than the read timeout, which is the only bound a download may have (#298): {other:#?}"
+        );
+    }
+
+    /// Rust source with `//` and `/* */` comments removed, strings and char literals kept.
+    fn without_comments(src: &str) -> String {
+        let (b, mut out, mut i) = (src.as_bytes(), Vec::new(), 0);
+        while i < b.len() {
+            match b[i] {
+                b'/' if b.get(i + 1) == Some(&b'/') => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                b'/' if b.get(i + 1) == Some(&b'*') => {
+                    i += 2;
+                    while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                        i += 1;
+                    }
+                    i += 2;
+                }
+                b'"' => {
+                    out.push(b[i]);
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        if b[i] == b'\\' {
+                            out.push(b[i]);
+                            i += 1;
+                        }
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                    if i < b.len() {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+                b'\'' if b.get(i + 2) == Some(&b'\'') || (b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'')) => {
+                    let n = if b[i + 1] == b'\\' { 4 } else { 3 };
+                    out.extend_from_slice(&b[i..i + n]);
+                    i += n;
+                }
+                _ => {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    /// Condition 4(a): a server that never answers fails a fresh download within N, and it leaves
+    /// nothing behind.
+    #[tokio::test]
+    async fn a_server_that_never_answers_fails_within_n() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::Silent).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let e = tokio::time::timeout(N + Duration::from_secs(2), engine.download_model(ROW, None))
+            .await
+            .expect("still running at N + 2 s")
+            .expect_err("a silent server was taken for a download")
+            .to_string();
+        assert!(e.contains("Failed to start download") && e.contains("timed out"), "the error is not a start that timed out: {e}");
+        assert!(!engine.downloads_in_flight().await.contains(ROW), "the row still reads as in flight");
+        assert!(matches!(status(engine.discover_models().await.unwrap()), ModelStatus::Missing), "the row does not read Missing");
+        assert!(!final_path(dir.path()).exists(), "a final file is there");
+        assert_eq!(partials(dir.path()), Vec::<String>::new(), "a temporary file is left");
+    }
+
+    /// Condition 4(b): a server that goes silent mid-body fails within N, through `download_file`, over
+    /// a damaged original it leaves as it was. Every failure is collected before asserting.
+    #[tokio::test]
+    async fn a_server_that_goes_silent_mid_body_fails_within_n() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = original(dir.path());
+        let before = bytes(&path);
+        let s = stub(Reply::GoesSilent { sent: vec![1u8; 1000], claimed: 1_000_000 }).await;
+        let engine = stalling_engine(dir.path(), &s);
+        assert!(matches!(status(engine.discover_models().await.unwrap()), ModelStatus::Corrupted { .. }), "the fixture is not damaged");
+        let mut fails = Vec::new();
+        match tokio::time::timeout(N + Duration::from_secs(2), engine.download_model(ROW, None)).await {
+            Err(_) => fails.push("still running at N + 2 s".to_string()),
+            Ok(Ok(())) => fails.push("a body that stopped at 1000 of 1 000 000 bytes was taken for a download".to_string()),
+            Ok(Err(e)) => {
+                let e = e.to_string();
+                if !(e.contains("Failed to read chunk") && e.contains("timed out")) {
+                    fails.push(format!("the error is not a chunk that timed out: {e}"));
+                }
+            }
+        }
+        if bytes(&path) != before {
+            fails.push("the original changed".into());
+        }
+        if !partials(dir.path()).is_empty() {
+            fails.push(format!("a temporary file is left: {:?}", partials(dir.path())));
+        }
+        if engine.downloads_in_flight().await.contains(ROW) {
+            fails.push("the row still reads as in flight".into());
+        }
+        let after = status(engine.discover_models().await.unwrap());
+        if !matches!(after, ModelStatus::Corrupted { .. }) {
+            fails.push(format!("the row reads {after:?}, not Corrupted"));
+        }
+        assert!(fails.is_empty(), "condition 4(b) failed:\n{}", fails.join("\n"));
+    }
+
+    /// Condition 4(c), the sentinel: a server slower than N in total, but silent for no more than N/4
+    /// at a time, completes: nine chunks, eight gaps, 2N. The slack below N is for a loaded runner: CI's
+    /// macOS and Windows jobs run these tests too.
+    #[tokio::test]
+    async fn a_slow_server_that_never_goes_silent_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..9000u32).map(|i| i as u8).collect();
+        let s = stub(Reply::Slow { body: body.clone(), chunk: 1000, delay: N / 4 }).await;
+        let engine = stalling_engine(dir.path(), &s);
+        tokio::time::timeout(N * 2 + Duration::from_secs(2), download_body(&engine, ROW, &body, None))
+            .await
+            .expect("still running at its length + 2 s")
+            .expect("a server that sent a chunk every N/4 was cut off");
+        assert_eq!(bytes(&final_path(dir.path())), body, "the final path does not hold the bytes");
+    }
+
+    /// Condition 5(a): a cancel during a stall before the headers is answered when N fires, as the
+    /// timeout, and the flag it left does not cancel the next download of that name.
+    #[tokio::test]
+    async fn a_cancel_before_the_headers_is_answered_by_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = vec![9u8; 10_000];
+        let s = stub(Reply::Sequence(vec![Reply::Silent, Reply::Body(body.clone())])).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let first = tokio::spawn({ let (e, b) = (engine.clone(), body.clone()); async move { download_body(&e, ROW, &b, None).await } });
+        let asked = tokio::time::Instant::now();
+        while s.requests.lock().unwrap().is_empty() {
+            assert!(asked.elapsed() < N, "the stub was not asked within N, so there is no stall to cancel");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        engine.cancel_download(ROW).await.expect("the download is in flight");
+        let e = tokio::time::timeout(N + Duration::from_secs(2), first).await.expect("still running at N + 2 s").unwrap().expect_err("the stall was taken for a download").to_string();
+        assert!(e.contains("timed out") && e != "Download cancelled by user", "the stall ended as {e}, not as its timeout");
+        download_body(&engine, ROW, &body, None).await.expect("the next download of the same name did not complete");
+        assert_eq!(bytes(&final_path(dir.path())), body);
+    }
+
+    /// Condition 5(b): a cancel while the body has stalled is answered when N fires, as the cancel.
+    #[tokio::test]
+    async fn a_cancel_mid_body_is_answered_as_the_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stub(Reply::GoesSilent { sent: vec![1u8; 1000], claimed: 1_000_000 }).await;
+        let engine = stalling_engine(dir.path(), &s);
+        let running = tokio::spawn({ let e = engine.clone(); async move { e.download_model(ROW, None).await } });
+        let partial = dir.path().join(format!("{PARTIAL_PREFIX}{}", crate::config::transcribe_model(ROW).unwrap().filename));
+        // The reply's fixed length: the engine writes a chunk only after its flag check, so once all 1000
+        // bytes are in the file the loop waits on the next frame.
+        let asked = tokio::time::Instant::now();
+        while std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) < 1000 {
+            assert!(asked.elapsed() < N, "the temporary file did not hold the 1000 bytes sent within N, so there is no stall mid-body to cancel");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        engine.cancel_download(ROW).await.expect("the download is in flight");
+        let e = tokio::time::timeout(N + Duration::from_secs(2), running).await.expect("still running at N + 2 s").unwrap().expect_err("the stall was taken for a download");
+        assert_eq!(e.to_string(), "Download cancelled by user");
+        assert_eq!(partials(dir.path()), Vec::<String>::new(), "the cancel left a temporary file");
     }
 }
