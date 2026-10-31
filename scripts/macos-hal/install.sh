@@ -17,6 +17,8 @@ RUN=$REPO/experiments/hal-runs/$(date +%Y%m%d-%H%M%S)-install; mkdir -p "$RUN"
 codesign -dv "$DRIVER" > "$RUN/codesign.txt" 2>&1 || true
 python3 -I "$HERE/census.py" take > "$RUN/before.json"
 echo "installing $NAME (administrator password needed)"
+# Replace a bundle of the same name rather than merge into it (the name is checked above).
+sudo rm -rf "/Library/Audio/Plug-Ins/HAL/$NAME"
 sudo cp -R "$DRIVER" /Library/Audio/Plug-Ins/HAL/
 START=$(date "+%Y-%m-%d %H:%M:%S")
 echo "restarting coreaudiod (audio stops for a few seconds)"
