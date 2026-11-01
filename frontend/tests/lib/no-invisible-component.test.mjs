@@ -122,9 +122,6 @@ const BACKLOG = new Set([
 const CONTEXTS_ADMITTED = new Set([
   'src/contexts/ImportDialogContext.tsx',
   'src/contexts/OllamaDownloadContext.tsx',
-  'src/contexts/RecordingPostProcessingProvider.tsx',
-  'src/contexts/RecordingStateContext.tsx',
-  'src/contexts/TranscriptContext.tsx',
 ]);
 
 /**
@@ -140,7 +137,6 @@ const PAGES_ADMITTED = new Set([
   'src/app/metadata.tsx',
   'src/app/notes/[id]/page.tsx',
   'src/app/nudge/page.tsx',
-  'src/app/page.tsx',
   'src/app/settings/page.tsx',
 ]);
 
@@ -197,8 +193,9 @@ assertSetEquals(
 // providers and the numerator gained `OnboardingContext.tsx`. The floor stood at 11 against an actual
 // of 19, which is eight components of slack it could lose in silence. Raised to the measured number,
 // which is what the instruction below has always asked for. It had slipped again: 23 against 20 when
-// #226 rendered `ConfigContext.tsx` and `src/app/meeting-details/page.tsx`, making 25.
-const FLOOR = 25;
+// #226 rendered `ConfigContext.tsx` and `src/app/meeting-details/page.tsx`, making 25. #328 rendered the three
+// recording providers and Home, measured at 30 of 94; the floor is raised to it.
+const FLOOR = 30;
 assert.ok(
   rendered.size >= FLOOR,
   `${rendered.size} components are rendered by a test; the floor is ${FLOOR}. Something that had a ` +

@@ -6,6 +6,7 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { ConfidenceIndicator, isScored } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
+import { STOP_FLOW } from "@/lib/recording-status";
 import { TranscriptSegmentData } from "@/types";
 import { speakerLabel, SpeakerNames } from "@/lib/speaker";
 import {
@@ -374,7 +375,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 }) => {
     // Has the microphone actually delivered a frame yet? Until it has, this
     // pane must not claim to be listening.
-    const { captureArmed } = useRecordingState();
+    // And during a stop it is not listening at all, though the backend still reports a recording until its end (#328).
+    const { captureArmed, status } = useRecordingState();
+    const live = isRecording && !STOP_FLOW.includes(status);
 
     // What the recording's channel column can support, and the turns that follow
     // from it. Grouping is the unit of everything below — the virtualiser counts
@@ -560,7 +563,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
             {segments.length === 0 && !partialText ? (
                 // Empty states teach the next action rather than saying "nothing here".
                 <div className="flex min-h-[55vh] flex-col items-center justify-center px-6 text-center animate-fade-in">
-                    {isRecording ? (
+                    {live ? (
                         <>
                             {/* Static until the microphone has actually handed
                                 over a frame. The pulse means "live", and a

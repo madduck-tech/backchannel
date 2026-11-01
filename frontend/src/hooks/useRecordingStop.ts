@@ -15,7 +15,10 @@ import {
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
 interface UseRecordingStopReturn {
-  handleRecordingStop: (callApi: boolean) => Promise<void>;
+  /** The save for one emission of `recording-stopped`, numbered by the trigger (#328). */
+  handleRecordingStop: (emission: number) => Promise<void>;
+  /** The end of a stop whose page holds none of the meeting's rows: no save, the copy left for recovery, and said. */
+  resolveWithoutSave: () => void;
   isStopping: boolean;
   isProcessingTranscript: boolean;
   isSavingTranscript: boolean;
@@ -33,7 +36,8 @@ interface UseRecordingStopReturn {
  * - SQLite meeting save with folder_path from sessionStorage
  * - Auto-navigation to meeting details
  * - Toast notifications for success/error
- * - Window exposure for Rust callbacks
+ *
+ * Started only by `RecordingPostProcessingProvider`, on `recording-stopped` (#328).
  */
 /**
  * Payload of the backend's `recording-not-saved` event: the meeting folder could not be
@@ -66,6 +70,7 @@ export function useRecordingStop(
   const {
     status,
     setStatus,
+    leaveOnNextUrl,
     isStopping,
     isProcessing: isProcessingTranscript,
     isSaving: isSavingTranscript
@@ -89,65 +94,17 @@ export function useRecordingStop(
 
   const router = useRouter();
 
-  // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray simultaneously)
-  const stopInProgressRef = useRef(false);
-
-  // Promise to track recording-stopped event data (fixes race condition with recording-stop-complete)
-  const recordingStoppedDataRef = useRef<Promise<void> | null>(null);
-
-  // Set up recording-stopped listener for meeting navigation
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setupRecordingStoppedListener = async () => {
-      try {
-        console.log('Setting up recording-stopped listener for navigation...');
-        unlistenFn = await listen<{
-          message: string;
-          folder_path?: string;
-          meeting_name?: string;
-        }>('recording-stopped', async (event) => {
-          // Create promise that resolves when sessionStorage is set (prevents race condition)
-          recordingStoppedDataRef.current = (async () => {
-            const { folder_path, meeting_name } = event.payload;
-
-            // Store folder_path and meeting_name for later use in handleRecordingStop
-            if (folder_path) {
-              sessionStorage.setItem('last_recording_folder_path', folder_path);
-            }
-            if (meeting_name) {
-              sessionStorage.setItem('last_recording_meeting_name', meeting_name);
-            }
-          })();
-
-        });
-        console.log('Recording stopped listener setup complete');
-      } catch (error) {
-        console.error('Failed to setup recording stopped listener:', error);
-      }
-    };
-
-    setupRecordingStoppedListener();
-
-    return () => {
-      console.log('Cleaning up recording stopped listener...');
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, [router]);
+  // The emissions a save has started for. A second save of one emission is refused; a later emission is its own
+  // recording and saves, even while an earlier save is still running (#328 item 3).
+  const savedEmissions = useRef(new Set<number>());
 
   // Main recording stop handler
-  const handleRecordingStop = useCallback(async (isCallApi: boolean) => {
-    if (recordingStoppedDataRef.current) {
-      await recordingStoppedDataRef.current;
-    }
-
-    // Guard: prevent duplicate/concurrent stop calls
-    if (stopInProgressRef.current) {
+  const handleRecordingStop = useCallback(async (emission: number) => {
+    if (savedEmissions.current.has(emission)) {
       return;
     }
-    stopInProgressRef.current = true;
+    savedEmissions.current.add(emission);
+    const isCallApi = true;
 
     // Set status to STOPPING immediately
     setStatus(RecordingStatus.STOPPING);
@@ -326,8 +283,9 @@ export function useRecordingStop(
             setCurrentMeeting({ id: meetingId, title: savedMeetingName || meetingTitle || 'New Meeting' });
           }
 
-          // Mark as completed
+          // Mark as completed. Nothing offers Start from here until the next URL commits (#328 item 4).
           setStatus(RecordingStatus.COMPLETED);
+          leaveOnNextUrl();
 
           // Do not claim the recording was saved when it was not. The transcript is kept
           // either way -- losing it because the audio folder is bad would be the worse trade
@@ -364,9 +322,6 @@ export function useRecordingStop(
           // in the database at this point, so there is nothing to wait for.
           router.push(`/meeting-details?id=${meetingId}&source=recording`);
           clearTranscripts()
-
-          // Reset to IDLE after navigation
-          setStatus(RecordingStatus.IDLE);
         } catch (saveError) {
           console.error('Failed to save meeting to database:', saveError);
           setStatus(RecordingStatus.ERROR, saveError instanceof Error ? saveError.message : 'Unknown error');
@@ -388,14 +343,12 @@ export function useRecordingStop(
       setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Unknown error');
       // isRecording already set to false at function start
       setIsRecordingDisabled(false);
-    } finally {
-      // Always reset the guard flag when done
-      stopInProgressRef.current = false;
     }
   }, [
     setIsRecording,
     setIsRecordingDisabled,
     setStatus,
+    leaveOnNextUrl,
     transcriptsRef,
     flushBuffer,
     clearTranscripts,
@@ -409,28 +362,31 @@ export function useRecordingStop(
     router,
   ]);
 
-  // Expose handleRecordingStop function to window for Rust callbacks
-  const handleRecordingStopRef = useRef(handleRecordingStop);
-  useEffect(() => {
-    handleRecordingStopRef.current = handleRecordingStop;
-  });
-
-  useEffect(() => {
-    (window as any).handleRecordingStop = (callApi: boolean = true) => {
-      handleRecordingStopRef.current(callApi);
-    };
-
-    // Cleanup on unmount
-    return () => {
-      delete (window as any).handleRecordingStop;
-    };
-  }, []);
+  // A page reloaded during the recording or its stop, holding none of the meeting's rows: a save would write an empty
+  // meeting and mark the copy saved, so the copy is left for recovery, and the person is told so on every route (the
+  // product owner, 2026-11-01). The action opens the recovery dialog on Home, even if it was shown this session.
+  const resolveWithoutSave = useCallback(() => {
+    setStatus(RecordingStatus.IDLE);
+    toast.warning('This meeting was not saved automatically', {
+      description: 'It was kept on this device. Recover it from Home.',
+      action: {
+        label: 'Recover',
+        onClick: () => {
+          sessionStorage.removeItem('recovery_dialog_shown');
+          window.dispatchEvent(new window.CustomEvent('open-recovery'));
+          router.push('/');
+        },
+      },
+      duration: Infinity,
+    });
+  }, [setStatus, router]);
 
   // Derive summaryStatus from RecordingStatus for backward compatibility
   const summaryStatus: SummaryStatus = status === RecordingStatus.PROCESSING_TRANSCRIPTS ? 'processing' : 'idle';
 
   return {
     handleRecordingStop,
+    resolveWithoutSave,
     isStopping,
     isProcessingTranscript,
     isSavingTranscript,
