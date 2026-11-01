@@ -14,12 +14,20 @@ process's nodes, so a stream that follows the default can be shown never to have
 
     tone-graph.py watch <sink-id> <root-pid> <out.jsonl> [--sentinel <pid>]
                                                            samples `pw-dump` every 250 ms until SIGTERM
-    tone-graph.py judge <out.jsonl>                        the tone's file: one line, then exits 0 (the
-                                                           tone, alone) or 1
-    tone-graph.py probe-judge <out.jsonl> <sink-id> <t>    the probe's file, <t> its answer's monotonic time
-    tone-graph.py webenv <root-pid> <sink-name> <pin>      every WebKitWebProcess under <root-pid> carries
+    tone-graph.py judge <out.jsonl> [--stamps <webenv> <probe> <sink-id> <sink-name>]
+                                                           the tone's file: one line, then exits 0 (the
+                                                           tone, alone) or 1; with --stamps, also 1 unless
+                                                           this run's checks before the press left both stamps
+    tone-graph.py probe-judge <out.jsonl> <sink-id> <t> [--stamp <file>]
+                                                           the probe's file, <t> its answer's monotonic time
+    tone-graph.py webenv <root-pid> <sink-name> <pin> [--stamp <file>]
+                                                           every WebKitWebProcess under <root-pid> carries
                                                            PULSE_SINK=<sink-name> and the pin; exits 1 naming
                                                            the first one that does not
+
+A check before the press that passes writes its stamp, and the tone's judge refuses without both for this
+run's sink: a test of the pass's text can hold that the checks are there, not that they ran (#266's gate
+adversary, round 2), and a skipped or swallowed check leaves no stamp.
     tone-graph.py closed <out.jsonl> <t>                   exits 0 once a sample taken at or after <t> holds
                                                            no link from our WebKitWebProcess
     tone-graph.py one-sink <family> <id> <name>            the graph holds one node of the family: <id>, <name>
@@ -208,7 +216,19 @@ def route(link):
     return None if api == ROUTE else f'client.api {"is absent" if api is None else "is " + api}, not {ROUTE}, on {describe(link)}'
 
 
-def judge(path):
+def stamped(webenv_stamp, probe_stamp, sink, name):
+    want = {webenv_stamp: f'webenv {name}', probe_stamp: f'probe {sink}'}
+    for path, line in want.items():
+        try:
+            got = open(path).read().strip()
+        except OSError:
+            return f'the check before the press that writes {os.path.basename(path)} never passed in this run, so nothing shows the route was checked'
+        if got != line:
+            return f'{os.path.basename(path)} reads "{got}", not "{line}": it is not this run\'s'
+    return None
+
+
+def judge(path, stamps=None):
     rows = [json.loads(line) for line in open(path) if line.strip()]
     errors = [r for r in rows if 'error' in r]
     samples = [r for r in rows if 'into' in r]
@@ -221,6 +241,10 @@ def judge(path):
     readers_seen = '; '.join(sorted({describe(l) for l in readers})) or 'nobody'
     if errors:
         print(f'{head}: a sample that could not be read cannot vouch for that moment ({errors[0]["error"]})')
+        return 1
+    unstamped = stamped(*stamps) if stamps else None
+    if unstamped:
+        print(f'{head}: {unstamped}')
         return 1
     moved = named_default(samples)
     if moved:
@@ -278,7 +302,7 @@ def sentinel_fault(samples):
     return None
 
 
-def probe_judge(path, sink, answered):
+def probe_judge(path, sink, answered, stamp=None):
     """The probe's own file: the route is the tone sink, through `pulsesink`, and it closes (#266)."""
     rows = [json.loads(line) for line in open(path) if line.strip()]
     errors = [r for r in rows if 'error' in r]
@@ -321,6 +345,8 @@ def probe_judge(path, sink, answered):
     closed = next(r for r in after if not r.get('web'))
     print(f'{head}: {sum(1 for r in samples if any(l["to_sink"] and l["state"] == "active" for l in r.get("web", [])))} with an active link '
           f'from {describe(ours[0])} into the tone sink and none elsewhere; none left {closed["t"] - answered:.2f} s after the probe answered')
+    if stamp:
+        open(stamp, 'w').write(f'probe {sink}\n')
     return 0
 
 
@@ -354,7 +380,7 @@ def web_processes(root):
     return sorted(found)
 
 
-def webenv(root, sink_name, pin):
+def webenv(root, sink_name, pin, stamp=None):
     procs = web_processes(root)
     if not procs:
         print(f'no {EXPECTED} runs under the driver (pid {root}), so nothing shows where the tone will play')
@@ -373,6 +399,8 @@ def webenv(root, sink_name, pin):
             return 1
     print(f'{len(procs)} {EXPECTED} under the driver, each with PULSE_SINK={sink_name} and the pin '
           f'(found by exe: {sum(1 for _, h in procs if h == "exe")}, by comm: {sum(1 for _, h in procs if h == "comm")})')
+    if stamp:
+        open(stamp, 'w').write(f'webenv {sink_name}\n')
     return 0
 
 
@@ -407,14 +435,16 @@ if __name__ == '__main__':
         watch(int(a[1]), int(a[2]), a[3], int(a[5]) if len(a) == 6 else None)
     elif a[:1] == ['judge'] and len(a) == 2:
         sys.exit(judge(a[1]))
-    elif a[:1] == ['probe-judge'] and len(a) == 4:
-        sys.exit(probe_judge(a[1], int(a[2]), float(a[3])))
+    elif a[:1] == ['judge'] and len(a) == 7 and a[2] == '--stamps':
+        sys.exit(judge(a[1], (a[3], a[4], int(a[5]), a[6])))
+    elif a[:1] == ['probe-judge'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
+        sys.exit(probe_judge(a[1], int(a[2]), float(a[3]), a[5] if len(a) == 6 else None))
     elif a[:1] == ['closed'] and len(a) == 3:
         rows = [json.loads(line) for line in open(a[1]) if line.strip()]
         last = [r for r in rows if 'into' in r and r['t'] >= float(a[2])]
         sys.exit(0 if last and not last[-1].get('web') else 1)
-    elif a[:1] == ['webenv'] and len(a) == 4:
-        sys.exit(webenv(int(a[1]), a[2], a[3]))
+    elif a[:1] == ['webenv'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
+        sys.exit(webenv(int(a[1]), a[2], a[3], a[5] if len(a) == 6 else None))
     elif a[:1] == ['one-sink'] and len(a) == 4:
         try:
             sys.exit(one_sink(a[1], int(a[2]), a[3]))

@@ -275,18 +275,48 @@ time.sleep(60)`;
     ['webenv: two, the second without the variable', [[WEB, good], [WEB, { GST_PLUGIN_FEATURE_RANK: PIN }]], 1, /has PULSE_SINK=<unset>, not backchannel_tone_sink_1_1/],
     ['webenv: one, as the route needs it', [[WEB, good]], 0, /^1 WebKitWebProcess under the driver, each with PULSE_SINK=backchannel_tone_sink_1_1 and the pin \(found by exe: 1, by comm: 0\)/],
   ];
+  const stamp = path.join(dir, 'webenv.stamp');
   check('webenv: the pin is read from tone-sink.sh', !!PIN, 'no TONE_GST_PIN= line in tone-sink.sh');
   for (const [name, procs, code, line] of list) {
     const kids = procs.map(([bin, env, args]) => spawn(bin, args ?? ['60'], { env: { PATH: process.env.PATH, ...env }, stdio: 'ignore' }));
     try {
       sleepFor(300);
-      const r = spawnSync('python3', ['-I', TOOL, 'webenv', String(ROOT), SINK_NAME, PIN ?? ''], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+      fs.rmSync(stamp, { force: true });
+      const r = spawnSync('python3', ['-I', TOOL, 'webenv', String(ROOT), SINK_NAME, PIN ?? '', '--stamp', stamp], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
       const got = (r.stdout + r.stderr).trim();
       if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
+      // The stamp is written on a pass alone.
+      if (fs.existsSync(stamp) !== (code === 0) || (code === 0 && fs.readFileSync(stamp, 'utf8') !== `webenv ${SINK_NAME}\n`)) failures.push(`${name}: the stamp is ${fs.existsSync(stamp) ? JSON.stringify(fs.readFileSync(stamp, 'utf8')) : 'absent'} after exit ${r.status}`);
     } finally {
       for (const k of kids) k.kill('SIGKILL');
     }
   }
+}
+
+// The checks before the press leave stamps, and the tone's judge refuses without both, or with another
+// run's (#266's gate adversary, round 2): a check skipped by whatever wraps it turns the entry red.
+function stampCases() {
+  const out = path.join(dir, 'webkit-on-its-node-the-monitor-read.jsonl');
+  const web = path.join(dir, 'stamp.webenv');
+  const probe = path.join(dir, 'stamp.probe');
+  const run = () => spawnSync('python3', ['-I', TOOL, 'judge', out, '--stamps', web, probe, String(SINK), SINK_NAME], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  const list = [
+    ['stamps: both, this run\'s', `webenv ${SINK_NAME}\n`, `probe ${SINK}\n`, 0, /none from anything else/],
+    ['stamps: no webenv stamp', null, `probe ${SINK}\n`, 1, /the check before the press that writes stamp\.webenv never passed in this run/],
+    ['stamps: no probe stamp', `webenv ${SINK_NAME}\n`, null, 1, /the check before the press that writes stamp\.probe never passed in this run/],
+    ['stamps: another run\'s', `webenv backchannel_tone_sink_9_9\n`, `probe ${SINK}\n`, 1, /stamp\.webenv reads "webenv backchannel_tone_sink_9_9", not "webenv backchannel_tone_sink_1_1": it is not this run's/],
+  ];
+  check('stamps: the judged file is there', fs.existsSync(out), `no ${out}; the first case must have run`);
+  for (const [name, w, p, code, line] of list) {
+    for (const [f, v] of [[web, w], [probe, p]]) { if (v === null) fs.rmSync(f, { force: true }); else fs.writeFileSync(f, v); }
+    const r = run();
+    const got = (r.stdout + r.stderr).trim();
+    if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
+  }
+  // And the two checks write them when they pass: probe-judge here, webenv in its own case above.
+  const pj = path.join(dir, 'pj.stamp');
+  spawnSync('python3', ['-I', TOOL, 'probe-judge', path.join(dir, 'the-probe-the-route-then-closed.jsonl'), String(SINK), '0', '--stamp', pj], { encoding: 'utf8' });
+  check('stamps: probe-judge writes its stamp when it passes', fs.existsSync(pj) && fs.readFileSync(pj, 'utf8') === `probe ${SINK}\n`, `the stamp reads ${fs.existsSync(pj) ? JSON.stringify(fs.readFileSync(pj, 'utf8')) : 'nothing'}`);
 }
 
 // One node of the family, this run's: no node, two, or another id each refuse.
@@ -327,6 +357,7 @@ try {
   run(probeSentinel, { probe: true, sentinel: SENT.pid });
   webenvCases();
   oneSinkCases();
+  stampCases();
 } finally {
   descendant.kill();
   SENT.kill();

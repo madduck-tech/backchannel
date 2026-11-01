@@ -65,6 +65,9 @@ v = st.get('configured' if key == 'default.configured.audio.sink' else 'effectiv
 if v: print(f"update: id:0 key:'{key}' value:'{v}' type:'Spa:String:JSON'")
 `);
 shim('pw-dump', `
+if st.get('failDumpOnce') and st.get('destroyed'):
+    st['failDumpOnce'] = False; save(); sys.exit(1)
+if st.get('failDump'): sys.exit(1)
 objs = []
 for n in st['nodes']:
     objs.append({'id': n['id'], 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': n['name']}}})
@@ -147,7 +150,25 @@ check('2e moved on the seventh read', r.status === 1 && !/WENT-ON/.test(r.stdout
 // ... and a destroy that does not take is said, and leaves the id for the exit trap and restore.
 graph({ configured: HEADSET, effective: SPEAKERS, moveOnCreate: true, failDestroy: true });
 r = pass('tone_sink_create; echo WENT-ON');
-check('2f a destroy that did not take is said', r.status === 1 && /the sink could NOT be destroyed; run 'bash scripts\/lib\/tone-sink\.sh restore'/.test(r.stderr) && now().nodes.length === 1,
+check('2f a destroy that did not take is said', r.status === 1 && /the sink could not be confirmed destroyed; run 'bash scripts\/lib\/tone-sink\.sh restore'/.test(r.stderr)
+  && /is still in the graph after its destroy/.test(r.stdout) && now().nodes.length === 1,
+  `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+// ... a destroy that took, with the read after it failing once: not confirmed, so the id is kept, and the
+// exit trap's second destroy confirms it gone (#266's gate adversary, round 2, T1).
+graph({ configured: HEADSET, effective: SPEAKERS, moveOnCreate: true, failDumpOnce: true });
+r = pass('tone_sink_create; echo WENT-ON');
+check('2g a destroy whose read-back failed is not confirmed, and the trap confirms it', r.status === 1 && /could not be confirmed destroyed/.test(r.stderr)
+  && /could not be read after node \d+'s destroy, so it cannot be confirmed gone/.test(r.stdout) && now().nodes.length === 0 && !/left alone/.test(r.stdout),
+  `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+// ... and an exit with the graph unreadable and the node still there keeps the id and says so (T2).
+graph({ configured: HEADSET, effective: HEADSET });
+fs.writeFileSync(path.join(bin, 'fail-dump'), `#!/usr/bin/env python3
+import json, os
+S = os.environ['SHIM_STATE']; st = json.load(open(S)); st['failDump'] = True; json.dump(st, open(S, 'w'))
+`, { mode: 0o755 });
+r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'fail-dump'))}; echo WENT-ON`);
+check('2h an exit that cannot read the graph keeps the node and says so', r.status === 0 && /cannot be confirmed gone; run 'bash scripts\/lib\/tone-sink\.sh restore'/.test(r.stdout)
+  && now().nodes.length === 1 && !/left alone/.test(r.stdout),
   `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 graph({ configured: HEADSET, effective: SPEAKERS });
 flip({ failEffective: true });
@@ -171,7 +192,7 @@ import json, os
 S = os.environ['SHIM_STATE']; st = json.load(open(S)); st['nodes'] = [{'id': n['id'], 'name': 'someone-elses-stream'} for n in st['nodes']]; json.dump(st, open(S, 'w'))
 `, { mode: 0o755 });
 r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'reuse-id'))}`);
-check('3 an id reused by another node is left alone', r.status === 0 && !(now().destroyed ?? []).length && now().nodes.length === 1 && /no longer names backchannel_tone_sink_\d+_\d+/.test(r.stdout),
+check('3 an id reused by another node is left alone', r.status === 0 && !(now().destroyed ?? []).length && now().nodes.length === 1 && /node \d+ now names someone-elses-stream, not backchannel_tone_sink_\d+_\d+, so it is left alone/.test(r.stdout),
   `exit ${r.status}, destroyed ${JSON.stringify(now().destroyed)}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 
 // 4. Legacy: a run from before #266 that never put the default back. The next run refuses, and restore

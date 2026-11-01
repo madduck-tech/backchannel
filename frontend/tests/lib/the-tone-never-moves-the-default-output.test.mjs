@@ -6,16 +6,16 @@
 // has a name of this run's own and the driver launches the application with `PULSE_SINK` naming it.
 //
 // Held by reading the pass itself:
-// - **(a)** no line of `stage2-core-check.sh`, of `audio-harness.sh` (which it runs), or of any function
-//   the pass reaches through the files it sources, writes either default-output key. A write is
-//   `pw-metadata … <key> <value>`, `pw-metadata -d … <key>`, `pactl set-default-sink` or
-//   `wpctl set-default`. A read with no value, as `tone_sink_effective` does, is not a write. A function is
-//   reached when a reached line names it; a sourced file's own `if [ "${BASH_SOURCE[0]}" = "$0" ]` block
-//   runs only when the file is run directly, so it is not reached;
+// - **(a)** every line of `stage2-core-check.sh`, of `audio-harness.sh` (which it runs) and of every library
+//   the pass sources is read, but for the legacy `tone_sink_put_back`, which nothing read may name, and a
+//   library's direct-run block. Each line there that names `pw-metadata`, `pactl` or `wpctl` must be a
+//   known read, by file and exact text;
+// - **(a')** item 4's checks are at the pass's top level, in order before the press, with nothing between
+//   them that could skip one, and the tone's judge requires the stamps the two route checks leave;
 // - **(b)** the `tauri-driver` launch line carries `PULSE_SINK="$TONE_SINK_NAME"` and
 //   `GST_PLUGIN_FEATURE_RANK="$TONE_GST_PIN"`, and `$TONE_GST_PIN` holds the four entries item 4 names;
 // - **(c)** `tone-sink.sh` assigns `$TONE_SINK_NAME` once, as the family followed by a run id, and no file
-//   under `scripts/` assigns it anywhere else.
+//   under `scripts/` assigns it anywhere else, by `=`, `printf -v` or `read`.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,144 +30,125 @@ const lines = (rel) => fs.readFileSync(path.join(SCRIPTS, rel), 'utf8').split('\
 // --- (a) -----------------------------------------------------------------------------------------------
 
 const PASS = 'stage2-core-check.sh';
-const sources = (rel) => lines(rel).map(({ code }) => /^\s*\.\s+"\$\(.*\)\/([\w./-]+\.sh)"\s*$/.exec(code) || /^\s*\.\s+"\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)\/([\w.-]+\.sh)"\s*$/.exec(code))
-  .filter(Boolean).map((m) => (m[1].startsWith('lib/') ? m[1] : path.posix.join(path.posix.dirname(rel), m[1])));
+// The files the pass sources, by `.` or `source`, followed through each library's own. A line that sources
+// something the census cannot resolve fails it: a file it does not read could hold anything.
+const SOURCE_LINE = /^\s*(?:\.|source)\s+(.+?)\s*$/;
+const resolve = (rel, arg) => {
+  const m = /^"\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)\/([\w./-]+\.sh)"$/.exec(arg)
+    || /^"\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)\/([\w./-]+\.sh)"$/.exec(arg)
+    || /^"\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)\/([\w./-]+\.sh)"$/.exec(arg);
+  return m ? path.posix.join(path.posix.dirname(rel), m[1]) : null;
+};
 const files = [PASS];
-for (let i = 0; i < files.length; i++) for (const s of sources(files[i])) if (!files.includes(s)) files.push(s);
-check('(a) the files the pass sources', ['lib/tone-sink.sh', 'lib/harness-guard.sh'].every((f) => files.includes(f)),
-  `the census found ${JSON.stringify(files)}; it must at least reach lib/tone-sink.sh and lib/harness-guard.sh`);
+for (let i = 0; i < files.length; i++) {
+  for (const { n, code } of lines(files[i])) {
+    const m = SOURCE_LINE.exec(code);
+    if (!m) continue;
+    const target = resolve(files[i], m[1]);
+    check('(a) every sourced file is resolved', target !== null, `${files[i]}:${n}: \`${code.trim()}\` sources something the census cannot read`);
+    if (target && !files.includes(target)) files.push(target);
+  }
+}
+check('(a) the files the pass sources', ['lib/tone-sink.sh', 'lib/harness-guard.sh', 'lib/audio-check.sh'].every((f) => files.includes(f)),
+  `the census found ${JSON.stringify(files)}; it must at least reach lib/tone-sink.sh, lib/harness-guard.sh and lib/audio-check.sh`);
 
-// The pass and the harness it runs are read whole: every line of theirs is something they run. The first
-// version split them into functions too, closed one only at a `}` in column 0, and so read `js() { …; }`
-// in the core pass as open to the end of the file: 601 of its 807 lines went unread, and a move of the
-// default placed before the press passed (#266's gate adversary, round 1).
-//
-// The sourced libraries are split into functions and their top level. A function runs from `name() {` to a
-// `}` in column 0 or a line ending `; }`. Closing one early only moves lines to the top level, which is read
-// whole; closing one late would hide what follows, so a definition inside a body, or a function still open
-// at the end of its file, fails the census. A function is reached when a reached line names it.
-const WHOLE = [PASS, 'audio-harness.sh'];
-const functions = {};
+// Every line of the pass, of the harness it runs and of every library it sources is read, functions and
+// all: the first two versions split the libraries into functions and followed calls, and a function closed
+// late, or one named through a variable, hid what came after (#266's gate adversary, rounds 1 and 2). Two
+// things are not read: `tone_sink_put_back`'s body, the legacy repair only `restore` runs, and a library's
+// `if [ "${BASH_SOURCE[0]}" = "$0" ]; then` block, which runs only when the file is run directly. The
+// put-back must stay unnamed by everything read, so it stays unreached.
+const EXEMPT = { 'lib/tone-sink.sh': 'tone_sink_put_back' };
 const queue = [];
-const ends = (code) => /^\}/.test(code) || /;\s*\}\s*$/.test(code);
+const exempt = [];
 for (const rel of [...files, 'audio-harness.sh']) {
-  let fn = null; let guard = false;
+  let inExempt = false; let guard = false;
   for (const line of lines(rel)) {
-    const def = /^([A-Za-z_][\w]*)\(\)\s*\{/.exec(line.code);
-    if (WHOLE.includes(rel)) { queue.push(line); if (def) functions[def[1]] = []; continue; }
-    if (def) {
-      check('(a) no definition inside a function', fn === null, `${rel}:${line.n}: ${def[1]}() is defined inside ${fn}(), so ${fn}()'s end was not found`);
-      fn = def[1]; functions[fn] = [line]; if (/\}\s*$/.test(line.code.slice(def[0].length))) fn = null; continue;
-    }
-    if (fn) { functions[fn].push(line); if (ends(line.code)) fn = null; continue; }
-    if (/^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then/.test(line.code)) { guard = true; continue; }
-    if (guard) { if (/^fi\b/.test(line.code)) guard = false; continue; }
+    if (EXEMPT[rel] && new RegExp(`^${EXEMPT[rel]}\\(\\)\\s*\\{`).test(line.code)) { inExempt = true; exempt.push(line); continue; }
+    if (inExempt) { exempt.push(line); if (/^\s*\}\s*$/.test(line.code) || /;\s*\}\s*$/.test(line.code)) inExempt = false; continue; }
+    if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then\s*$/.test(line.code)) { guard = true; continue; }
+    if (guard) { if (/^fi\s*$/.test(line.code)) guard = false; continue; }
     queue.push(line);
   }
-  check('(a) every function closes', fn === null, `${rel}: ${fn}() is still open at the end of the file, so the census cannot tell its body from the top level`);
+  check('(a) the exempt function and the direct-run block close', !inExempt && !guard, `${rel}: ${inExempt ? EXEMPT[rel] + '()' : 'the direct-run block'} is still open at the end of the file`);
 }
-const reached = new Set();
-for (let i = 0; i < queue.length; i++) {
-  for (const name of Object.keys(functions)) {
-    if (!reached.has(name) && new RegExp(`(^|[^\\w-])${name}([^\\w-]|$)`).test(queue[i].code)) { reached.add(name); queue.push(...functions[name]); }
-  }
-}
-// Positive sentinels: the press, the pass's last line and the press's own function are among what was read.
-const passLines = lines(PASS);
+const passLines = lines(PASS).slice(0, -1);
 const lastCode = [...passLines].reverse().find(({ code }) => code.trim());
-check('(a) the census reads the press', queue.some(({ rel, code }) => rel === PASS && /^audio_check_press "The other side is heard through" "Play a tone and listen"/.test(code)),
-  'the line that presses the tone is not among the lines the census read');
 check('(a) the census reads the pass to its last line', queue.some((l) => l.rel === PASS && l.n === lastCode.n), `line ${lastCode?.n} of ${PASS} is not among the lines read`);
-check('(a) the census reaches audio_check_press', reached.has('audio_check_press') && (functions.audio_check_press ?? []).length > 1, 'audio_check_press, which the press runs, is not reached in lib/audio-check.sh');
-check('(a) the census reaches the tone sink', ['tone_sink_create', 'tone_sink_destroy', 'tone_sink_guard_default', 'tone_sink_effective'].every((f) => reached.has(f)),
-  `reached ${JSON.stringify([...reached].filter((f) => f.startsWith('tone_')))}`);
-const KEY = /^default\.(configured\.)?audio\.sink$/;
-const OTHER_KEY = /^default\.(configured\.)?audio\.source$/;
-// A logical line: a line continued with a trailing backslash is read together with the next.
-const joined = (list) => list.map((l, i) => {
-  let code = l.code; let j = i;
-  while (/\\\s*$/.test(code) && list[j + 1] && list[j + 1].rel === l.rel && list[j + 1].n === list[j].n + 1) { j++; code = code.replace(/\\\s*$/, ' ') + list[j].code; }
-  return { ...l, code };
-});
-// The words of a shell command, quotes kept, up to a redirection, a pipe or the end of the command.
-const words = (code) => {
-  const out = [];
-  for (const m of code.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s"']+/g)) {
-    if (/^(\d?>|>|\||&&|\|\||;|\)|&)/.test(m[0])) break;
-    out.push(m[0]);
-  }
-  return out;
-};
-const unquote = (w) => w.replace(/^(['"])(.*)\1$/, '$2');
-function writes(code) {
-  if (/\bpactl\s+set-default-sink\b/.test(code) || /\bwpctl\s+set-default\b/.test(code)) return true;
-  const at = code.search(/(^|[\s;(|&$`])pw-metadata\b/);
-  if (at < 0) return false;
-  const w = words(code.slice(at).replace(/^[\s;(|&$`]*pw-metadata\b/, ''));
-  let del = false; const pos = [];
-  for (let i = 0; i < w.length; i++) {
-    if (w[i] === '-n' || w[i] === '--name' || w[i] === '-r' || w[i] === '--remote') { i++; continue; }
-    if (w[i] === '-d' || w[i] === '--delete') { del = true; continue; }
-    if (w[i].startsWith('-')) continue;
-    pos.push(unquote(w[i]));
-  }
-  const [, key, value] = pos;
-  // A key the census cannot read, held in a variable, counts as the sink's.
-  const sinkKey = key !== undefined && (KEY.test(key) || (!OTHER_KEY.test(key) && /\$/.test(key)));
-  if (del) return key === undefined || sinkKey;
-  return value !== undefined && sinkKey;
-}
-const written = joined(queue).filter(({ code }) => writes(code));
-check('(a) nothing the pass reaches writes a default output', written.length === 0,
-  `writes reached from the pass, each as one logical line:\n    ${written.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('\n    ')}`);
-// The census sees what it is for: tone-sink.sh's legacy put-back writes the key, and is not reached.
-check('(a) the legacy put-back is a write the pass does not reach', joined(functions.tone_sink_put_back ?? []).some(({ code }) => writes(code)) && !reached.has('tone_sink_put_back'),
-  `tone_sink_put_back ${functions.tone_sink_put_back ? 'is' : 'is not'} defined, ${reached.has('tone_sink_put_back') ? 'is' : 'is not'} reached`);
-const RULE = [
-  ['  out=$(pw-metadata -n default 0 default.audio.sink 2>/dev/null) || return 1', false],
-  ['  pw-metadata -n default 2>/dev/null \\', false],
-  ['pw-metadata -n default 0 default.configured.audio.source "{\\"name\\":\\"$SRC_NAME\\"}" >/dev/null', false],
-  ['pw-metadata -n default 0 default.configured.audio.sink "$x" >/dev/null', true],
-  ['pw-metadata -n default 0 "$KEY" "$VALUE"', true],
-  ['pw-metadata -n default -d 0 default.audio.sink', true],
-  ['pw-metadata -n default 0 \\ default.configured.audio.sink "$x"'.replace('\\ ', ' '), true],
-  ['pactl set-default-sink backchannel_tone_sink_1_1', true],
-];
-check('(a) the write rule', RULE.every(([code, want]) => writes(code) === want), `misread: ${JSON.stringify(RULE.filter(([code, want]) => writes(code) !== want))}`);
-check('(a) a continued line is read whole', joined([{ rel: 'x', n: 1, code: 'pw-metadata -n default 0 \\' }, { rel: 'x', n: 2, code: '  default.configured.audio.sink "$x"' }]).some(({ code }) => writes(code)),
-  'a write continued onto a second line was not read as one');
+check('(a) the legacy put-back stays unreached', !queue.some(({ code }) => /(^|[^\w-])tone_sink_put_back([^\w-]|$)/.test(code)),
+  `read lines name tone_sink_put_back: ${JSON.stringify(queue.filter(({ code }) => /tone_sink_put_back/.test(code)).map(({ rel, n }) => `${rel}:${n}`))}`);
+check('(a) the put-back is a write, so its exemption is load-bearing', exempt.some(({ code }) => /pw-metadata -n default 0 default\.configured\.audio\.sink "\$orig"/.test(code)),
+  'tone_sink_put_back no longer writes the configured default, so its exemption should go');
 
-// --- (a'), item 4 at the call site: the pass runs every check before the press, at its top level, in order.
-// A unit test of each check cannot see whether the pass still calls it (the gate adversary's major).
+// **Every line that names a default-output tool is a known read, by file and exact text.** Not a rule
+// for writes: a rule missed a second call on one line, a path or a backslash before the tool, `eval`, the
+// tool's name in a variable, and options before `set-default-sink` (round 2). A list fails safe: a line
+// that names the tool anew fails until it is added here, which the diff shows. The two `audio-harness.sh`
+// writes are of the default *input*, the harness's own guard (#293), not the output.
+const KNOWN = {
+  'lib/harness-guard.sh': ['pw-metadata -n default 0 default.audio.source 2>/dev/null \\'],
+  'audio-harness.sh': [
+    'for t in pw-cli pw-cat pw-loopback pw-metadata pw-dump; do',
+    'pw-metadata -n default 2>/dev/null \\',
+    'pw-metadata -n default 0 default.configured.audio.source "{\\"name\\":\\"$SRC_NAME\\"}" >/dev/null',
+    'pw-metadata -n default 0 default.configured.audio.source "$(cat "$STATE_DIR/original-default-source")" >/dev/null || true',
+  ],
+  'lib/tone-sink.sh': [
+    'out=$(pw-metadata -n default 0 default.configured.audio.sink 2>/dev/null) || return 1',
+    'out=$(pw-metadata -n default 0 default.audio.sink 2>/dev/null) || return 1',
+  ],
+};
+const TOOL = /pw-metadata|pactl|wpctl/;
+const unknown = queue.filter(({ rel, code }) => TOOL.test(code) && !(KNOWN[rel] ?? []).includes(code.trim()));
+check('(a) every line that names a default-output tool is a known read', unknown.length === 0,
+  `lines the pass reaches that name pw-metadata, pactl or wpctl and are not known reads:\n    ${unknown.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('\n    ')}`);
+const stale = Object.entries(KNOWN).flatMap(([rel, list]) => list.filter((text) => !queue.some((l) => l.rel === rel && l.code.trim() === text)).map((text) => `${rel}: ${text}`));
+check('(a) every known read is still there', stale.length === 0, `known reads no longer in the files: ${JSON.stringify(stale)}`);
+
+// --- (a'), item 4 at the call site: the pass runs every check before the press, at its top level, in order,
+// and nothing between the first check and the press can skip one or swallow its `die`: no block opens there
+// that does not close on its own line, no heredoc, no `exit`, no definition (round 2's major). At run time
+// the two route checks leave stamps the tone's judge requires, so a check skipped anyway turns the entry red.
+const ends = (code) => /^\s*\}/.test(code) || /;\s*\}\s*$/.test(code);
 const passTop = (() => {
   const out = []; let fn = null;
   for (const line of passLines) {
-    const def = /^([A-Za-z_][\w]*)\(\)\s*\{/.exec(line.code);
-    if (def) { fn = /\}\s*$/.test(line.code.slice(def[0].length)) ? null : def[1]; continue; }
+    const def = /^(?:function\s+)?([A-Za-z_][\w]*)(?:\(\))?\s*\{/.exec(line.code);
+    if (def && /^(function\s|[A-Za-z_][\w]*\(\))/.test(line.code)) { fn = /\}\s*$/.test(line.code.slice(def[0].length)) ? null : def[1]; continue; }
     if (fn) { if (ends(line.code)) fn = null; continue; }
     out.push(line);
   }
   return out;
 })();
 const SEQUENCE = [
-  ['the web processes', /^WEBENV=\$\(python3 -I scripts\/lib\/tone-graph\.py webenv "\$DRIVER_PID" "\$TONE_SINK_NAME" "\$TONE_GST_PIN"\) \|\| die /],
+  ['the web processes', /^WEBENV=\$\(python3 -I scripts\/lib\/tone-graph\.py webenv "\$DRIVER_PID" "\$TONE_SINK_NAME" "\$TONE_GST_PIN" --stamp "\$WEBENV_STAMP"\) \|\| die /],
   ['one node of the family', /^ONE=\$\(python3 -I scripts\/lib\/tone-graph\.py one-sink "\$TONE_SINK_FAMILY" "\$TONE_SINK_ID" "\$TONE_SINK_NAME"\) \|\| die /],
   ['the default, again', /^tone_sink_guard_default\s*$/],
   ['the probe\'s sampler', /^python3 -I scripts\/lib\/tone-graph\.py watch "\$TONE_SINK_ID" "\$DRIVER_PID" "\$PROBE_GRAPH" .*&\s*$/],
   ['the probe', /scripts\/lib\/web-audio-probe\.js/],
   ['the wait for the probe\'s stream to close', /tone-graph\.py closed "\$PROBE_GRAPH" "\$ANSWERED"/],
   ['Web Audio started', /\|\| die "before the press: Web Audio did not start/],
-  ['the probe\'s route', /^ROUTE=\$\(python3 -I scripts\/lib\/tone-graph\.py probe-judge "\$PROBE_GRAPH" "\$TONE_SINK_ID" "\$ANSWERED"\) \|\| die /],
+  ['the probe\'s route', /^ROUTE=\$\(python3 -I scripts\/lib\/tone-graph\.py probe-judge "\$PROBE_GRAPH" "\$TONE_SINK_ID" "\$ANSWERED" --stamp "\$PROBE_STAMP"\) \|\| die /],
   ['the tone\'s sampler', /^python3 -I scripts\/lib\/tone-graph\.py watch "\$TONE_SINK_ID" "\$DRIVER_PID" "\$GRAPH" .*&\s*$/],
   ['the wait for its first sample', /\|\| die "before the press: the tone's sampler wrote no sample/],
   ['the press', /^audio_check_press "The other side is heard through" "Play a tone and listen"\s*$/],
-  ['the judge', /^VERDICT=\$\(python3 -I scripts\/lib\/tone-graph\.py judge "\$GRAPH"\) \|\| TONE_FAILS\+=/],
+  ['the judge, with both stamps', /^VERDICT=\$\(python3 -I scripts\/lib\/tone-graph\.py judge "\$GRAPH" --stamps "\$WEBENV_STAMP" "\$PROBE_STAMP" "\$TONE_SINK_ID" "\$TONE_SINK_NAME"\) \|\| TONE_FAILS\+=/],
 ];
-let last = -1;
+let last = -1; let first = null; let press = null;
 for (const [what, re] of SEQUENCE) {
   const at = passTop.filter(({ code }) => re.test(code));
   check(`(a') ${what}`, at.length === 1 && at[0].n > last, at.length === 1 ? `at line ${at[0].n}, not after line ${last}` : `${at.length} top-level lines of ${PASS} match ${re}`);
-  if (at.length === 1) last = Math.max(last, at[0].n);
+  if (at.length === 1) { last = Math.max(last, at[0].n); first ??= at[0].n; if (what === 'the press') press = at[0].n; }
+}
+if (first !== null && press !== null) {
+  const span = passLines.filter(({ n }) => n >= first && n <= press);
+  const opens = span.filter(({ code }) => (/^\s*(if|case|while|until|for|select|function)\b/.test(code) || /^\s*[{(]/.test(code)) && !/(\bfi|\besac|\bdone|\}|\))\s*$/.test(code));
+  const heredocs = span.filter(({ code }) => /<<(?!<)/.test(code));
+  const exits = span.filter(({ code }) => /(^|[;&|{(]\s*|\s)(exit|return)(\s|;|$)/.test(code));
+  const defs = span.filter(({ code }) => /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\(\)\s*\{)/.test(code));
+  for (const [what, found] of [['a block that does not close on its line', opens], ['a heredoc', heredocs], ['an exit or return', exits], ['a definition', defs]]) {
+    check(`(a') nothing between the first check and the press can skip one: ${what}`, found.length === 0, found.map(({ n, code }) => `${PASS}:${n}: ${code.trim()}`).join('; '));
+  }
 }
 
 // --- (b) -----------------------------------------------------------------------------------------------
@@ -189,7 +170,7 @@ const walk = (dir) => {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) { if (e.name !== '__pycache__') walk(p); continue; }
     fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => {
-      if (!/^\s*#/.test(l) && /(^|[\s;(])(export\s+|local\s+|readonly\s+|declare\s+(-\w+\s+)*)?TONE_SINK_NAME=/.test(l)) assigned.push({ rel: path.relative(SCRIPTS, p), n: i + 1, l: l.trim() });
+      if (!/^\s*#/.test(l) && (/(^|[\s;(])(export\s+|local\s+|readonly\s+|declare\s+(-\w+\s+)*)?TONE_SINK_NAME=/.test(l) || /\bprintf\s+-v\s*['"]?TONE_SINK_NAME\b/.test(l) || /(^|[;&|(]\s*)read\s+(-\S+\s+)*([A-Za-z_]\w*\s+)*TONE_SINK_NAME\b/.test(l.trim()))) assigned.push({ rel: path.relative(SCRIPTS, p), n: i + 1, l: l.trim() });
     });
   }
 };
@@ -200,4 +181,4 @@ check('(c) one assignment of TONE_SINK_NAME, the family and a run id',
 check('(c) the family is the constant', /^TONE_SINK_FAMILY=backchannel_tone_sink$/m.test(sink), 'no `TONE_SINK_FAMILY=backchannel_tone_sink` line in tone-sink.sh');
 
 assert.deepEqual(failures, [], `\n  ${failures.join('\n  ')}`);
-console.log(`ok - the tone never moves the default output: all ${passLines.length} lines of the pass and ${queue.length} in all read, through ${files.length} files and ${reached.size} functions, none writing a default-output key; the ${SEQUENCE.length} steps before and at the press in order; the driver is launched with PULSE_SINK and the pin; TONE_SINK_NAME is assigned once, the family and a run id`);
+console.log(`ok - the tone never moves the default output: all ${passLines.length} lines of the pass and ${queue.length} in all read, through ${files.length} files, every line naming a default-output tool a known read; the ${SEQUENCE.length} steps before and at the press in order, nothing between them able to skip one; the driver is launched with PULSE_SINK and the pin; TONE_SINK_NAME is assigned once, the family and a run id`);
