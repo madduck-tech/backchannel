@@ -67,11 +67,14 @@ function fixture(name) {
   return { root, main, add };
 }
 
-function sweep(fx, args = [], env = {}) {
+function sweep(fx, args = [], env = {}, cwd = fx.root) {
   const e = { ...process.env, HOME: path.join(fx.root, 'home'), BC_SWEEP_REPO: fx.main, ...env };
   delete e.CLAUDE_PROJECT_DIR;
   Object.assign(e, env);
-  const r = spawnSync('bash', [path.join(fx.main, 'scripts/disk-sweep.sh'), ...args], { cwd: fx.root, encoding: 'utf8', env: e });
+  // The repository the sweep acts on is the fixture's, asserted before every run (#257, v10).
+  assert.equal(e.BC_SWEEP_REPO, fx.main, 'BC_SWEEP_REPO does not name the fixture');
+  assert.ok(fs.realpathSync(e.BC_SWEEP_REPO).startsWith(fs.realpathSync(base)), `BC_SWEEP_REPO is outside the fixture: ${e.BC_SWEEP_REPO}`);
+  const r = spawnSync('bash', [path.join(fx.main, 'scripts/disk-sweep.sh'), ...args], { cwd, encoding: 'utf8', env: e });
   return { status: r.status, out: r.stdout + r.stderr };
 }
 const registered = (fx) => git(fx.main, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9));
@@ -88,6 +91,9 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
   fs.symlinkSync(path.join(outside, 'target'), path.join(linked, 'target'));
   fs.mkdirSync(path.join(linked, 'frontend'), { recursive: true });
   fs.symlinkSync(path.join(outside, 'nm'), path.join(linked, 'frontend', 'node_modules'));
+  // A second worktree reaches the same outside target and is kept for a reason of its own, so `linked` is not
+  // the last link to it (condition 8).
+  const linked2 = fx.add('linked2'); fs.symlinkSync(path.join(outside, 'target'), path.join(linked2, 'target')); write(path.join(linked2, 'mine.md'), 'somebody\'s\n');
   const allowed = fx.add('allowed');
   for (const f of ['target/debug/x', 'frontend/.next/x', 'frontend/out/x', 'frontend/storybook-static/x', 'frontend/src-tauri/binaries/x',
     'frontend/src-tauri/gen/schemas/x', 'frontend/tsconfig.tsbuildinfo', 'frontend/next-env.d.ts', 'frontend/src-tauri/scripts/__pycache__/x.pyc']) {
@@ -98,6 +104,7 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
   const unborn = fx.add('unborn'); git(unborn, 'checkout', '-q', '--orphan', 'unborn-branch');
   const reflogOnly = fx.add('reflog-only'); git(reflogOnly, 'checkout', '-q', '--detach');
   write(path.join(reflogOnly, 'lost.txt'), 'only the reflog holds this\n'); git(reflogOnly, 'add', 'lost.txt'); git(reflogOnly, 'commit', '-qm', 'held by nothing but the reflog');
+  const lostCommit = git(reflogOnly, 'rev-parse', 'HEAD').trim().slice(0, 12);
   git(reflogOnly, 'checkout', '-q', '--detach', 'origin/main');
   const unmerged = fx.add('unmerged', { merged: false });
   const touched = fx.add('touched');
@@ -105,7 +112,7 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
   const owned = fx.add('owned');
   const locked = fx.add('locked'); git(fx.main, 'worktree', 'lock', locked);
   const vanished = fx.add('vanished');
-  for (const p of [fx.main, done, tracked, untracked, ignored, linked, allowed, genUntracked, corrupt, unborn, reflogOnly, unmerged, touched, sleeping, owned, locked]) age(p);
+  for (const p of [fx.main, done, tracked, untracked, ignored, linked, linked2, allowed, genUntracked, corrupt, unborn, reflogOnly, unmerged, touched, sleeping, owned, locked]) age(p);
   fs.writeFileSync(path.join(fx.main, '.git', 'worktrees', 'corrupt', 'index'), 'not an index');   // git status now fails there
   const t = new Date(Date.now() - 3600 * 1000);
   fs.utimesSync(path.join(touched, 'frontend/src/app/page.tsx'), t, t);   // tracked, content unchanged, an hour ago
@@ -121,7 +128,7 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
   assert.ok(gone(allowed), `a worktree holding only what builds regenerate was kept:\n${r.out}`);
   for (const [p, why] of [[tracked, 'a tracked file changed'], [untracked, '?? notes.md, which nobody has added'], [ignored, '!! frontend/models/x.bin, which no build regenerates'],
     [genUntracked, '?? frontend/src-tauri/gen/android/app/build.gradle.kts'], [corrupt, 'git status failed in it'], [unborn, 'its HEAD is no commit'],
-    [reflogOnly, 'which no branch, tag or remote holds'],
+    [reflogOnly, `its HEAD's reflog holds ${lostCommit}, which no branch, tag or remote holds`], [linked2, '?? mine.md'],
     [unmerged, 'not in origin/main'], [touched, 'written in the last 24 hours'], [sleeping, 'works in it'], [owned, 'CLAUDE_PROJECT_DIR']]) {
     assert.ok(fs.existsSync(p), `${path.basename(p)} was removed:\n${r.out}`);
     assert.ok(r.out.includes(`kept ${p}:`) && r.out.includes(why), `${path.basename(p)} was kept without its reason (${why}):\n${r.out}`);
@@ -136,12 +143,121 @@ test('a merged, clean, idle worktree is removed and named with its size; what is
 test('--dry-run names every candidate and removes nothing', () => {
   const fx = fixture('dry');
   const a = fx.add('a'); const b = fx.add('b'); const kept = fx.add('kept'); write(path.join(kept, 'mine.txt'), 'x');
-  for (const p of [fx.main, a, b, kept]) age(p);
+  const locked = fx.add('locked'); git(fx.main, 'worktree', 'lock', locked);
+  for (const p of [fx.main, a, b, kept, locked]) age(p);
   const r = sweep(fx, ['--dry-run']);
   assert.equal(r.status, 0, r.out);
   assert.ok(fs.existsSync(a) && fs.existsSync(b), `--dry-run removed something:\n${r.out}`);
   for (const p of [a, b]) assert.match(r.out, new RegExp(`would remove ${p} \\(\\S+\\)`), `--dry-run did not name ${p}`);
   assert.match(r.out, new RegExp(`kept ${kept}:`));
+  const named = (p) => new RegExp(`(kept|would remove) ${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[: ]`).test(r.out);
+  assert.ok(!named(locked) && !named(fx.main), `--dry-run judged the locked or main worktree:\n${r.out}`);
+});
+
+// Condition 8: a target outside every checkout is found only through the worktrees that link it, so the last
+// done link to it is kept, decided from this run's judgements, the same in a dry run and a live one (#257, v10).
+// A kept worktree reaching the same target lets a done link go, and a target inside a done worktree goes with it.
+test('the last link to an outside target is kept; of two done links, one goes, and --dry-run splits them the same', () => {
+  const fx = fixture('anchor');
+  const lone = fx.add('lone'); const t1 = path.join(fx.root, 'outside1', 'target'); write(path.join(t1, 'x'), 'cache');
+  fs.symlinkSync(t1, path.join(lone, 'target'));
+  const p1 = fx.add('pair1'); const p2 = fx.add('pair2'); const t2 = path.join(fx.root, 'outside2', 'target'); write(path.join(t2, 'x'), 'cache');
+  fs.symlinkSync(t2, path.join(p1, 'target')); fs.symlinkSync(t2, path.join(p2, 'target'));
+  const held = fx.add('held', { merged: false }); const beside = fx.add('beside'); const t3 = path.join(fx.root, 'outside3', 'target'); write(path.join(t3, 'x'), 'cache');
+  fs.symlinkSync(t3, path.join(held, 'target')); fs.symlinkSync(t3, path.join(beside, 'target'));
+  const owner = fx.add('owner'); write(path.join(owner, 'target', 'x'), 'cache'); const borrower = fx.add('borrower');
+  fs.symlinkSync(path.join(owner, 'target'), path.join(borrower, 'target'));
+  for (const p of [fx.main, lone, p1, p2, held, beside, owner, borrower]) age(p);
+  const dry = sweep(fx, ['--dry-run']);
+  assert.match(dry.out, new RegExp(`kept ${lone}: it is the last link to ${fs.realpathSync(t1)}`), `the lone link was not kept:\n${dry.out}`);
+  for (const p of [beside, owner, borrower]) assert.ok(dry.out.includes(`would remove ${p} (`), `${path.basename(p)} was not removed:\n${dry.out}`);
+  const dryKept = [p1, p2].filter((p) => dry.out.includes(`kept ${p}: it is the last link`));
+  const dryGone = [p1, p2].filter((p) => dry.out.includes(`would remove ${p} (`));
+  assert.ok(dryKept.length === 1 && dryGone.length === 1, `of two done links, not exactly one kept in the dry run:\n${dry.out}`);
+  const live = sweep(fx);
+  assert.ok(fs.existsSync(lone) && fs.existsSync(dryKept[0]) && gone(dryGone[0]), `the live run split them differently from the dry run:\n${live.out}`);
+  assert.ok(fs.existsSync(path.join(t2, 'x')), 'the outside target lost its files');
+});
+
+// Condition 4: `git log -g` exits 0 with no output when the reflog cannot be read, or sits behind a logs/ it
+// cannot search (measured, git 2.43.0), so a commit only the reflog holds would go unseen (#257, round 7).
+test('a reflog the sweep cannot read keeps the worktree, as a file, behind its directory, or as a directory', () => {
+  assert.notEqual(process.getuid?.(), 0, 'run as root, every permission cell would pass vacuously');
+  const fx = fixture('reflog');
+  const cells = ['file', 'dir', 'notafile'].map((name) => {
+    const w = fx.add(name); git(w, 'checkout', '-q', '--detach');
+    write(path.join(w, 'lost.txt'), 'held by the reflog alone\n'); git(w, 'add', 'lost.txt'); git(w, 'commit', '-qm', 'reflog only');
+    git(w, 'checkout', '-q', '--detach', 'origin/main');
+    const log = git(w, 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD').trim();
+    return { name, w, log };
+  });
+  for (const c of cells) age(c.w);
+  age(fx.main);
+  const [file, dir, notafile] = cells;
+  const saved = path.join(fx.root, 'saved-log');
+  try {
+    fs.chmodSync(file.log, 0o000);
+    fs.chmodSync(path.dirname(dir.log), 0o000);
+    fs.copyFileSync(notafile.log, saved); fs.rmSync(notafile.log); fs.mkdirSync(notafile.log);
+    const r = sweep(fx, ['--dry-run']);
+    for (const c of cells) assert.ok(r.out.includes(`kept ${c.w}: its HEAD's reflog could not be read`), `${c.name}: not kept for its reflog:\n${r.out}`);
+  } finally {
+    fs.chmodSync(file.log, 0o644);
+    fs.chmodSync(path.dirname(dir.log), 0o755);
+  }
+});
+
+test('with no local origin/main, nothing is removed', () => {
+  const fx = fixture('no-origin'); const w = fx.add('w'); age(w); age(fx.main);
+  git(fx.main, 'update-ref', '-d', 'refs/remotes/origin/main');
+  const r = sweep(fx);
+  assert.ok(fs.existsSync(w) && r.out.includes(`kept ${w}: there is no local origin/main to judge it by`), r.out);
+});
+
+// Plain `git worktree remove`, not --force: work that arrives between the check and the removal is git's to refuse.
+test('a worktree that gains untracked work between the check and the removal is refused by git, and kept', () => {
+  const fx = fixture('race'); const w = fx.add('w'); age(w); age(fx.main);
+  const shim = path.join(fx.root, 'shim'); fs.mkdirSync(shim);
+  const realGit = execFileSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(shim, 'git'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = remove ] && printf 'arrived\\n' > ${JSON.stringify(path.join(w, 'late.md'))}; done\nexec ${JSON.stringify(realGit)} "$@"\n`, { mode: 0o755 });
+  const r = sweep(fx, [], { PATH: `${shim}:${process.env.PATH}` });
+  assert.ok(fs.existsSync(path.join(w, 'late.md')), `the late work was deleted:\n${r.out}`);
+  assert.match(r.out, new RegExp(`could not remove ${w}:`), `git's refusal was not printed:\n${r.out}`);
+});
+
+test('a directory nobody can open keeps the worktree', () => {
+  assert.notEqual(process.getuid?.(), 0, 'run as root, the cell would pass vacuously');
+  const fx = fixture('unopenable'); const w = fx.add('w'); const d = path.join(w, 'frontend', 'closed'); write(path.join(d, 'x'), 'x');
+  age(w); age(fx.main);
+  try {
+    fs.chmodSync(d, 0o000);
+    const r = sweep(fx, ['--dry-run']);
+    assert.ok(r.out.includes(`kept ${w}: a directory under it could not be read`), r.out);
+  } finally { fs.chmodSync(d, 0o755); }
+});
+
+// A /proc entry the sweep cannot read is skipped, a stated blind spot; an empty listing keeps everything.
+test('an unreadable /proc entry is skipped, and an empty /proc keeps the worktree', () => {
+  assert.notEqual(process.getuid?.(), 0, 'run as root, nothing in /proc is unreadable');
+  const fx = fixture('proc'); const hidden = fx.add('hidden'); const w = fx.add('w');
+  for (const p of [fx.main, hidden, w]) age(p);
+  // Non-dumpable, and no exec afterwards: an exec makes the working directory readable again (measured).
+  const child = spawn('python3', ['-c', 'import ctypes,time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); time.sleep(60)'], { cwd: hidden, stdio: 'ignore' }); sleepers.push(child);
+  const until = Date.now() + 5000;
+  let readable = true;
+  while (Date.now() < until) { try { fs.readlinkSync(`/proc/${child.pid}/cwd`); } catch { readable = false; break; } }
+  assert.ok(!readable, 'the child\'s working directory is still readable, so the cell would show nothing');
+  const r = sweep(fx, ['--dry-run']);
+  assert.match(r.out, new RegExp(`would remove ${hidden} \\(`), `an unreadable entry was not skipped:\n${r.out}`);
+  const empty = path.join(fx.root, 'empty-proc'); fs.mkdirSync(empty);
+  const e = sweep(fx, ['--dry-run'], { BC_SWEEP_PROC: empty });
+  assert.ok(e.out.includes(`kept ${w}: no process is listed in ${empty}`), `an empty /proc did not keep the worktree:\n${e.out}`);
+});
+
+test('a worktree whose path holds a space is judged and removed like any other', () => {
+  const fx = fixture('space'); const w = path.join(fx.root, 'with space'); git(fx.main, 'worktree', 'add', '-q', '-b', 'with-space', w, 'origin/main'); age(w); age(fx.main);
+  const r = sweep(fx);
+  assert.ok(gone(w) && r.out.includes(`removed ${w} (`), r.out);
 });
 
 // The allow-list is read for ignored paths only, and an untracked path always keeps a worktree. Every
@@ -173,8 +289,9 @@ test('every Stage 2 entry finds its root through git rev-parse --git-dir', () =>
 });
 
 test('the workflow rule says how engineering copies are made and removed', () => {
-  const rule = fs.readFileSync(path.join(repo, '.claude/rules/workflow.md'), 'utf8');
-  for (const s of ['`git worktree add`', '`git worktree remove`', '`git worktree lock --reason release`', '`scripts/disk-sweep.sh`']) assert.ok(rule.includes(s), `workflow.md does not say ${s}`);
+  const rule = fs.readFileSync(path.join(repo, '.claude/rules/workflow.md'), 'utf8').replace(/\s+/g, ' ');
+  for (const s of ['`git worktree add`', '`git worktree remove`', '`git worktree lock --reason release`', '`scripts/disk-sweep.sh`',
+    'A gate runs in a linked worktree, never in the main checkout']) assert.ok(rule.includes(s), `workflow.md does not say ${s}`);
 });
 
 test('the real repository\'s worktrees are untouched by these tests', () => {

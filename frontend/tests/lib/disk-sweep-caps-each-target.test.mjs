@@ -62,15 +62,15 @@ function fixture(name, make = (main) => target(path.join(main, 'target'))) {
   make(main, root);
   return { root, main };
 }
-function sweep(fx, cap, args = []) {
+function sweep(fx, cap, args = [], extraEnv = {}, cwd = fx.root) {
   for (const l of execFileSync('git', ['-C', fx.main, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).split('\n')) {
     if (!l.startsWith('worktree ')) continue;
     const t = path.join(l.slice(9), 'target');
     if (fs.existsSync(t)) assert.ok(fs.realpathSync(t).startsWith(base), `a target outside the fixture: ${fs.realpathSync(t)}`);
   }
-  const env = { ...process.env, HOME: path.join(fx.root, 'home'), BC_SWEEP_REPO: fx.main, BC_TARGET_CAP_BYTES: String(cap) };
+  const env = { ...process.env, HOME: path.join(fx.root, 'home'), BC_SWEEP_REPO: fx.main, BC_TARGET_CAP_BYTES: String(cap), ...extraEnv };
   delete env.CLAUDE_PROJECT_DIR;
-  const r = spawnSync('bash', [path.join(fx.main, 'scripts/disk-sweep.sh'), ...args], { cwd: fx.root, encoding: 'utf8', env });
+  const r = spawnSync('bash', [path.join(fx.main, 'scripts/disk-sweep.sh'), ...args], { cwd, encoding: 'utf8', env });
   return { status: r.status, out: r.stdout + r.stderr };
 }
 const has = (t, p) => fs.existsSync(path.join(t, p));
@@ -130,9 +130,12 @@ for (const lock of LOCKS) {
   });
 }
 
-for (const [what, tag] of [['no CACHEDIR.TAG', false], ['another tool\'s CACHEDIR.TAG', PIPX_TAG]]) {
+// Cargo's line alone, with no signature, is not Cargo's tag either: without this cell, dropping the signature half
+// of the check could not go red (#257, v10).
+const CARGO_LINE_ALONE = '# This file is a cache directory tag created by cargo.\n';
+for (const [what, tag] of [['no CACHEDIR.TAG', false], ['another tool\'s CACHEDIR.TAG', PIPX_TAG], ['Cargo\'s line alone', CARGO_LINE_ALONE]]) {
   test(`a target with ${what} is left alone`, () => {
-    const fx = fixture(`untagged-${tag ? 'pipx' : 'none'}`, (main) => target(path.join(main, 'target'), { tag })); const t = path.join(fx.main, 'target');
+    const fx = fixture(`untagged-${what.replace(/\W+/g, '-')}`, (main) => target(path.join(main, 'target'), { tag })); const t = path.join(fx.main, 'target');
     const r = sweep(fx, 0, ['--profiles']);
     assert.ok(has(t, 'debug/incremental/s1/x.bin') && has(t, 'debug/deps/libx.rlib'), `a target with ${what} was cut:\n${r.out}`);
     assert.match(r.out, /left .* alone: it has no Cargo CACHEDIR.TAG/);
@@ -238,6 +241,70 @@ test('one target shared by two worktrees is measured once, and a target outside 
   assert.equal(lines.length, 1, `one target linked from two worktrees was planned twice:\n${dry.out}`);
   const r = sweep(fx, bytes(t) - bytes(path.join(t, 'debug/incremental')) + 4096);
   assert.ok(!has(t, 'debug/incremental'), `a target outside every worktree was not capped:\n${r.out}`);
+});
+
+// A target still over the cap is named, with what kept it there (#257, v10).
+test('a target left over the cap is named, with its size and the reason', () => {
+  const fx = fixture('stays'); const t = path.join(fx.main, 'target');
+  const r = sweep(fx, 0);
+  assert.match(r.out, new RegExp(`${t} stays over the cap at \\S+: .*profiles are emptied only under --profiles`), `a target over its cap was not named:\n${r.out}`);
+});
+
+// The lock is held while deleting: an rm that tries the profile's locks on every path it deletes never gets one.
+test('the sweep holds the profile\'s Cargo locks while it deletes there', () => {
+  const fx = fixture('held'); const t = path.join(fx.main, 'target');
+  const shim = path.join(fx.root, 'shim'); fs.mkdirSync(shim);
+  const log = path.join(fx.root, 'rm-log');
+  fs.writeFileSync(path.join(shim, 'rm'), `#!/bin/bash
+for a in "$@"; do case "$a" in -*) continue ;; esac
+  for l in .cargo-lock .cargo-build-lock .cargo-artifact-lock; do
+    d=$a; while [ "$d" != / ] && [ "$d" != . ]; do
+      if [ -e "$d/$l" ]; then if flock -n "$d/$l" true; then echo "GOT $d/$l while deleting $a" >> ${JSON.stringify(log)}; else echo "held $d/$l" >> ${JSON.stringify(log)}; fi; break; fi
+      d=$(dirname "$d")
+    done
+  done
+done
+exec /bin/rm "$@"
+`, { mode: 0o755 });
+  const r = sweep(fx, 0, ['--profiles'], { PATH: `${shim}:${process.env.PATH}` });
+  const seen = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  assert.match(seen, /held /, `the shim never ran inside a profile, so it shows nothing:\n${r.out}`);
+  assert.doesNotMatch(seen, /GOT /, `the sweep deleted without holding the profile's lock:\n${seen}`);
+});
+
+// Under --profiles, a target another worktree links is not emptied while a process works in that worktree. The
+// main worktree is not judged, nor the sweep's own (#257, v10). Today's layout: the target is a directory in the
+// main worktree, linked from two others.
+test('step 3 waits for a process in a linking worktree, and not for one in the main or the sweep\'s own', () => {
+  const layout = (name) => fixture(name, (main, root) => {
+    target(path.join(main, 'target'));
+    for (const w of ['linkA', 'linkB']) { git(main, 'worktree', 'add', '-q', '--detach', path.join(root, w), 'HEAD'); fs.symlinkSync(path.join(main, 'target'), path.join(root, w, 'target')); }
+  });
+  const nap = (cwd) => { const h = spawn('sleep', ['30'], { cwd, stdio: 'ignore' }); h.unref(); holders.push(h); return h; };
+  const emptied = (t) => !has(t, 'x86_64-pc-windows-msvc/debug/deps/libz.rlib');
+  { const fx = layout('lay-main'); const t = path.join(fx.main, 'target'); const h = nap(fx.main);
+    const r = sweep(fx, 0, ['--profiles']); h.kill('SIGKILL');
+    assert.ok(emptied(t), `a process in the main worktree held step 3:\n${r.out}`); }
+  { const fx = layout('lay-link'); const t = path.join(fx.main, 'target'); const h = nap(path.join(fx.root, 'linkA'));
+    const r = sweep(fx, 0, ['--profiles']); h.kill('SIGKILL');
+    assert.ok(!emptied(t), `a profile was emptied while a process worked in a linking worktree:\n${r.out}`);
+    assert.match(r.out, new RegExp(`a process works in ${path.join(fx.root, 'linkA')}, which links this target`), r.out); }
+  { const fx = layout('lay-own'); const t = path.join(fx.main, 'target'); const own = path.join(fx.root, 'linkB'); const h = nap(own);
+    const r = sweep(fx, 0, ['--profiles'], {}, own); h.kill('SIGKILL');
+    assert.ok(emptied(t), `a process in the sweep's own worktree held step 3:\n${r.out}`); }
+  { const fx = layout('lay-empty'); const t = path.join(fx.main, 'target'); const empty = path.join(fx.root, 'empty-proc'); fs.mkdirSync(empty);
+    const r = sweep(fx, 0, ['--profiles'], { BC_SWEEP_PROC: empty });
+    assert.ok(!emptied(t), `a profile was emptied with an empty /proc:\n${r.out}`);
+    assert.match(r.out, new RegExp(`no process is listed in ${empty}, so nothing shows ${path.join(fx.root, 'linkA')} idle`), r.out); }
+});
+
+// An empty process listing proves nothing is running, so steps 2 and 3 remove nothing they would judge in use.
+test('with an empty /proc, no AppImage is removed and no profile emptied, and the reason names it', () => {
+  const fx = fixture('empty-proc'); const t = path.join(fx.main, 'target');
+  const empty = path.join(fx.root, 'empty-proc'); fs.mkdirSync(empty);
+  const r = sweep(fx, 0, ['--profiles'], { BC_SWEEP_PROC: empty });
+  assert.ok(has(t, 'release/bundle/appimage/old.AppImage') && has(t, 'x86_64-pc-windows-msvc/debug/deps/libz.rlib'), `something was removed with an empty /proc:\n${r.out}`);
+  assert.match(r.out, new RegExp(`stays over the cap at \\S+: .*no process is listed in ${empty}`), r.out);
 });
 
 test('a symlink inside a target is removed as a link, never followed', () => {

@@ -32,6 +32,8 @@ Normative source: `docs/development-workflow.md`. Decisions: `docs/decisions/REA
 - An adversary's or a control's copy of the repository is a `git worktree add`, built without a
   `CARGO_TARGET_DIR` outside it, and removed with `git worktree remove`, never `rm -rf`. A release
   worktree is locked with `git worktree lock --reason release` until the release is published.
-  `scripts/disk-sweep.sh` removes the rest once they are merged and idle (#257).
+  `scripts/disk-sweep.sh` removes the rest once they are merged and idle (#257). A gate runs in a linked
+  worktree, never in the main checkout, where the agent and the IDE always work: the sweep's cap does not
+  judge the main checkout's processes, so a gate there is not protected from another gate's sweep.
 - Report outcomes faithfully: failed checks, skipped steps and unverified platforms are stated,
   never implied. A readiness claim without a gopnik verdict is not made.
