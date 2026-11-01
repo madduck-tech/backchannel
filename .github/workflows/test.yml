@@ -163,6 +163,16 @@ jobs:
           [ "$rc" -eq 0 ] || exit "$rc"
           [ "${n:-0}" -ge 83 ] || { echo "ran ${n:-0} loopback tests, expected at least 83"; exit 1; }
 
+      # The HAL spike's census, comparator and sudo-script guards (#316). Same count check.
+      - name: HAL spike scripts tests (Python)
+        run: |
+          set -o pipefail
+          rc=0; out=$(python3 -I -B -m unittest discover -s scripts/macos-hal -p 'test_*.py' 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p')
+          [ "$rc" -eq 0 ] || exit "$rc"
+          [ "${n:-0}" -ge 27 ] || { echo "ran ${n:-0} HAL spike tests, expected at least 27"; exit 1; }
+
       - name: List what this platform ignores
         run: cargo test --workspace -- --ignored --list
 
