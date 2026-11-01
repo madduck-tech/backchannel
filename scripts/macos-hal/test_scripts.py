@@ -36,6 +36,26 @@ class TheScripts(unittest.TestCase):
         self.assertIn("refusing to install BlackHole2ch.driver", r.stderr)
         self.assertFalse(os.path.exists(marker), "sudo was called")
 
+    def test_install_copies_the_bundle_itself_even_with_a_trailing_slash(self):
+        # Every outside command is faked and records its arguments, so nothing reaches /Library.
+        d = tempfile.mkdtemp()
+        bundle = os.path.join(d, "BackchannelSpike.driver")
+        os.makedirs(os.path.join(bundle, "Contents"))
+        fake = os.path.join(d, "bin")
+        os.makedirs(fake)
+        calls = os.path.join(d, "calls")
+        for name, body in (("sudo", 'echo "sudo $@" >> CALLS'), ("codesign", "true"), ("log", "true"),
+                           ("python3", 'case "$*" in *compare*) echo "{}";; *) echo "{}";; esac')):
+            with open(os.path.join(fake, name), "w") as f:
+                f.write("#!/bin/sh\n" + body.replace("CALLS", calls) + "\nexit 0\n")
+            os.chmod(os.path.join(fake, name), 0o755)
+        r = subprocess.run(["bash", os.path.join(HERE, "install.sh"), bundle + "/"], capture_output=True, text=True,
+                           env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin"})
+        lines = open(calls).read().splitlines()
+        cp = [l for l in lines if l.startswith("sudo cp")]
+        self.assertEqual(len(cp), 1, (lines, r.stderr))
+        self.assertTrue(cp[0].endswith(f"{bundle} /Library/Audio/Plug-Ins/HAL/BackchannelSpike.driver"), cp[0])
+
     def test_every_removal_globs_only_backchannel(self):
         for name in ("remove.sh", "recover.sh"):
             for line in text(name).splitlines():

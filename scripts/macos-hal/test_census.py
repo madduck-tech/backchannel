@@ -1,7 +1,8 @@
 """The census comparator (#316 S3c, S3d, S10a), on censuses built here.
 
-A real census is taken once and then edited the way an install, a removal or a damaged sentinel
-would leave it, so each test asserts what the comparator names about one difference.
+A hand-built census (BASE) is edited the way an install, a removal or a damaged sentinel would leave
+it, so each test asserts what the comparator names about one difference; the parsers of `take`
+are tested on recorded command output.
 """
 import copy
 import json
@@ -95,6 +96,35 @@ class TheComparator(unittest.TestCase):
 
     def test_signatures_are_read_with_their_cdhash(self):
         self.assertIn('"codesign", "-dvvv"', open(census.__file__).read())
+
+    def test_a_codesign_report_is_read_with_its_cdhash(self):
+        report = ("Executable=/x\nIdentifier=tech.madduck.backchannel.spike.driver\nFormat=bundle\n"
+                  "CodeDirectory v=20400 size=1790 flags=0x2(adhoc) hashes=49+3 location=embedded\n"
+                  "CDHash=b8e3b936272471901c2d9cf68117328d0d6bbda2\nSignature=adhoc\nTeamIdentifier=not set\n")
+        sig = census.parse_signature(report)
+        self.assertEqual((sig["CDHash"], sig["Signature"], sig["flags"]), ("b8e3b936272471901c2d9cf68117328d0d6bbda2", "adhoc", "adhoc"))
+
+    def test_a_rebuilt_bundle_is_a_signature_change(self):
+        before, after = copy.deepcopy(BASE), copy.deepcopy(BASE)
+        before["hal_plugins"]["BlackHole2ch.driver"]["CDHash"] = "aaaa"
+        after["hal_plugins"]["BlackHole2ch.driver"]["CDHash"] = "bbbb"
+        self.assertEqual(census.compare(before, after)[1], [("plugin signature changed", "BlackHole2ch.driver")])
+
+    def test_a_census_without_cdhash_against_one_with_it_is_no_change(self):
+        after = copy.deepcopy(BASE)
+        after["hal_plugins"]["BlackHole2ch.driver"]["CDHash"] = "bbbb"
+        self.assertEqual(census.compare(BASE, after), ([], []))
+
+    def test_launchctl_services_are_parsed(self):
+        out = ("gui/501 = {\n\tservices = {\n\t\t     612      0 \tcom.apple.Finder\n"
+               "\t\t       -      0 \ttech.madduck.backchannel.helper\n\t}\n}\n")
+        self.assertEqual(census.parse_launchctl(out), ["com.apple.Finder", "tech.madduck.backchannel.helper"])
+
+    def test_residue_is_allowed_only_for_the_exact_uid(self):
+        removed = copy.deepcopy(BASE)
+        removed["device_settings_keys"] += ["tech.madduck.backchannel.microphone-other"]
+        _, unexpected = census.compare(BASE, removed, [], census.BACKCHANNEL_UIDS)
+        self.assertEqual(unexpected, [("device_settings_keys added", "tech.madduck.backchannel.microphone-other")])
 
     def test_an_unreadable_field_is_a_difference(self):
         after = copy.deepcopy(BASE)

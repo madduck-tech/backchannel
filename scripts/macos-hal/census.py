@@ -57,10 +57,8 @@ def coreaudio(*args):
     return json.loads(out)
 
 
-def signature(path):
-    # -dvvv: without it codesign prints no CDHash, and two ad-hoc builds of one bundle read the same
-    # (#316: replacing the spike plug-in with a variant build was not reported as a change).
-    _, _, err = run("codesign", "-dvvv", path)
+def parse_signature(err):
+    """The fields of a `codesign -dvvv` report that identify a bundle's signature."""
     keep = {}
     for line in err.splitlines():
         for key in ("Identifier", "TeamIdentifier", "Signature", "Authority", "CDHash"):
@@ -70,6 +68,19 @@ def signature(path):
     if flags:
         keep["flags"] = flags.group(2)
     return keep or {"unsigned_or_unreadable": err.strip()[:200]}
+
+
+def parse_launchctl(out):
+    """Service labels from `launchctl print gui/<uid>`'s services block."""
+    return sorted(set(re.findall(r"^\s+\d+\s+[-\d]+\s+(\S+)$", out, re.M)) |
+                  set(re.findall(r"^\s+-\s+[-\d]+\s+(\S+)$", out, re.M)))
+
+
+def signature(path):
+    # -dvvv: without it codesign prints no CDHash, and two ad-hoc builds of one bundle read the same
+    # (#316: replacing the spike plug-in with a variant build was not reported as a change).
+    _, _, err = run("codesign", "-dvvv", path)
+    return parse_signature(err)
 
 
 def take(helper=None):
@@ -86,8 +97,7 @@ def take(helper=None):
             settings = f"unreadable: {e}"
     uid = os.getuid()
     _, out, _ = run("launchctl", "print", f"gui/{uid}")
-    services = sorted(set(re.findall(r"^\s+\d+\s+[-\d]+\s+(\S+)$", out, re.M)) |
-                      set(re.findall(r"^\s+-\s+[-\d]+\s+(\S+)$", out, re.M)))
+    services = parse_launchctl(out)
     agents_dir = os.path.expanduser("~/Library/LaunchAgents")
     agents = sorted(os.listdir(agents_dir)) if os.path.isdir(agents_dir) else []
     _, ps, _ = run("ps", "-axo", "comm=")
@@ -121,8 +131,12 @@ def compare(before, after, expect_added=(), allow_residue_uid=()):
             diffs.append(("plugin removed", name))
         elif name not in b:
             diffs.append(("plugin added", name))
-        elif b[name] != a[name]:
-            diffs.append(("plugin signature changed", name))
+        else:
+            # Only the fields both censuses recorded: a census from before -dvvv has no CDHash,
+            # and its absence is not a change (the gate on #316).
+            common = set(b[name]) & set(a[name])
+            if any(b[name][k] != a[name][k] for k in common):
+                diffs.append(("plugin signature changed", name))
     bd = {d["uid"]: d for d in before.get("devices", [])}
     ad = {d["uid"]: d for d in after.get("devices", [])}
     for u in sorted(set(bd) | set(ad), key=str):
@@ -161,7 +175,7 @@ def compare(before, after, expect_added=(), allow_residue_uid=()):
             return True
         if kind == "backchannel uid changed" and any(e in detail for e in expect_added):
             return True
-        if kind == "device_settings_keys added" and any(u in detail for u in allow_residue_uid):
+        if kind == "device_settings_keys added" and detail in allow_residue_uid:
             return True
         return False
     unexpected = [d for d in diffs if not allowed(*d)]
