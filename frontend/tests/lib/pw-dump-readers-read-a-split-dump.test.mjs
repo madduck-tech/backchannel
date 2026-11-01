@@ -47,7 +47,10 @@ const ALLOWED = {
   'scripts/lib/gate-sinks.sh': ['# The descriptions are read through #293\'s `harness_description`, so a split pw-dump is one graph (#320).'],
   'scripts/lib/graph-reads.sh': ['# split pw-dump (two arrays) as one graph and fails on an unreadable one. Sourced by both passes after'],
   'scripts/lib/harness-guard.sh': ['# The graph is read through `capture-graph.py`, which reads a split pw-dump (two arrays, 8 of 696 reads'],
-  'scripts/lib/tone-sink.sh': ['# "the person chose another output", which dropped the only record of the original; and a pw-dump'],
+  'scripts/lib/tone-sink.sh': [
+    '# By the clock, at most 5 s each: a slow pw-dump must not stretch a wait the words call 5 s.',
+    "# freed id to the next object (three pw-dump clients in a row each got id 99, #266's critic), so once the",
+  ],
   'scripts/stage2-core-check.sh': ['# Through the shared reader: one `json.load` of a split pw-dump failed entry 27 on 2026-10-31.'],
 };
 const TYPES = new Set(['.sh', '.py', '.js', '.mjs', '.json', '.ps1']);

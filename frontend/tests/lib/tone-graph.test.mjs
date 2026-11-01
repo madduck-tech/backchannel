@@ -1,4 +1,4 @@
-// The gate's reading of the PipeWire graph across the tone press, run against graphs written here. (#173)
+// The gate's reading of the PipeWire graph across the tone press, run against graphs written here. (#173, #266)
 //
 // `scripts/lib/tone-graph.py` decides whether the tone that reached the sink was WebKit's and nothing
 // else's. The core pass is the only thing that runs it against a real graph, and a real graph cannot be
@@ -16,6 +16,12 @@
 //     the adversary's round 2). Pid 1 is anybody else.
 //   - **`pw-dump` can print two arrays** when the graph changes while it reads (one sample in 39 across
 //     the first press). The second is an update, and `info: null` removes an object.
+//
+//   - **The route (#266).** The tone reaches its sink by name, through GStreamer's `pulsesink`, and the
+//     default output is never moved. So every graph a case judges starts with a sample taken before the
+//     press, with no link into the sink; every active tone link carries `client.api=pipewire-pulse`; our
+//     web process plays into nothing else; and no sample's default-output key names the sink. The probe's
+//     own file, the web processes' environment and the one-node check are held here too.
 //
 // It must not hang (#294). On CI one run of it held the step until the job was cancelled: the stub
 // truncated its counter before writing it, the wrapper read it empty, raised and died without stopping
@@ -47,7 +53,11 @@ const OTHER = 1;
 const node = (id, props) => ({ id, type: 'PipeWire:Interface:Node', info: { props } });
 const client = (id, props) => ({ id, type: 'PipeWire:Interface:Client', info: { props } });
 const link = (id, from, to, state = 'active') => ({ id, type: 'PipeWire:Interface:Link', info: { 'output-node-id': from, 'input-node-id': to, state } });
-const SINK_NODE = node(SINK, { 'node.name': 'backchannel_tone_sink' });
+const SINK_NAME = 'backchannel_tone_sink_1_1';
+const SINK_NODE = node(SINK, { 'node.name': SINK_NAME });
+// Taken before the press: the sink, nothing linked into it.
+const IDLE = [SINK_NODE];
+const meta = (key, name) => ({ id: 30, type: 'PipeWire:Interface:Metadata', props: { 'metadata.name': 'default' }, metadata: [{ subject: 0, key, type: 'Spa:String:JSON', value: { name } }] });
 // The application reading the monitor: cpal's PulseAudio client sends no process binary.
 // The application reading the monitor, as measured: cpal sends no process properties, so its client
 // carries the PulseAudio server's binary and pid, and only the stream's name holds the application's pid.
@@ -58,10 +68,23 @@ const FOREIGN = [node(80, { 'application.process.binary': 'firefox', 'applicatio
 const EPIPHANY = [node(82, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OTHER, 'client.api': 'pipewire-pulse', 'node.name': 'epiphany' }), link(83, 82, SINK)];
 const METER = [node(74, { 'application.process.binary': 'pavucontrol', 'application.process.id': OTHER, 'node.name': 'peak-meter' }), link(75, SINK, 74)];
 
-// `watch`, with `pw-dump` replaced by a script that prints each graph in turn, then `judge`.
-function judge(name, graphs) {
+// Real `pw-dump` output carries `default.audio.sink` in every sample, and the judges refuse a sample without
+// it. So each graph gets one, naming the speakers, unless it has its own or holds NO_DEFAULTS.
+const NO_DEFAULTS = { noDefaults: true };
+const withDefault = (g) => {
+  if (!Array.isArray(g)) return g;
+  if (g.includes(NO_DEFAULTS)) return g.filter((o) => o !== NO_DEFAULTS);
+  const m = g.find((o) => o.type === 'PipeWire:Interface:Metadata');
+  if (m && m.metadata.some((e) => e.key === 'default.audio.sink')) return g;
+  if (m) return g.map((o) => (o === m ? { ...m, metadata: [...m.metadata, { subject: 0, key: 'default.audio.sink', type: 'Spa:String:JSON', value: { name: 'alsa_output.speakers' } }] } : o));
+  return [...g, meta('default.audio.sink', 'alsa_output.speakers')];
+};
+
+// `watch`, with `pw-dump` replaced by a script that prints each graph in turn, then `judge`, or `probe-judge`
+// with the sink and an answer time of 0 (or `answered`), so every sample counts as after it.
+function judge(name, graphs, { probe = false, sentinel = null, answered = 0 } = {}) {
   const seq = path.join(dir, `${name}.graphs`);
-  fs.writeFileSync(seq, JSON.stringify(graphs));
+  fs.writeFileSync(seq, JSON.stringify(graphs.map(withDefault)));
   const bin = path.join(dir, `${name}.bin`);
   fs.mkdirSync(bin);
   const counter = path.join(dir, `${name}.n`);
@@ -97,7 +120,7 @@ def sampled():
 p = None
 try:
     with open(${JSON.stringify(out + '.log')}, 'w') as log:
-        p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        p = subprocess.Popen([sys.executable, '-I', ${JSON.stringify(TOOL)}, 'watch', '${SINK}', '${ROOT}', ${JSON.stringify(out)}${sentinel ? `, '--sentinel', '${sentinel}'` : ''}], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
     deadline = time.monotonic() + 30
     while sampled() < ${graphs.length} and time.monotonic() < deadline: time.sleep(0.05)
 finally:
@@ -119,7 +142,7 @@ sys.exit(0 if sampled() >= ${graphs.length} else 4)
     const how = child.error ? `${child.error.code} after ${CASE_TIMEOUT_MS} ms` : child.status === null ? `was ended by ${child.signal}` : `exited ${child.status}`;
     throw new Error(`${name}: the wrapper ${how}: ${child.stderr}${tail(`${out}.log`)}`);
   }
-  const r = spawnSync('python3', ['-I', TOOL, 'judge', out], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+  const r = spawnSync('python3', ['-I', TOOL, ...(probe ? ['probe-judge', out, String(SINK), String(answered)] : ['judge', out])], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
   if (r.error) throw new Error(`${name}: judge ${r.error.code} after ${CASE_TIMEOUT_MS} ms`);
   const line = r.stdout.trim();
   // The positive sentinel: every graph served was sampled, so a verdict never rests on a sample missing.
@@ -144,7 +167,7 @@ function tail(file) {
 /** A wrapper that died without its `finally` (CI's shape) leaves `watch` running: find this case's by
  *  its command line, which names the case's own output file, and kill it. */
 function killLeftWatch(out) {
-  const mine = `tone-graph.py\0watch\0${SINK}\0${ROOT}\0${out}\0`;
+  const mine = `tone-graph.py\0watch\0${SINK}\0${ROOT}\0${out}`;
   for (const n of fs.readdirSync('/proc')) {
     if (!/^[0-9]+$/.test(n)) continue;
     let cmd;
@@ -164,40 +187,240 @@ function killLeftWatch(out) {
   }
 }
 
+// The probe's and the tone's streams, as the route makes them: `client.api=pipewire-pulse` on the node.
+const WEBKIT_PULSE_ON_CLIENT = [client(62, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OURS }), node(63, { 'client.id': 62, 'client.api': 'pipewire-pulse', 'node.name': 'webkit-native' }), link(64, 63, SINK)];
+const WEBKIT_ALSA = [node(65, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OURS, 'client.api': 'alsa', 'node.name': 'webkit-alsa' }), link(66, 65, SINK)];
+const SPEAKERS = node(40, { 'node.name': 'alsa_output.speakers', 'media.class': 'Audio/Sink' });
+const WEBKIT_ELSEWHERE = [SPEAKERS, node(67, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OURS, 'client.api': 'pipewire-pulse', 'node.name': 'webkit-elsewhere' }), link(68, 67, 40)];
+
 const cases = [
-  ['webkit on its node, the monitor read', [[SINK_NODE, ...READER, ...WEBKIT_ON_NODE]], 0, /with an active link from WebKitWebProcess \(pid \d+ from its node, ours; .*binary read from its node.*the monitor was read by pipewire \(pid \d+ from its cpal stream name, ours/],
-  ['webkit on its client only', [[SINK_NODE, ...READER, ...WEBKIT_ON_CLIENT]], 0, /node\.name=webkit-native\), binary read from its client; missing client\.api, media\.software/],
-  ['nothing entered the sink', [[SINK_NODE, ...READER]], 1, /no active link entered the tone sink from the application's WebKitWebProcess; the monitor was read by pipewire/],
-  ['webkit, and another stream moved in by `follow`', [[SINK_NODE, ...READER, ...WEBKIT_ON_NODE], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...FOREIGN]], 1, /something other than the application's WebKitWebProcess .*firefox/],
-  ['another WebKitGTK program is not the application', [[SINK_NODE, ...READER, ...EPIPHANY]], 1, /something other than .*WebKitWebProcess \(pid 1 from its node, not ours; .*epiphany/],
-  ['a stream with no binary anywhere is not webkit', [[SINK_NODE, ...READER, node(90, { 'node.name': 'anon' }), link(91, 90, SINK)]], 1, /something other than .*None \(pid None from its None, not ours; node\.name=anon/],
-  ['the application\'s link in error carried nothing', [[SINK_NODE, ...READER, WEBKIT_ON_NODE[0], link(61, 60, SINK, 'error')]], 1, /no active link entered .*\(its links were error\)/],
-  ['webkit, and nobody read the monitor', [[SINK_NODE, ...WEBKIT_ON_NODE]], 1, /the application never read the sink's monitor.*\(read by: nobody\)/],
-  ['webkit, and only someone else read the monitor', [[SINK_NODE, ...METER, ...WEBKIT_ON_NODE]], 1, /the application never read .*\(read by: pavucontrol \(pid 1 from its node, not ours/],
-  ['another cpal program reading the monitor is not the application', [[SINK_NODE, client(76, { 'application.process.id': OTHER }), node(77, { 'client.id': 76, 'node.name': 'cpal-pulseaudio-1' }), link(78, SINK, 77), ...WEBKIT_ON_NODE]], 1, /the application never read .*\(read by: .*pid 1 from its cpal stream name, not ours; node\.name=cpal-pulseaudio-1/],
-  ['a sample that could not be taken', [[SINK_NODE, ...READER, ...WEBKIT_ON_NODE], 'fail'], 1, /could not be read cannot vouch/],
-  ['the monitor link is not counted as into', [[SINK_NODE, ...READER, link(73, SINK, 60), node(60, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OURS })]], 1, /no active link entered/],
+  ['webkit on its node, the monitor read', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE]], 0, /with an active link from WebKitWebProcess \(pid \d+ from its node, ours; .*binary read from its node.*the monitor was read by pipewire \(pid \d+ from its cpal stream name, ours/],
+  // Before #266 this case passed (exit 0): the binary on the client only, and no client.api anywhere.
+  ['webkit on its client only, with no client.api', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_CLIENT]], 1, /did not take the route the gate pins: client\.api is absent, not pipewire-pulse, on WebKitWebProcess \(pid \d+ from its client/],
+  ['webkit on its client, client.api on its node', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_PULSE_ON_CLIENT]], 0, /client\.api=pipewire-pulse, node\.name=webkit-native\), binary read from its client; missing media\.software/],
+  ['nothing entered the sink', [IDLE, [SINK_NODE, ...READER]], 1, /no active link entered the tone sink from the application's WebKitWebProcess; the monitor was read by pipewire/],
+  ['webkit, and another stream moved in by `follow`', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...FOREIGN]], 1, /something other than the application's WebKitWebProcess .*firefox/],
+  ['another WebKitGTK program is not the application', [IDLE, [SINK_NODE, ...READER, ...EPIPHANY]], 1, /something other than .*WebKitWebProcess \(pid 1 from its node, not ours; .*epiphany/],
+  ['a stream with no binary anywhere is not webkit', [IDLE, [SINK_NODE, ...READER, node(90, { 'node.name': 'anon' }), link(91, 90, SINK)]], 1, /something other than .*None \(pid None from its None, not ours; node\.name=anon/],
+  ['the application\'s link in error carried nothing', [IDLE, [SINK_NODE, ...READER, WEBKIT_ON_NODE[0], link(61, 60, SINK, 'error')]], 1, /no active link entered .*\(its links were error\)/],
+  ['webkit, and nobody read the monitor', [IDLE, [SINK_NODE, ...WEBKIT_ON_NODE]], 1, /the application never read the sink's monitor.*\(read by: nobody\)/],
+  ['webkit, and only someone else read the monitor', [IDLE, [SINK_NODE, ...METER, ...WEBKIT_ON_NODE]], 1, /the application never read .*\(read by: pavucontrol \(pid 1 from its node, not ours/],
+  ['another cpal program reading the monitor is not the application', [IDLE, [SINK_NODE, client(76, { 'application.process.id': OTHER }), node(77, { 'client.id': 76, 'node.name': 'cpal-pulseaudio-1' }), link(78, SINK, 77), ...WEBKIT_ON_NODE]], 1, /the application never read .*\(read by: .*pid 1 from its cpal stream name, not ours; node\.name=cpal-pulseaudio-1/],
+  ['a sample that could not be taken', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE], 'fail'], 1, /could not be read cannot vouch/],
+  ['the monitor link is not counted as into', [IDLE, [SINK_NODE, ...READER, link(73, SINK, 60), node(60, { 'application.process.binary': 'WebKitWebProcess', 'application.process.id': OURS })]], 1, /no active link entered/],
   ['two arrays from one pw-dump, the second removing the foreign stream',
-    [JSON.stringify([SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...FOREIGN]) + '\n' + JSON.stringify([{ id: 81, info: null }])], 0, /none from anything else/],
+    [IDLE, JSON.stringify([SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...FOREIGN, meta('default.audio.sink', 'alsa_output.speakers')]) + '\n' + JSON.stringify([{ id: 81, info: null }])], 0, /none from anything else/],
+  ['a sample with no default.audio.sink', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, NO_DEFAULTS]], 1, /holds no default\.audio\.sink, so nothing shows the default output stayed put/],
+  // #266 item 2: the default output is never moved.
+  ['the configured default output names the tone sink', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, meta('default.configured.audio.sink', SINK_NAME)]], 1, /default\.configured\.audio\.sink names the tone sink \(backchannel_tone_sink_1_1\): the default output moved/],
+  ['the effective default output names the tone sink', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, meta('default.audio.sink', SINK_NAME)]], 1, /default\.audio\.sink names the tone sink \(backchannel_tone_sink_1_1\): the default output moved/],
+  ['a default naming another output is not the tone sink', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, meta('default.audio.sink', 'alsa_output.speakers')]], 0, /none from anything else/],
+  // #266 item 4: the tone's file.
+  ['a link in the first sample', [[SINK_NODE, ...READER, ...WEBKIT_ON_NODE]], 1, /the first sample, taken before the press, already held a link into the tone sink: WebKitWebProcess/],
+  ['a link from our web process into another node', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...WEBKIT_ELSEWHERE]], 1, /WebKitWebProcess played into alsa_output\.speakers \(node 40\), not only the tone sink/],
+  ['two tone links, the later through alsa', [IDLE, [SINK_NODE, ...READER, ...WEBKIT_ON_NODE], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...WEBKIT_ALSA]], 1, /did not take the route the gate pins: client\.api is alsa, not pipewire-pulse/],
 ];
 
+// The probe's own file (#266 item 4): the probe's stream enters the tone sink through `pulsesink`, from our
+// web process alone and into nothing else, and is gone by the last sample.
+const probeCases = [
+  ['the probe: the route, then closed', [[SINK_NODE, ...WEBKIT_ON_NODE], IDLE], 0, /with an active link from WebKitWebProcess .* into the tone sink and none elsewhere; none left/],
+  ['the probe: no link', [IDLE, IDLE], 1, /no active link from the application's WebKitWebProcess entered the tone sink/],
+  ['the probe: a link not ours', [[SINK_NODE, ...EPIPHANY], IDLE], 1, /a link into the tone sink that is not ours: WebKitWebProcess \(pid 1/],
+  ['the probe: client.api absent', [[SINK_NODE, ...WEBKIT_ON_CLIENT], IDLE], 1, /did not take the route the gate pins: client\.api is absent/],
+  ['the probe: client.api=alsa', [[SINK_NODE, ...WEBKIT_ALSA], IDLE], 1, /did not take the route the gate pins: client\.api is alsa/],
+  // With the route's own link beside it, so only the other-node rule can refuse it.
+  ['the probe: a link into another node', [[SINK_NODE, ...WEBKIT_ON_NODE, ...WEBKIT_ELSEWHERE], IDLE], 1, /the probe's stream went into alsa_output\.speakers \(node 40\), not the tone sink/],
+  ['the probe: a link still there at the deadline', [[SINK_NODE, ...WEBKIT_ON_NODE], [SINK_NODE, ...WEBKIT_ON_NODE]], 1, /was still there at the deadline/],
+  ['the probe: the default moved', [[SINK_NODE, ...WEBKIT_ON_NODE, meta('default.audio.sink', SINK_NAME)], IDLE], 1, /default\.audio\.sink names the tone sink/],
+];
+// Its answer time: a probe whose every sample came before the answer shows nothing about the close.
+const lateProbe = [['the probe: no sample after the answer', [[SINK_NODE, ...WEBKIT_ON_NODE], IDLE], 1, /no sample was taken after the probe answered/]];
+
+// #266 item 5: a stream that follows the default, kept on a sink other than the tone sink, alive.
+const SENT = spawn('sleep', ['120'], { stdio: 'ignore' });
+const sentStream = (into) => [SPEAKERS, node(95, { 'application.process.id': SENT.pid, 'node.name': 'pw-play' }), link(96, 95, into)];
+const sentinelCases = [
+  ['the sentinel stays on the speakers', [[SINK_NODE, ...sentStream(40)], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, ...sentStream(40)]], 0, /none from anything else/],
+  ['the sentinel moved into the tone sink', [[SINK_NODE, ...sentStream(40)], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, SPEAKERS, node(95, { 'application.process.id': SENT.pid, 'node.name': 'pw-play' }), link(97, 95, SINK)]], 1, /(the sentinel stream was linked into the tone sink|something other than)/],
+  ['the sentinel with no link', [[SINK_NODE, ...sentStream(40)], [SINK_NODE, ...READER, ...WEBKIT_ON_NODE, node(95, { 'application.process.id': SENT.pid, 'node.name': 'pw-play' })]], 1, /the sentinel stream had no active link into any sink/],
+];
+// The probe's file is judged for the sentinel too: item 5 says every sample.
+const probeSentinel = [['the probe: the sentinel with no link', [[SINK_NODE, ...WEBKIT_ON_NODE, node(95, { 'application.process.id': SENT.pid, 'node.name': 'pw-play' })], IDLE], 1, /the sentinel stream had no active link into any sink/]];
+
 const failures = [];
-try {
-  for (const [name, graphs, code, line] of cases) {
-    let got;
+
+// #266 item 4, before the press: every WebKitWebProcess under the driver carries this run's PULSE_SINK and
+// the pin. Each process is spawned under this test, which stands for the driver: a copy of a binary named
+// `WebKitWebProcess`, or a process that made itself non-dumpable, so that only its `comm` names it.
+const PIN = /^TONE_GST_PIN=(\S+)$/m.exec(fs.readFileSync(path.join(repo, 'scripts', 'lib', 'tone-sink.sh'), 'utf8'))?.[1];
+const sleepFor = (ms) => spawnSync('sleep', [String(ms / 1000)]);
+function webenvCases() {
+  const fake = path.join(dir, 'webkit-bin');
+  fs.mkdirSync(fake, { recursive: true });
+  const WEB = path.join(fake, 'WebKitWebProcess');
+  fs.copyFileSync('/usr/bin/sleep', WEB); fs.chmodSync(WEB, 0o755);
+  const NONDUMP = `import ctypes, time
+libc = ctypes.CDLL(None)
+libc.prctl(15, b'WebKitWebProces', 0, 0, 0)  # PR_SET_NAME
+libc.prctl(4, 0, 0, 0, 0)                    # PR_SET_DUMPABLE
+time.sleep(60)`;
+  const good = { PULSE_SINK: SINK_NAME, GST_PLUGIN_FEATURE_RANK: PIN };
+  const list = [
+    ['webenv: no web process', [], 1, /no WebKitWebProcess runs under the driver/],
+    ['webenv: one without the variable', [[WEB, { GST_PLUGIN_FEATURE_RANK: PIN }]], 1, /has PULSE_SINK=<unset>, not backchannel_tone_sink_1_1/],
+    ['webenv: a pin that is not the pin', [[WEB, { PULSE_SINK: SINK_NAME, GST_PLUGIN_FEATURE_RANK: 'alsasink:NONE' }]], 1, /has GST_PLUGIN_FEATURE_RANK=alsasink:NONE, not the pin/],
+    ['webenv: the name the old stack held', [[WEB, { PULSE_SINK: 'backchannel_tone_sink', GST_PLUGIN_FEATURE_RANK: PIN }]], 1, /has PULSE_SINK=backchannel_tone_sink, not backchannel_tone_sink_1_1/],
+    ['webenv: non-dumpable, found by its comm', [['python3', good, ['-I', '-c', NONDUMP]]], 1, /\(found by its comm\): its environ cannot be read/],
+    ['webenv: two, the second without the variable', [[WEB, good], [WEB, { GST_PLUGIN_FEATURE_RANK: PIN }]], 1, /has PULSE_SINK=<unset>, not backchannel_tone_sink_1_1/],
+    ['webenv: one, as the route needs it', [[WEB, good]], 0, /^1 WebKitWebProcess under the driver, each with PULSE_SINK=backchannel_tone_sink_1_1 and the pin \(found by exe: 1, by comm: 0\)/],
+  ];
+  const stamps = path.join(dir, 'webenv.stamps');
+  const stamp = path.join(stamps, 'webenv');
+  fs.mkdirSync(stamps, { recursive: true });
+  check('webenv: the pin is read from tone-sink.sh', !!PIN, 'no TONE_GST_PIN= line in tone-sink.sh');
+  for (const [name, procs, code, line] of list) {
+    const kids = procs.map(([bin, env, args]) => spawn(bin, args ?? ['60'], { env: { PATH: process.env.PATH, ...env }, stdio: 'ignore' }));
     try {
-      got = judge(name.replace(/\W+/g, '-'), graphs);
-    } catch (e) {
-      failures.push(e.message);
-      continue;
+      sleepFor(300);
+      fs.rmSync(stamp, { force: true });
+      const r = spawnSync('python3', ['-I', TOOL, 'webenv', String(ROOT), SINK_NAME, PIN ?? '', '--stamp', stamps, String(SINK)], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+      const got = (r.stdout + r.stderr).trim();
+      if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
+      // The stamp is written on a pass alone, naming the check, the sink it checked and the node.
+      if (fs.existsSync(stamp) !== (code === 0) || (code === 0 && !STAMP('webenv').test(fs.readFileSync(stamp, 'utf8')))) failures.push(`${name}: the stamp is ${fs.existsSync(stamp) ? JSON.stringify(fs.readFileSync(stamp, 'utf8')) : 'absent'} after exit ${r.status}`);
+    } finally {
+      for (const k of kids) k.kill('SIGKILL');
     }
-    if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
   }
+}
+
+// The four checks before the press stamp their passes, and the press (`stamps-ok`) and the tone's judge
+// refuse without all four, in order, each this run's and each before the tone's first sample (#266's gate
+// adversary, rounds 2 and 3): a check skipped, swallowed or reordered by whatever wraps it plays nothing.
+const STAMP = (check) => new RegExp(`^${check} ${SINK_NAME} ${SINK} \\d+\\.\\d{6}\\n$`);
+function stampCases() {
+  const out = path.join(dir, 'webkit-on-its-node-the-monitor-read.jsonl');
+  check('stamps: the judged file is there', fs.existsSync(out), `no ${out}; the first case must have run`);
+  const first = JSON.parse(fs.readFileSync(out, 'utf8').split('\n')[0]).t;
+  const sd = path.join(dir, 'stamps');
+  const line = (check, t, name = SINK_NAME, sink = SINK) => `${check} ${name} ${sink} ${t.toFixed(6)}\n`;
+  const good = { webenv: line('webenv', first - 4), 'one-sink': line('one-sink', first - 3), guard: line('guard', first - 2), probe: line('probe', first - 1) };
+  const list = [
+    ['stamps: all four, this run\'s, in order', {}, 0, /none from anything else/, /every check before the press passed for backchannel_tone_sink_1_1 \(node 50\), in order/],
+    ...['webenv', 'one-sink', 'guard', 'probe'].map((c) => [`stamps: no ${c} stamp`, { [c]: null }, 1, new RegExp(`the ${c} check before the press never passed in this run`)]),
+    ['stamps: an empty probe stamp', { probe: '' }, 1, /the probe stamp reads "", not "probe backchannel_tone_sink_1_1 50 <t>"/],
+    ['stamps: the probe stamp for another node', { probe: line('probe', first - 1, SINK_NAME, 51) }, 1, /the probe stamp reads "probe backchannel_tone_sink_1_1 51 /],
+    ['stamps: the probe stamp of another run', { probe: line('probe', first - 1, 'backchannel_tone_sink_9_9') }, 1, /the probe stamp reads "probe backchannel_tone_sink_9_9 50 /],
+    ['stamps: the webenv stamp of another run', { webenv: line('webenv', first - 4, 'backchannel_tone_sink_9_9') }, 1, /the webenv stamp reads "webenv backchannel_tone_sink_9_9 50 /],
+    ['stamps: the constant name', { guard: line('guard', first - 2, 'backchannel_tone_sink') }, 1, /the guard stamp reads "guard backchannel_tone_sink 50 /],
+    ['stamps: a stamp under another check\'s name', { 'one-sink': line('guard', first - 3) }, 1, /the one-sink stamp reads "guard /],
+    ['stamps: a second line', { guard: line('guard', first - 2) + line('guard', first - 2) }, 1, /the guard stamp reads /],
+    ['stamps: no time', { webenv: `webenv ${SINK_NAME} ${SINK}\n` }, 1, /the webenv stamp reads "webenv backchannel_tone_sink_1_1 50", not/],
+    ['stamps: the guard before one-sink', { guard: line('guard', first - 3.5) }, 1, /the guard stamp is not later than the one-sink stamp/],
+    ['stamps: the probe after the tone\'s first sample', { probe: line('probe', first + 1) }, 1, /the probe stamp was written after the tone's first sample/],
+  ];
+  for (const [name, change, code, judged, ok] of list) {
+    fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+    for (const [c, v] of Object.entries({ ...good, ...change })) if (v !== null) fs.writeFileSync(path.join(sd, c), v);
+    for (const [tool, args, want] of [['judge', ['judge', out, '--stamps', sd, String(SINK), SINK_NAME], judged], ['stamps-ok', ['stamps-ok', sd, SINK_NAME, String(SINK), out], ok ?? judged]]) {
+      const r = spawnSync('python3', ['-I', TOOL, ...args], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+      const got = (r.stdout + r.stderr).trim();
+      if (r.status !== code || !want.test(got)) failures.push(`${name} (${tool}): exit ${r.status}, "${got}" (want ${code}, ${want})`);
+    }
+  }
+  // The press waits for the tone's sampler: no sample yet, nothing pressed.
+  fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+  for (const [c, v] of Object.entries(good)) fs.writeFileSync(path.join(sd, c), v);
+  const empty = path.join(dir, 'no-sample-yet.jsonl'); fs.writeFileSync(empty, '');
+  const early = spawnSync('python3', ['-I', TOOL, 'stamps-ok', sd, SINK_NAME, String(SINK), empty], { encoding: 'utf8' });
+  check('stamps: no press before the tone\'s first sample', early.status === 1 && /holds no sample yet/.test(early.stdout), `exit ${early.status}, "${early.stdout.trim()}"`);
+
+  // Each check writes its own stamp on a pass alone, and after it has judged: probe-judge and one-sink here,
+  // webenv in its own cases above, the guard in tone-sink.test.mjs.
+  for (const [name, file, want] of [['passes', 'the-probe-the-route-then-closed.jsonl', 0], ['fails', 'the-probe-a-link-into-another-node.jsonl', 1]]) {
+    const pd = path.join(dir, `pj-${want}`); fs.rmSync(pd, { recursive: true, force: true }); fs.mkdirSync(pd);
+    const src = path.join(dir, file);
+    check(`stamps: the probe file for "${name}" is there`, fs.existsSync(src), `no ${src}`);
+    const r = spawnSync('python3', ['-I', TOOL, 'probe-judge', src, String(SINK), '0', '--stamp', pd, SINK_NAME], { encoding: 'utf8' });
+    const st = path.join(pd, 'probe');
+    check(`stamps: probe-judge ${name}: exit ${want}, and a stamp only on a pass`, r.status === want && fs.existsSync(st) === (want === 0) && (want !== 0 || STAMP('probe').test(fs.readFileSync(st, 'utf8'))),
+      `exit ${r.status}, the stamp ${fs.existsSync(st) ? JSON.stringify(fs.readFileSync(st, 'utf8')) : 'absent'}`);
+  }
+  // A node id that is not a number is a refusal on stdout, for every command the pass runs (Stage 2 control R2).
+  for (const args of [['webenv', String(ROOT), SINK_NAME, 'x', '--stamp', dir, ''], ['probe-judge', out, '', '0', '--stamp', dir, SINK_NAME], ['judge', out, '--stamps', dir, '', SINK_NAME], ['stamps-ok', dir, SINK_NAME, '', out], ['stamp', dir, 'guard', SINK_NAME, '']]) {
+    const r = spawnSync('python3', ['-I', TOOL, ...args], { encoding: 'utf8' });
+    check(`stamps: ${args[0]} with an empty node id refuses on stdout`, r.status === 1 && /^tone-graph: \S+: an argument that must be a number is not one/.test(r.stdout) && !/Traceback/.test(r.stderr), `exit ${r.status}, stdout "${r.stdout.trim()}", stderr "${r.stderr.trim().slice(0, 200)}"`);
+  }
+  // From the shell, only the guard stamps: the other three stamp from inside their own judgement.
+  const gd = path.join(dir, 'guard-cli'); fs.rmSync(gd, { recursive: true, force: true }); fs.mkdirSync(gd);
+  for (const c of ['webenv', 'one-sink', 'probe']) {
+    const r = spawnSync('python3', ['-I', TOOL, 'stamp', gd, c, SINK_NAME, String(SINK)], { encoding: 'utf8' });
+    check(`stamps: the shell cannot stamp ${c}`, r.status !== 0 && !fs.existsSync(path.join(gd, c)), `exit ${r.status}, stamp ${fs.existsSync(path.join(gd, c)) ? 'written' : 'absent'}`);
+  }
+  const g = spawnSync('python3', ['-I', TOOL, 'stamp', gd, 'guard', SINK_NAME, String(SINK)], { encoding: 'utf8' });
+  check('stamps: the guard stamps from the shell', g.status === 0 && STAMP('guard').test(fs.readFileSync(path.join(gd, 'guard'), 'utf8')), `exit ${g.status}`);
+
+  // One clock for the stamps and the samples: the monotonic one, which Node's hrtime reads too on Linux
+  // (CLOCK_MONOTONIC for both). A stamp on the wall clock would refuse every press; a sample on it would make
+  // the before-first-sample rule vacuous without a sound (round 4's G3a, G3b).
+  const now = Number(process.hrtime.bigint()) / 1e9;
+  const stampT = Number(fs.readFileSync(path.join(gd, 'guard'), 'utf8').trim().split(' ')[3]);
+  check('stamps: a stamp is on the monotonic clock', Math.abs(now - stampT) < 30, `the stamp reads ${stampT}, the monotonic clock ${now}`);
+  check('stamps: a sample is on the monotonic clock', first <= now && now - first < CASE_TIMEOUT_MS / 1000 * 40, `the first sample reads ${first}, the monotonic clock ${now}`);
+}
+
+// One node of the family, this run's: no node, two, or another id each refuse.
+function oneSinkCases() {
+  const bin = path.join(dir, 'one-sink.bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const list = [
+    ['one-sink: no node', [], 1, /no node of the backchannel_tone_sink family is in the graph/],
+    ['one-sink: two nodes', [SINK_NODE, node(51, { 'node.name': 'backchannel_tone_sink' })], 1, /2 nodes of the backchannel_tone_sink family are in the graph/],
+    ['one-sink: another id', [node(51, { 'node.name': SINK_NAME })], 1, /the backchannel_tone_sink node in the graph is 51 named backchannel_tone_sink_1_1, not this run's 50/],
+    ['one-sink: this run\'s', [SINK_NODE, node(52, { 'node.name': 'alsa_output.speakers' })], 0, /one node of the family, 50, named backchannel_tone_sink_1_1/],
+    // Its refusal is the pass's `die` text, so it is on stdout: an empty id once died with no words (R2).
+    ['one-sink: an empty id', [SINK_NODE], 1, /^tone-graph: one-sink: an argument that must be a number is not one/, ''],
+    ['one-sink: a graph it cannot read', null, 1, /^tone-graph: could not read the graph/],
+  ];
+  const sd = path.join(dir, 'one-sink.stamps');
+  for (const [name, graph, code, line, id = String(SINK)] of list) {
+    fs.writeFileSync(path.join(bin, 'pw-dump'), graph === null ? '#!/bin/sh\nexit 3\n' : `#!/bin/sh\ncat <<'X'\n${JSON.stringify(graph)}\nX\n`, { mode: 0o755 });
+    fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+    const r = spawnSync('python3', ['-I', TOOL, 'one-sink', 'backchannel_tone_sink', id, SINK_NAME, '--stamp', sd], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+    if (r.status !== code || !line.test(r.stdout.trim())) failures.push(`${name}: exit ${r.status}, stdout "${r.stdout.trim()}", stderr "${r.stderr.trim()}" (want ${code}, ${line} on stdout)`);
+    const st = path.join(sd, 'one-sink');
+    if (fs.existsSync(st) !== (code === 0) || (code === 0 && !STAMP('one-sink').test(fs.readFileSync(st, 'utf8')))) failures.push(`${name}: the stamp is ${fs.existsSync(st) ? JSON.stringify(fs.readFileSync(st, 'utf8')) : 'absent'} after exit ${r.status}`);
+  }
+}
+const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${detail}`); };
+try {
+  const run = (list, opts) => {
+    for (const [name, graphs, code, line] of list) {
+      let got;
+      try {
+        got = judge(name.replace(/\W+/g, '-'), graphs, opts);
+      } catch (e) {
+        failures.push(e.message);
+        continue;
+      }
+      if (got.code !== code || !line.test(got.line)) failures.push(`${name}: exit ${got.code}, "${got.line}" (want ${code}, ${line})`);
+    }
+  };
+  run(cases);
+  run(probeCases, { probe: true });
+  run(sentinelCases, { sentinel: SENT.pid });
+  run(lateProbe, { probe: true, answered: 1e12 });
+  run(probeSentinel, { probe: true, sentinel: SENT.pid });
+  webenvCases();
+  oneSinkCases();
+  stampCases();
 } finally {
   descendant.kill();
+  SENT.kill();
   fs.rmSync(dir, { recursive: true, force: true });
 }
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 // Sanity: the tool is the one the pass runs.
 assert.match(execFileSync('grep', ['-c', 'scripts/lib/tone-graph.py', path.join(repo, 'scripts', 'stage2-core-check.sh')], { encoding: 'utf8' }), /^[1-9]/);
-console.log(`ok - tone graph: ${cases.length} graphs judged; the tone is an active link from the application's own WebKitWebProcess (pid under the driver, binary from the node or its client), "into" is the sink's input side, the application must be reading the monitor, and a split pw-dump is merged`);
+console.log(`ok - tone graph: ${cases.length + probeCases.length + sentinelCases.length + lateProbe.length + probeSentinel.length} files judged, 7 web-process environments and 6 one-node graphs read, the four stamps refused in 13 ways; the tone is an active link from the application's own WebKitWebProcess (pid under the driver, binary from the node or its client), "into" is the sink's input side, the application must be reading the monitor, and a split pw-dump is merged`);

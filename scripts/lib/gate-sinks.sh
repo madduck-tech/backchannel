@@ -8,7 +8,8 @@
 #
 #   gate_sinks_create            sets GATE_SINK_A, GATE_SINK_B (node names), GATE_DESC_A, GATE_DESC_B
 #   gate_sinks_destroy           removes both, by the ids this run created
-#   gate_sink_remove <name>      removes one of them now, and returns once the graph no longer has it
+#   gate_sink_remove <name>      removes one of them now, and returns once the graph no longer has it; it
+#                                refuses a node this run did not create
 #   gate_sink_is_default <name>  exits 0 when <name> is the effective default output
 #
 # The descriptions are read through #293's `harness_description`, so a split pw-dump is one graph (#320).
@@ -63,6 +64,10 @@ gate_sink_remove() {
   local ids id n keep=""
   ids=$(gate__nodes "$1") || die "could not read the graph"
   [ -n "$ids" ] || die "$1 is not in the graph to remove"
+  # Only what this run made. A node of the name that this shell did not create is another run's, or a
+  # person's, and nothing is destroyed: a helper that sourced this file to clear another run's tone sink
+  # destroyed it with every census green (#266's gate adversary, round 11).
+  for id in $ids; do case " $GATE_SINK_IDS " in *" $id "*) ;; *) die "node $id ($1) was not made by this run, so it is left alone" ;; esac; done
   for id in $ids; do pw-cli destroy "$id" >/dev/null 2>&1 || die "could not remove $1 (node $id)"; done
   for n in $(seq 1 25); do [ -z "$(gate__nodes "$1" 2>/dev/null)" ] && break; sleep 0.2; done
   [ -z "$(gate__nodes "$1")" ] || die "$1 is still in the graph after its removal"
