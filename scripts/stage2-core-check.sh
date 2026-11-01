@@ -25,7 +25,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 say() { printf 'stage2-core: %s\n' "$*"; }
 die() { printf 'stage2-core: %s\n' "$*" >&2; exit 1; }
 
-APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty|long]"
+APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty|long|checked]"
 MODE="${2:-scores}"
 PORT="${BC_CORE_PORT:-4448}"; NATIVE_PORT="${BC_CORE_NATIVE_PORT:-4449}"
 CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
@@ -65,6 +65,14 @@ CACHE="${BC_CORE_MODELS:-$HOME/.cache/backchannel-core-models}"
 #             neither red. 53 of the 86 rows the catalogue had at #162 come from an architecture that builds none,
 #             and for all of them a fabricated 1.0 used to reach the tooltip as *"Decode confidence
 #             100%"*. This mode is that class.
+#   checked   parakeet-tdt-0.6b-v3-q4, as `scores` (#299). The seed stores **no** microphone, so the one
+#             the first recording opens is the one first run's audio check proved and stored: the
+#             harness, checked by name and HEARD, which #293 keeps from being the default input. Before
+#             Start the store holds "$HARNESS_DESC (input)" with every seeded field as seeded; after the
+#             start's CALLED line the harness opened, and the rows on the `you` channel carry the
+#             sample's words. Ends before the summary, as `long` does. What it leaves alone: the default
+#             and clear branches (the gate must not make the harness the default to reach them), Skip,
+#             several checks, and the first-run download its seed hides.
 #
 # **What no mode here drives.** A *rendered* badge. Every family that scores at all scores above the
 # 0.8 quiet threshold on this sample, deliberately — `ConfidenceIndicator` renders nothing above it —
@@ -78,7 +86,8 @@ case "$MODE" in
   empty)    MODEL_ID="${BC_CORE_MODEL:-moonshine-tiny-q8}";       WORDS=(country "ask what you can do") ;;
   # No vocabulary: which words fall inside the recording depends on how long first run took to reach it.
   long)     MODEL_ID="${BC_CORE_MODEL:-moonshine-streaming-small-q8}"; WORDS=() ;;
-  *) die "unknown mode '$MODE' (scores|unscored|empty|long)" ;;
+  checked)  MODEL_ID="${BC_CORE_MODEL:-parakeet-tdt-0.6b-v3-q4}"; WORDS=(country "ask what you can do") ;;
+  *) die "unknown mode '$MODE' (scores|unscored|empty|long|checked)" ;;
 esac
 if [ "$MODE" = long ]; then
   SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/dots-full.wav 2>/dev/null | head -1)}"
@@ -125,6 +134,12 @@ DEFAULT_SRC_BEFORE=$(harness_effective_source)
 scripts/audio-harness.sh up --system-only --sample "$SAMPLE" || die "the audio harness could not come up"
 HARNESS_UP=1
 GUARD=$(harness_guard_after_up "$DEFAULT_SRC_BEFORE" 2>&1) || die "the harness moved the default input (#293): $GUARD"
+# `checked` relies on the harness not being the default: checking the default stores nothing (#299).
+if [ "$MODE" = checked ]; then
+  case "$(harness_effective_source)" in
+    backchannel_harness*) die "checked: the default input is a harness node, so checking the harness would store nothing" ;;
+  esac
+fi
 HARNESS_SRC=$(scripts/audio-harness.sh src-name) || die "the harness names no source"
 # Its description, read from the graph: pw-loopback keeps only `Backchannel` of the one it asks for.
 HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
@@ -154,6 +169,12 @@ seed_copy "$CACHE/models" "$APPDATA/" || die "could not seed $APPDATA from $CACH
 # person from first run through to a summary without restarting the application.
 printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":"%s","preferred_system_device":"%s (output)"}}' \
   "$PROFILE/rec" "$MIC_SEED" "$PICK" > "$APPDATA/recording_preferences.json"
+# `checked` alone stores no microphone: first run's audio check is what must store it (#299).
+if [ "$MODE" = checked ]; then
+  python3 -I -c 'import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["preferences"]["preferred_mic_device"] = None; json.dump(d, open(p, "w"))' \
+    "$APPDATA/recording_preferences.json"
+fi
 say "seeded models from $CACHE; save_folder pinned to $PROFILE/rec"
 
 DRIVER_LOG="$PROFILE/tauri-driver.log"
@@ -421,6 +442,18 @@ say "stored as '$STORED'"
 await "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the Start recording control' 30
 R=$(by_text "Start recording"); [ -n "$R" ] || die "no Start recording control"
+# `checked`: the microphone stored now is the one first run's check stored, and nothing else moved (#299).
+# Otherwise the pass stops here, before Start, so it never opens the person's default microphone.
+if [ "$MODE" = checked ]; then
+  python3 -I -c 'import json, sys
+p = json.load(open(sys.argv[1]))["preferences"]
+want = {"save_folder": sys.argv[2], "auto_save": True, "file_format": "mp4", "preferred_mic_device": sys.argv[3], "preferred_system_device": sys.argv[4]}
+bad = {k: (p.get(k), v) for k, v in want.items() if p.get(k) != v}
+print("; ".join(f"{k} is {got!r}, not {v!r}" for k, (got, v) in bad.items()))
+sys.exit(1 if bad else 0)' "$APPDATA/recording_preferences.json" "$PROFILE/rec" "$MIC_SEED" "$PICK (output)" > "$PROFILE/checked-store.txt" \
+    || die "checked: first run did not store the microphone it proved, or moved another field: $(cat "$PROFILE/checked-store.txt")"
+  say "checked: first run's audio check stored '$MIC_SEED', and every seeded field is as seeded"
+fi
 GUARD=$(harness_guard_before_start "$APPDATA/recording_preferences.json" "$MIC_SEED" "$HARNESS_SRC" 2>&1) \
   || die "before Start (#293): $GUARD"
 BEFORE=$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)
@@ -565,6 +598,20 @@ sys.exit(1 if problems else 0)
 PY
     say "the whole recording was transcribed: rows past 100 s carry words, on the segmented path"
     ;;
+  checked)
+    # The words on the microphone's own rows: the system side is the harness sink's monitor, which
+    # carries the same sample, so words on any row would prove nothing about the microphone.
+    python3 -I - "$STOPPED_JSON" "${WORDS[@]}" <<'PY' || die "checked: the rows on the you channel do not carry the sample's words; the rows are above"
+import json, sys
+rows = json.load(open(sys.argv[1]))
+rows = rows if isinstance(rows, list) else rows.get("transcripts", rows.get("segments", []))
+you = " ".join((r.get("text") or "") for r in rows if r.get("channel") == "you").lower()
+missing = [w for w in sys.argv[2:] if w.lower() not in you]
+print(f"    {sum(1 for r in rows if r.get('channel') == 'you')} rows on the you channel; missing {missing or 'none'}")
+sys.exit(1 if missing or not you else 0)
+PY
+    say "checked: the rows on the you channel carry: ${WORDS[*]}"
+    ;;
   unscored | empty)
     [ "$WITH_CONF" -eq 0 ] \
       || die "$WITH_CONF of $ROWS_JSON rows were persisted with a confidence, and $MODEL_ID scores nothing: a number nobody computed reached the disk (#162)"
@@ -606,6 +653,11 @@ say "the action bar is one row that fits, in the wide arrangement, in the applic
 if [ "$MODE" = long ]; then
   PASSED=1
   say "PASS (long) - $MODEL_ID chosen in first run's catalogue, and a ${RECORD_S}s recording of dots-full.wav was transcribed past its first 100 s, on the segmented path"
+  exit 0
+fi
+if [ "$MODE" = checked ]; then
+  PASSED=1
+  say "PASS (checked) - the microphone first run proved was stored, and the first recording opened it and heard its words on the you channel"
   exit 0
 fi
 

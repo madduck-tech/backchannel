@@ -194,10 +194,11 @@ const p = spawnSync('python3', ['-I', path.join(repo, 'scripts', 'stage2-watched
 const steps = p.stdout.trim().split('\n').map((l) => l.split('\t'));
 const watched = steps.filter((s) => s[1].startsWith('watched'));
 const what = (s) => s[2];
+const coreEntries = JSON.parse(fs.readFileSync(path.join(repo, 'gopnik.json'), 'utf8')).verification.stage2.filter((e) => /stage2-core-check\.sh "\$APP" \w+$/.test(e)).length;
 check('6a the plan watches resumes, the core passes and the record pass, and nothing else',
-  p.status === 0 && watched.length === 6
+  p.status === 0 && coreEntries >= 4 && watched.length === coreEntries + 2
     && watched.filter((s) => /onboarding-check\.sh "\$APP" resumes$/.test(what(s)) && /no system device/.test(s[1])).length === 1
-    && watched.filter((s) => /stage2-core-check\.sh/.test(what(s)) && /--recording/.test(s[1]) && /backchannel_harness_sink/.test(s[1])).length === 4
+    && watched.filter((s) => /stage2-core-check\.sh/.test(what(s)) && /--recording/.test(s[1]) && /backchannel_harness_sink/.test(s[1])).length === coreEntries
     && watched.filter((s) => /^\d+-\d+$/.test(s[0]) && /harness-guard\.sh/.test(what(s)) && /--system-default-sink --recording/.test(s[1]) && /pids /.test(s[1])).length === 1,
   `exit ${p.status}: ${JSON.stringify(watched)} ${p.stderr}`);
 check('6b and joins the record pass to its up', steps.some((s) => /^\d+-\d+$/.test(s[0])) && !steps.some((s) => /stage2-record-check\.sh/.test(what(s)) && !/^\d+-\d+$/.test(s[0])),
@@ -227,4 +228,4 @@ for (const f of fs.readdirSync(live)) {
 }
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the whole group of the entry has torn down, under a Ctrl-C to the runner too, which then stops its caller; waits the same way when the sampler stops the entry; and stops an entry that does not yet lead its group; and the runner watches resumes, the four core passes and the record pass joined to its up under its own tail');
+console.log('ok - capture watch: refuses to start beside a capture or on an unreadable graph; runs a quiet entry and passes its exit through with the recorder on the default microphone; stops the entry before its next step when a live process outside it captures, or one whose pid is not on this host stays; stops what it started when it is itself stopped, and returns only after the whole group of the entry has torn down, under a Ctrl-C to the runner too, which then stops its caller; waits the same way when the sampler stops the entry; and stops an entry that does not yet lead its group; and the runner watches resumes, every core pass and the record pass joined to its up under its own tail');

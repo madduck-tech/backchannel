@@ -97,7 +97,8 @@ function statements(src) {
 }
 function seedOf(name) {
   const src = sources.get(name);
-  const writes = statements(src).filter((s) => /recording_preferences\.json"/.test(s.text) && /preferred_mic_device/.test(s.text));
+  // The statement that writes the store by redirection: a read of it, or `checked`'s override, is not the seed.
+  const writes = statements(src).filter((s) => />\s*"\$(APPDATA|store)\/recording_preferences\.json"/.test(s.text) && /preferred_mic_device/.test(s.text));
   const assigns = code(src).filter(({ line }) => /^\s*MIC_SEED=/.test(line)).map(({ line }) => line.trim());
   return { writes, assigns };
 }
@@ -119,6 +120,16 @@ const recBefore = code(recLines.slice(0, Math.max(0, (rec.writes[0]?.n ?? 0) - 2
 const opensBlock = (l) => /(&&|\|\||\||\\|\{)\s*$/.test(l) || /^\s*(then|do|else)\s*$/.test(l) || /\bin\s*$/.test(l) || /^\s*[^#()]*\)\s*$/.test(l);
 check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writes[0].depth === 0 && recOpen === "python3 -c 'import json,sys" && !opensBlock(recBefore),
   `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), opens with '${recOpen}', and follows '${recBefore}'`);
+
+// 3f. The one exemption from the core seed (#299): `checked` stores no microphone, so first run's audio
+// check is what stores it. The override is that mode's alone.
+{
+  const lines = sources.get('stage2-core-check.sh').split('\n');
+  const at = lines.map((l, i) => (/\["preferred_mic_device"\] = None/.test(l) ? i : -1)).filter((i) => i >= 0);
+  const opener = at.length === 1 ? lines.slice(0, at[0]).reverse().find((l) => /^(if|fi)\b/.test(l)) : undefined;
+  check('3f the core seed is overridden in checked mode alone', at.length === 1 && opener === 'if [ "$MODE" = checked ]; then',
+    `${at.length} override(s); the block it sits in opens with '${opener}'`);
+}
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that
 // moves the default: the guard after `up` is the only check that sees the default move, since a source

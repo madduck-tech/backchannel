@@ -54,6 +54,7 @@
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-core-check.sh \"$APP\" unscored",
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-core-check.sh \"$APP\" empty",
       "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-core-check.sh \"$APP\" long",
+      "APP=$(./scripts/stage2-locate-app.sh) && ./scripts/stage2-core-check.sh \"$APP\" checked",
       ". scripts/lib/harness-guard.sh && B=$(harness_effective_source) && scripts/audio-harness.sh up --system-only || { echo 'audio harness could not come up: the audio half of this gate cannot run, and a verdict must say so rather than skip it'; exit 1; }; G=$(harness_guard_after_up \"$B\" 2>&1) || { echo \"the harness moved the default input (#293): $G\"; scripts/audio-harness.sh down; exit 1; }",
       "umask 077; . scripts/lib/kept-profile.sh && say() { printf 'kept-profile: %s\\n' \"$*\" >&2; } && kept_profile_prune /tmp stage2-audio 2; A2=$(mktemp -d /tmp/backchannel-stage2-audio.XXXXXX) && kept_profile_lock \"$A2\" && APP=$(./scripts/stage2-locate-app.sh) && scripts/stage2-record-check.sh \"$APP\" \"$A2\" 'ask not' 'country'; RC=$?; APID=$(cat \"$A2/pid\" 2>/dev/null); [ -n \"$APID\" ] && { kill -TERM -\"$APID\" 2>/dev/null || kill -TERM \"$APID\" 2>/dev/null; }; sleep 4; [ -n \"$APID\" ] && kill -KILL -\"$APID\" 2>/dev/null; case \"$A2\" in /tmp/backchannel-stage2-audio.*) rm -rf -- \"$A2\" ;; esac; scripts/audio-harness.sh down; exit $RC",
       "APP=$(./scripts/stage2-locate-app.sh) && scripts/stage2-two-channel-check.sh \"$APP\" normal",
