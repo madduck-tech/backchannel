@@ -6,6 +6,7 @@
 #   scripts/audio-harness.sh up [--sample PATH] [--system-home DIR] [--system-only]
 #   scripts/audio-harness.sh down                 restore the machine and remove it
 #   scripts/audio-harness.sh status               what is up right now
+#   scripts/audio-harness.sh src-name             the source this run's `up` made
 #
 # `up` creates a PipeWire sink whose output is a virtual source, makes that source the
 # default input, and loops a recording into the sink. Anything recording from the system
@@ -19,9 +20,12 @@
 # does not need libpulse and does not need the application changed — ADR 0005's finding
 # that no monitor devices exist is about the *unconfigured* machine.
 #
-# `--system-only` leaves the default input alone, so the microphone stays on the real
-# device. That is what makes a transcript attributable: with the machine's own microphone
-# delivering silence, anything transcribed can only have come through system audio.
+# `--system-only` leaves the default input alone, so a capture that follows the default -- a
+# call's microphone in a browser tab -- stays on the person's own device (#293). The source
+# then carries a per-run name, which `src-name` prints, and a pass that wants it as its
+# microphone names it in `preferred_mic_device`, as the core and record passes do. The two
+# channels are told apart by the two-channel passes' swapped run, not by a silent microphone:
+# the by-hand system-audio recipe that relied on the machine's own microphone is retired.
 #
 # Two things this script exists to get right, both learned the hard way:
 #
@@ -45,13 +49,22 @@
 set -euo pipefail
 
 SINK_NAME="backchannel_harness_sink"
-SRC_NAME="backchannel_harness_src"
+# The source's family. Under `--system-only` each run's source is `backchannel_harness_src_<run id>`, a
+# name no WirePlumber stack holds (#293): the constant is on the person's stack, and WirePlumber makes a
+# node whose name is stacked the default input whenever the configured one is absent, with no write at
+# all (measured 2026-10-31: `up --system-only` under the constant made it the effective default). The
+# default-writing mode keeps the constant, so the two-channel passes add no new name to the stack.
+SRC_FAMILY="backchannel_harness_src"
+SRC_NAME="$SRC_FAMILY"
 SYS_SINK_NAME="backchannel_harness_sysout"
 SYS_SRC_NAME="backchannel_harness_sysmon"
 # The description is what matters, not the PCM name: the application finds system audio by
 # scanning ALSA input descriptions for "monitor".
 SYS_PCM_DESC="backchannel harness system monitor capture"
 STATE_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .)/backchannel-audio-harness"
+# The run's source name, written by `up` and read by `down`, `status`, `src-name` and every pass: the
+# record pass's two entries are separate shells.
+[ -s "$STATE_DIR/src-name" ] && SRC_NAME="$(cat "$STATE_DIR/src-name")"
 WP_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/default-nodes"
 
 DEFAULT_SAMPLE_GLOB="$HOME/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav"
@@ -65,22 +78,17 @@ require_tools() {
   done
 }
 
-# Nodes matching one of our names, as "id name" lines.
+# Nodes matching one of our names, as "id name" lines. Read through `lib/capture-graph.py`, which reads a
+# split `pw-dump` (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).
+GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/capture-graph.py"
 harness_nodes() {
-  pw-dump 2>/dev/null | python3 -c '
-import json, sys
-try:
-    dump = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-for obj in dump:
-    if not str(obj.get("type", "")).endswith("Node"):
-        continue
-    props = (obj.get("info") or {}).get("props") or {}
-    name = props.get("node.name", "")
-    if name in sys.argv[1:]:
-        print(obj["id"], name)
-' "$SINK_NAME" "$SRC_NAME" "$SYS_SINK_NAME" "$SYS_SRC_NAME"
+  python3 -I "$GRAPH" nodes 2>/dev/null | awk -F'\t' -v fam="$SRC_FAMILY" -v a="$SINK_NAME" -v b="$SYS_SINK_NAME" -v c="$SYS_SRC_NAME" '
+    # The source by its family, so a leftover of either era is found.
+    $2 == a || $2 == b || $2 == c || $2 == fam || index($2, fam "_") == 1 { print $1, $2 }'
+}
+# An unreadable graph is not an empty one: both checks that read "no harness nodes" as a fact ask first.
+graph_readable() {
+  python3 -I "$GRAPH" nodes >/dev/null 2>&1
 }
 
 current_default_source() {
@@ -133,6 +141,7 @@ cmd_up() {
 
   # Refuse rather than duplicate. Two nodes with one name is worse than no harness,
   # because everything downstream still looks like it worked.
+  graph_readable || die "the audio graph could not be read, so nothing shows the harness is not already up"
   if [ -n "$(harness_nodes || true)" ]; then
     die "already up — run 'down' first (running twice creates duplicate nodes with the same name)"
   fi
@@ -144,6 +153,11 @@ cmd_up() {
     [ -n "$sample" ] || die "no sample given and none found at $DEFAULT_SAMPLE_GLOB — pass --sample PATH"
   fi
   [ -r "$sample" ] || die "sample not readable: $sample"
+  if [ "$system_only" -eq 1 ]; then
+    SRC_NAME="${SRC_FAMILY}_$(date +%s)_$$"
+  else
+    SRC_NAME="$SRC_FAMILY"
+  fi
 
   # From here on the machine is being changed, so any failure has to put it back.
   # Without this, a refusal — the silence check below, most likely — leaves the
@@ -152,9 +166,11 @@ cmd_up() {
   UP_COMPLETED=0
   trap 'if [ "$UP_COMPLETED" != 1 ]; then note "bringing the machine back after a failed up"; cmd_down >/dev/null 2>&1 || true; fi' EXIT
   current_default_source > "$STATE_DIR/original-default-source"
-  [ -s "$STATE_DIR/original-default-source" ] || die "could not read the current default input; refusing to change it"
+  # Only a run that writes the default needs it to put back; `--system-only` keeps it for `down`'s report.
+  [ "$system_only" -eq 1 ] || [ -s "$STATE_DIR/original-default-source" ] || die "could not read the current default input; refusing to change it"
   cp -f "$WP_STATE" "$STATE_DIR/wireplumber-default-nodes.before" 2>/dev/null || : > "$STATE_DIR/wireplumber-default-nodes.before"
   printf '%s\n' "$sample" > "$STATE_DIR/sample"
+  printf '%s\n' "$SRC_NAME" > "$STATE_DIR/src-name"
 
   # media.class must be Audio/Source: WirePlumber refuses to make an Audio/Source/Virtual
   # the default ("is not a device node"), and writing the metadata by hand is accepted and
@@ -172,6 +188,7 @@ cmd_up() {
   done
 
   if [ "$system_only" -eq 0 ]; then
+    : > "$STATE_DIR/wrote-default"
     pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SRC_NAME\"}" >/dev/null
     sleep 1
     [ "$(current_default_source)" = "{\"name\":\"$SRC_NAME\"}" ] || die "the harness source did not become the default input"
@@ -183,6 +200,9 @@ cmd_up() {
     >/dev/null 2>&1 &
   echo $! > "$STATE_DIR/player.pid"
 
+  # A second for WirePlumber to see the source before the probe targets it by name: a target it does not
+  # know yet falls back to the default input, and the probe would measure the person's microphone.
+  [ "$system_only" -eq 1 ] && sleep 1
   local level; level="$(probe_level "$SRC_NAME")"
   case "$level" in
     silent:*) die "the microphone source is delivering silence (max_volume ${level#silent:} dB) — check the sample and the sink" ;;
@@ -261,7 +281,9 @@ cmd_down() {
   pkill -f "pw-cat -p --target $SINK_NAME" 2>/dev/null || true
   pkill -f "pw-cat -p --target $SYS_SINK_NAME" 2>/dev/null || true
 
-  if [ -s "$STATE_DIR/original-default-source" ]; then
+  # Only an `up` that wrote the default puts it back: one that did not would otherwise overwrite a choice
+  # made meanwhile (#293).
+  if [ -e "$STATE_DIR/wrote-default" ] && [ -s "$STATE_DIR/original-default-source" ]; then
     pw-metadata -n default 0 default.configured.audio.source "$(cat "$STATE_DIR/original-default-source")" >/dev/null || true
   fi
 
@@ -275,6 +297,7 @@ cmd_down() {
   fi
   sleep 1
 
+  graph_readable || die "the audio graph could not be read, so nothing shows the teardown removed the harness"
   local left; left="$(harness_nodes || true)"
   [ -n "$left" ] && die "nodes still present after teardown: $left"
 
@@ -283,21 +306,24 @@ cmd_down() {
   [ "$restored" = "$wanted" ] || note "WARNING: default input is $restored, expected $wanted"
 
   # The live graph can look clean while WirePlumber's persisted list still names the
-  # harness. That entry is inert history, but it survives a reboot, so say so rather than
-  # leave it to be found.
-  if [ -f "$WP_STATE" ] && grep -q "$SRC_NAME" "$WP_STATE" 2>/dev/null; then
-    note "residue: $WP_STATE still lists $SRC_NAME in its fallback history."
-    note "  It is inert — the active default is restored — and removing it needs"
-    note "  'systemctl --user stop wireplumber', an edit, then 'start'."
+  # harness. That entry is not inert: while the configured default is absent, a node with a
+  # stacked name becomes the default input as soon as it appears (#293), so say so rather
+  # than leave it to be found.
+  if [ -f "$WP_STATE" ] && grep -q "$SRC_FAMILY" "$WP_STATE" 2>/dev/null; then
+    note "residue: $WP_STATE still lists $SRC_FAMILY in its fallback history."
+    note "  A node by that name becomes the default input whenever the configured one is absent."
+    note "  Removing it needs 'systemctl --user stop wireplumber', an edit, then 'start'."
   fi
 
   rm -rf "$STATE_DIR"
-  note "down — default input restored to $restored"
+  note "down — default input is $restored"
 }
 
 case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   down) cmd_down ;;
   status) cmd_status ;;
-  *) die "usage: $0 up [--sample PATH] | down | status" ;;
+  # The source this run's `up` made, for a pass to look it up by name.
+  src-name) [ -s "$STATE_DIR/src-name" ] || die "no harness is up"; cat "$STATE_DIR/src-name" ;;
+  *) die "usage: $0 up [--sample PATH] [--system-home DIR] [--system-only] | down | status | src-name" ;;
 esac

@@ -203,13 +203,18 @@ if [ "$MODE" = resumes-gone ]; then
 fi
 if [ "$MODE" = resumes ]; then
   RUNNING=$(app_pid) && die "another copy of the application is running (pid $RUNNING); a resume run cannot share the single-instance lock with it"
-  # The second launch presses Check by speaking. The harness is the default input, so the check hears
-  # its sample and never the room; before the first launch, because the device list is read at start.
+  # The second launch presses Check by speaking, with the harness picked by name, so the check hears its
+  # sample and never the room; before the first launch, because the device list is read at start. The
+  # harness never becomes the default input (#293), so a call's microphone stays on the person's device.
   SAMPLE="${BC_SAMPLE_A:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.wav 2>/dev/null | head -1)}"
   [ -n "$SAMPLE" ] && [ -f "$SAMPLE" ] || die "no jfk.wav sample for the audio check"
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/harness-guard.sh"
   "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" down >/dev/null 2>&1 || true
-  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" up --sample "$SAMPLE" || die "the audio harness could not come up"
+  DEFAULT_SRC_BEFORE=$(harness_effective_source)
+  "$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" up --system-only --sample "$SAMPLE" || die "the audio harness could not come up"
   HARNESS_UP=1
+  GUARD=$(harness_guard_after_up "$DEFAULT_SRC_BEFORE" 2>&1) || die "the harness moved the default input (#293): $GUARD"
+  HARNESS_SRC=$("$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" src-name) || die "the harness names no source"
 fi
 DRIVER_LOG="$PROFILE/tauri-driver.log"
 
@@ -827,14 +832,8 @@ except Exception: print("")' 2>/dev/null)
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/audio-check.sh"
   # The picker's first entry is whatever the machine lists first, not the default input, so the
   # harness is picked by the description PipeWire reports, as `stage2-core-check.sh` does.
-  HARNESS_DESC=$(pw-dump | python3 -c '
-import json, sys
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("node.name") == "backchannel_harness_src":
-        print(p.get("node.description") or ""); break
-')
-  [ -n "$HARNESS_DESC" ] || die "the harness source is not in the graph"
+  HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
+  [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
   TRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Microphone\"]"}')
   [ -n "$TRIG" ] || die "no microphone picker on the audio check"
   click "$TRIG" "the microphone picker"
@@ -848,6 +847,8 @@ for o in json.load(sys.stdin):
   case "$MIC" in *"$HARNESS_DESC"*) ;; *) die "the microphone picker holds '$MIC', not the harness; the check would hear the room" ;; esac
   audio_check_press
   OUT=$( (audio_check_require_body_answer) 2>&1 ) || FAILS+=("the check: $OUT")
+  # The harness is picked and speaking, so anything but HEARD means the check listened elsewhere (#293).
+  [ "$(audio_check_field "$AUDIO_CHECK" kind)" = HEARD ] || FAILS+=("the check did not hear the harness: $(audio_check_shown "$AUDIO_CHECK")")
   [ "$(stat -c %s "$LOG")" -ge "$OFFSET" ] || die "the log is shorter than before the relaunch: it rotated, and the relaunch's lines are lost"
   L="$PROFILE/after-relaunch.log"
   tail -c +$((OFFSET + 1)) "$LOG" > "$L"

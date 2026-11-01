@@ -51,17 +51,19 @@ function literalPrefix(pattern) {
   return (cut === -1 ? pattern : pattern.slice(0, cut)).trim();
 }
 
-// A line that greps the application's log. `$LOG` and `$L` are what the passes call it; a new name
-// would leave this census blind, which is why the file it points at is asserted below too.
-const READS_LOG = /grep\b[^|;]*"\$(LOG|L)"/;
+// A line that greps the application's log. `$LOG` and `$L` are what the passes call it, and `$after` is
+// the part after a start that `lib/harness-guard.sh` reads (#293); a new name would leave this census
+// blind, which is why the file it points at is asserted below too.
+const READS_LOG = /grep\b[^|;]*"\$(LOG|L|after)"/;
 // The pattern is `grep`'s own first quoted argument, not any quoted string on the line: these lines
 // are often `say "the app opened: $(grep -o "…" "$LOG")"`, and the outer string is a sentence.
 const GREP_PATTERN = /grep\s+(?:-\w+\s+)*(["'])((?:(?!\1).)*)\1/g;
 
-const scripts = fs
-  .readdirSync(SCRIPTS)
-  .filter((f) => f.startsWith('stage2-') && f.endsWith('.sh'))
-  .map((f) => ({ name: f, src: fs.readFileSync(path.join(SCRIPTS, f), 'utf8') }));
+// The passes, and the helpers they source: #293's guard reads the log on the core pass's behalf.
+const scripts = [
+  ...fs.readdirSync(SCRIPTS).filter((f) => f.startsWith('stage2-') && f.endsWith('.sh')),
+  ...fs.readdirSync(path.join(SCRIPTS, 'lib')).filter((f) => f.endsWith('.sh')).map((f) => `lib/${f}`),
+].map((f) => ({ name: f, src: fs.readFileSync(path.join(SCRIPTS, f), 'utf8') }));
 
 const oracles = [];
 for (const { name, src } of scripts) {

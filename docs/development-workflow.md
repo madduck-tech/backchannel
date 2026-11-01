@@ -50,11 +50,18 @@ record and `main` never disagrees with it.
    evidence are posted to the issue. `NOT READY` means fix and a fresh round on the new revision.
    Stage 2 for this product is the built application on a clean profile: UI flows are driven
    with the `computer-use` skill (real window, accessibility tree, screenshots); audio flows use
-   the PipeWire virtual-device harness: `scripts/audio-harness.sh` makes a virtual source the
-   default input and loops a recording into it, and `scripts/stage2-record-check.sh` drives the
-   built application through a recording and asserts the sample's words come back as a transcript.
-   Both are wired into `gopnik.json`; the system-audio side (`--system-only --system-home`) is
-   verified but run by hand, because each application run costs about ten minutes. The audio pass
+   the PipeWire virtual-device harness: `scripts/audio-harness.sh up --system-only` makes a virtual
+   source, under a per-run name, and loops a recording into it, and `scripts/stage2-record-check.sh`
+   names that source as the microphone, drives the built application through a recording and asserts
+   the sample's words come back as a transcript. No pass but the two-channel ones makes the harness
+   the default input, so a call's microphone in another application stays on the person's own device
+   (#293); the two-channel passes write it on purpose, play aloud, and put the constant source name on
+   WirePlumber's stack each run.
+   Both are wired into `gopnik.json`. The system channel is held by the two-channel passes, whose
+   swapped run separates it from the microphone. The by-hand system-audio recipe
+   (`--system-only --system-home` with `BC_PREFERRED_SYSTEM_DEVICE`) is retired: since #293 the
+   record pass names the harness microphone, which carries the same sample, so a transcript no
+   longer says which channel it came through. The audio pass
    needs a live PipeWire session and so does not run in CI. Audio verdicts are no longer narrowed
    by default; where a verdict still cannot reach something — both channels at once, transcription
    quality, macOS and Windows — it names what is not proven. On `exp/virtual-audio` the experiment's
@@ -144,7 +151,7 @@ so wiring a thing up, deleting it, or adding a new unreached one all force an ed
 is a literal pin with no allowlist — stated as a rule rather than a count, because the count that
 stood here ("the other six rows") matched no way of counting the table on the day it was written:
 that table had 7 rows and named 5 test files, which gives 4 or 2, never 6. The table lists the
-checks that guard *reachability and contracts*; it is not the whole suite, which has 99 test files.
+checks that guard *reachability and contracts*; it is not the whole suite, which has 103 test files.
 
 They are **not** immune to a mention in a comment. A commented-out `invoke('name')` moves the set and
 turns the check STALE, and the cheapest way to resolve a STALE is to delete the allowlist entry and

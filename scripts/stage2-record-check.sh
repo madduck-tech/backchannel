@@ -42,6 +42,34 @@ PIDFILE="$PROFILE/pid"
 say() { printf 'stage2-record-check: %s\n' "$*"; }
 die() { printf 'stage2-record-check: %s\n' "$*" >&2; exit 1; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kept-profile.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/harness-guard.sh"
+# From the Start click on, a failure may have recorded a microphone, so the recordings go before the
+# profile is kept (#293): the application's group first, so nothing writes after them, and with INT and
+# TERM ignored, so a second signal cannot cut the drop short.
+# Keyed on whether the pass passed, not on `$?`: when bash ends on a signal the EXIT trap sees the last
+# command's status, 0 after a group TERM (round 4, measured). INT and TERM exit with their own status, so a
+# Ctrl-C ends the pass instead of returning to it.
+STARTED=0; PASSED=0
+on_exit() {
+  local rc=$1
+  trap '' INT TERM
+  # Not under `-e`: a group TERM already emptied makes the KILL fail, and errexit would end the trap there,
+  # before the drop (round 3, measured with a stand-in for the application).
+  set +e
+  [ "$PASSED" = 1 ] || [ "$rc" -ne 0 ] || rc=1
+  if [ "$PASSED" != 1 ] && [ "$STARTED" = 1 ]; then
+    if [ -s "$PIDFILE" ]; then
+      kill -TERM -"$(cat "$PIDFILE")" 2>/dev/null
+      sleep 2
+      kill -KILL -"$(cat "$PIDFILE")" 2>/dev/null
+    fi
+    harness_guard_drop_recordings "$PROFILE"
+  fi
+  exit "$rc"
+}
+trap 'on_exit $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 tree() {
   orca-ide computer get-app-state --app "pid:$(cat "$PIDFILE")" --no-screenshot --json 2>/dev/null \
@@ -103,17 +131,24 @@ else
   say "no model cache at $CACHE — this run downloads them (about 4.3 GB) and fills it"
 fi
 
-# Optional: pin a system-audio device before the first launch. The application resolves
-# preferred_system_device through AudioDevice::from_name, which insists on an "(output)"
-# suffix, and the store lives in the *data* directory rather than the config one -- both
+# The microphone is the harness's source, named, on every run (#293): the harness no longer becomes the
+# default input, so an unnamed microphone would be the person's own. The source is the one this run's
+# `up` made, read from its state, since the harness comes up in an entry of its own. The application
+# resolves both preferences through AudioDevice::from_name, which insists on the "(input)" and
+# "(output)" suffixes, and the store lives in the *data* directory rather than the config one -- both
 # settled by experiment, both easy to get wrong.
-if [ -n "${BC_PREFERRED_SYSTEM_DEVICE:-}" ]; then
-  store="$PROFILE/home/.local/share/tech.madduck.backchannel"
-  mkdir -p "$store" "$PROFILE/rec"
-  printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4","preferred_mic_device":null,"preferred_system_device":"%s"}}' \
-    "$PROFILE/rec" "$BC_PREFERRED_SYSTEM_DEVICE" > "$store/recording_preferences.json"
-  say "pinned system audio to '$BC_PREFERRED_SYSTEM_DEVICE'"
-fi
+HARNESS_SRC=$("$(dirname "${BASH_SOURCE[0]}")/audio-harness.sh" src-name 2>/dev/null) \
+  || die "no harness is up, so there is no microphone to name; bring the audio harness up with --system-only first, as gopnik.json's stage 2 does"
+HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
+[ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
+MIC_SEED="$HARNESS_DESC (input)"
+store="$APPDATA"
+mkdir -p "$store" "$PROFILE/rec"
+python3 -c 'import json,sys
+print(json.dumps({"preferences":{"save_folder":sys.argv[1],"auto_save":True,"file_format":"mp4","preferred_mic_device":sys.argv[2],"preferred_system_device":sys.argv[3] or None}}))' \
+  "$PROFILE/rec" "$MIC_SEED" "${BC_PREFERRED_SYSTEM_DEVICE:-}" > "$store/recording_preferences.json"
+say "named the microphone '$MIC_SEED' ($HARNESS_SRC)"
+[ -z "${BC_PREFERRED_SYSTEM_DEVICE:-}" ] || say "pinned system audio to '$BC_PREFERRED_SYSTEM_DEVICE'"
 # setsid, so the application leads its own process group and the caller can stop the
 # whole tree at once. Killing only the parent leaves WebKit's helper processes to die
 # on their own, which the desktop reports to the user as a crash.
@@ -147,6 +182,10 @@ else
   die "no model cache at $CACHE, so this profile starts at first run. Seed the cache, or run scripts/stage2-onboarding-check.sh, which drives first run properly."
 fi
 
+GUARD=$(harness_guard_before_start "$store/recording_preferences.json" "$MIC_SEED" "$HARNESS_SRC" 2>&1) \
+  || die "before Start (#293): $GUARD"
+BEFORE=$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)
+STARTED=1
 if ! click_labelled "Start recording" 60; then
   # Say what was on screen instead. A driver that reports only "the control was not
   # there" makes every failure look the same, and most of them are not.
@@ -156,6 +195,13 @@ fi
 
 grep -q 'Failed to create microphone stream' "$LOG" \
   && die "the microphone stream could not be created; see $LOG"
+# What the start opened, read after its own CALLED line, and the link that shows it did (#293).
+for _ in $(seq 1 40); do [ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] && break; sleep 0.5; done
+[ "$(grep -c 'CALLED start_recording_with_devices_and_meeting' "$LOG" || true)" -gt "$BEFORE" ] || die "the app logged no CALLED line for this start; see $LOG"
+N=$(grep -n 'CALLED start_recording_with_devices_and_meeting' "$LOG" | tail -1 | cut -d: -f1)
+for _ in $(seq 1 40); do tail -n +"$N" "$LOG" | grep 'Microphone stream created successfully' >/dev/null && break; sleep 0.5; done
+GUARD=$(harness_guard_after_start "$LOG" "$N" "$HARNESS_DESC" "$HARNESS_SRC" 20 "$(cat "$PIDFILE")" 2>&1) || die "after Start (#293): $GUARD"
+say "the start opened the harness microphone by name, and the graph links $HARNESS_SRC into the application"
 
 say "recording; waiting for the transcript"
 deadline=$((SECONDS + 180))
@@ -174,6 +220,7 @@ while [ $SECONDS -lt $deadline ]; do
       say "cached models to $CACHE — later runs will not download them"
     fi
     printf '%s' "$text" | grep -io -- "${EXPECTED[0]}[^,]*" | head -2 | sed 's/^/    /'
+    PASSED=1
     exit 0
   fi
   sleep 10
