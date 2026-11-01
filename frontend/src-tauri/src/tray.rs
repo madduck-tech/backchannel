@@ -1,5 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{
-    Emitter,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
@@ -87,13 +87,8 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
             // Handle result
             match stop_result {
                 Ok(_) => {
+                    // The window saves on `recording-stopped`, whichever route stopped (#328).
                     log::info!("Tray toggle: Recording stopped successfully");
-
-                    // Trigger frontend post-processing via event (works from any page)
-                    // (SQLite save, navigation)
-                    if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                        log::error!("Tray toggle: Failed to emit recording-stop-complete event: {}", e);
-                    }
                 }
                 Err(e) => {
                     log::error!("Tray toggle: Failed to stop recording: {}", e);
@@ -183,13 +178,8 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
         // Handle result
         match stop_result {
             Ok(_) => {
+                // The window saves on `recording-stopped`, whichever route stopped (#328).
                 log::info!("Tray: Recording stopped successfully");
-
-                // Trigger frontend post-processing via event (works from any page)
-                // (SQLite save, navigation)
-                if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                    log::error!("Tray: Failed to emit recording-stop-complete event: {}", e);
-                }
             }
             Err(e) => {
                 log::error!("Tray: Failed to stop recording: {}", e);
@@ -209,7 +199,17 @@ fn check_updates_handler<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Rebuild requests made, for the test that holds Stop's two (#328).
+static REBUILD_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn rebuild_requests() -> usize {
+    REBUILD_REQUESTS.load(Ordering::SeqCst)
+}
+
+/// Ask for a rebuild. Always spawned, never inline: muda builds menus on the main thread only on macOS.
 pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
+    REBUILD_REQUESTS.fetch_add(1, Ordering::SeqCst);
     // For sync update, spawn async task to get current state
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -234,29 +234,26 @@ pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     }
 }
 
-async fn get_current_recording_state() -> RecordingState {
-    // Check if currently recording
+pub(crate) async fn get_current_recording_state() -> RecordingState {
+    let is_stopping = crate::audio::recording_commands::is_stopping();
     let is_recording = crate::audio::recording_commands::is_recording().await;
+    let is_paused = is_recording && crate::audio::recording_commands::is_recording_paused().await;
+    let state = state_of(is_recording, is_paused, is_stopping);
     log::info!(
-        "Tray: get_current_recording_state - is_recording: {}",
-        is_recording
+        "Tray: recording {}, paused {}, stopping {}: {:?}",
+        is_recording, is_paused, is_stopping, state
     );
+    state
+}
 
-    if !is_recording {
-        log::info!("Tray: Recording state is Stopped");
-        return RecordingState::Stopped;
-    }
-
-    // Check if paused
-    let is_paused = crate::audio::recording_commands::is_recording_paused().await;
-    log::info!("Tray: is_paused: {}", is_paused);
-
-    if is_paused {
-        log::info!("Tray: Recording state is Paused");
-        RecordingState::Paused
-    } else {
-        log::info!("Tray: Recording state is Recording");
-        RecordingState::Recording
+/// The menu's state from the backend's three flags. A stop in progress wins: through an in-app Stop the
+/// recording flag stays true until the end, and the tray must offer neither Stop nor Pause (#328).
+fn state_of(is_recording: bool, is_paused: bool, is_stopping: bool) -> RecordingState {
+    match (is_stopping, is_recording, is_paused) {
+        (true, _, _) => RecordingState::Stopping,
+        (false, false, _) => RecordingState::Stopped,
+        (false, true, true) => RecordingState::Paused,
+        (false, true, false) => RecordingState::Recording,
     }
 }
 
@@ -328,56 +325,12 @@ fn build_menu<R: Runtime>(
                 .build(app)?,
         );
     } else {
-        match state {
-            RecordingState::Stopped => {
-                builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
-            }
-            RecordingState::Starting => {
-                builder = builder.item(
-                    &MenuItemBuilder::new("🔄 Starting Recording...")
-                        .enabled(false)
-                        .build(app)?,
-                );
-            }
-            RecordingState::Recording => {
-                builder = builder
-                    .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Pause Recording").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Pausing => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::new("⏸ Pausing...")
-                            .enabled(false)
-                            .build(app)?,
-                    )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Paused => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::with_id("resume_recording", "▶ Resume Recording")
-                            .build(app)?,
-                    )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Resuming => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::new("▶ Resuming...")
-                            .enabled(false)
-                            .build(app)?,
-                    )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Stopping => {
-                builder = builder.item(
-                    &MenuItemBuilder::new("⏹ Stopping...")
-                        .enabled(false)
-                        .build(app)?,
-                );
-            }
+        for (id, label) in state_items(&state) {
+            let item = match id {
+                Some(id) => MenuItemBuilder::with_id(id, label).build(app)?,
+                None => MenuItemBuilder::new(label).enabled(false).build(app)?,
+            };
+            builder = builder.item(&item);
         }
     }
 
@@ -389,6 +342,26 @@ fn build_menu<R: Runtime>(
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()
+}
+
+/// The recording items of the menu for a state: an id for an action, `None` for a disabled label. A pure
+/// function, so the menu's content is tested where muda cannot build a menu (#328).
+fn state_items(state: &RecordingState) -> Vec<(Option<&'static str>, &'static str)> {
+    match state {
+        RecordingState::Stopped => vec![(Some("toggle_recording"), "Start Recording")],
+        RecordingState::Starting => vec![(None, "🔄 Starting Recording...")],
+        RecordingState::Recording => vec![
+            (Some("pause_recording"), "⏸ Pause Recording"),
+            (Some("stop_recording"), "⏹ Stop Recording"),
+        ],
+        RecordingState::Pausing => vec![(None, "⏸ Pausing..."), (Some("stop_recording"), "⏹ Stop Recording")],
+        RecordingState::Paused => vec![
+            (Some("resume_recording"), "▶ Resume Recording"),
+            (Some("stop_recording"), "⏹ Stop Recording"),
+        ],
+        RecordingState::Resuming => vec![(None, "▶ Resuming..."), (Some("stop_recording"), "⏹ Stop Recording")],
+        RecordingState::Stopping => vec![(None, "⏹ Stopping...")],
+    }
 }
 
 pub(crate) fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -410,5 +383,34 @@ pub(crate) fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
         }
     } else {
         log::warn!("Could not find main window");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every combination of the three flags. A stop in progress offers no Stop, no Pause and no Start, paused
+    /// or not; a recording that is not stopping offers Stop, and Pause or Resume (#328).
+    #[test]
+    fn a_stop_in_progress_offers_no_stop_no_pause_and_no_start() {
+        for is_recording in [false, true] {
+            for is_paused in [false, true] {
+                for is_stopping in [false, true] {
+                    let state = state_of(is_recording, is_paused, is_stopping);
+                    let ids: Vec<_> = state_items(&state).into_iter().filter_map(|(id, _)| id).collect();
+                    let case = format!("recording {is_recording}, paused {is_paused}, stopping {is_stopping}: {state:?} {ids:?}");
+                    if is_stopping {
+                        assert!(ids.is_empty(), "{case}");
+                    } else if !is_recording {
+                        assert_eq!(ids, ["toggle_recording"], "{case}");
+                    } else if is_paused {
+                        assert_eq!(ids, ["resume_recording", "stop_recording"], "{case}");
+                    } else {
+                        assert_eq!(ids, ["pause_recording", "stop_recording"], "{case}");
+                    }
+                }
+            }
+        }
     }
 }

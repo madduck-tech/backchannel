@@ -47,6 +47,33 @@ static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
 // including a start that opens capture and then fails its model load.
 static MIC_LEVEL_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
+// A stop in progress: from Stop's `IS_RECORDING` check under the lifecycle lock until just before
+// `recording-stopped` (#328). Read without that lock, so `get_recording_state` and the tray can answer
+// while Stop holds it. #329's Quit question reads the same flag.
+static STOP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Holds a stop flag for as long as it lives, so every exit from Stop clears it: an `Err`, an early
+/// return, a panic. Generic over the flag so its test runs on one of its own.
+pub(crate) struct StopGuard<'a>(&'a AtomicBool);
+
+impl<'a> StopGuard<'a> {
+    pub(crate) fn take(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        StopGuard(flag)
+    }
+}
+
+impl Drop for StopGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Is a Stop between its check and `recording-stopped`?
+pub fn is_stopping() -> bool {
+    STOP_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
 // ============================================================================
 // PUBLIC TYPES
 // ============================================================================
@@ -422,6 +449,11 @@ pub async fn stop_recording<R: Runtime>(
         return Ok(());
     }
 
+    // From here until just before `recording-stopped`, the window and the tray report a stop (#328).
+    // Each end asks the tray to rebuild: the tray route sets "Stopping…" itself, an in-app Stop did not.
+    let stop_guard = StopGuard::take(&STOP_IN_PROGRESS);
+    crate::tray::update_tray_menu(&app);
+
     // Emit shutdown progress to frontend
     let _ = app.emit(
         "recording-shutdown-progress",
@@ -612,6 +644,11 @@ pub async fn stop_recording<R: Runtime>(
     info!("🔍 Setting IS_RECORDING to false");
     IS_RECORDING.store(false, Ordering::SeqCst);
 
+    // After `IS_RECORDING` and before `recording-stopped`: a poll in between answers neither recording nor
+    // stopping, and an earlier drop would send the window back to RECORDING through the save (#328).
+    drop(stop_guard);
+    crate::tray::update_tray_menu(&app);
+
     // Step 4.5: Prepare metadata for frontend (NO database save)
     // NOTE: We do NOT save to database here. The frontend saves after `recording-stopped`; every row
     // was emitted as `transcript-update` before it, since the transcriber has ended.
@@ -650,9 +687,6 @@ pub async fn stop_recording<R: Runtime>(
         }),
     )
     .map_err(|e| e.to_string())?;
-
-    // Update tray menu to reflect stopped state
-    crate::tray::update_tray_menu(&app);
 
     info!("🎉 Recording stopped; the transcriber had finished before it");
     Ok(())
@@ -769,6 +803,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     if let Some(manager) = manager_guard.as_ref() {
         serde_json::json!({
             "is_recording": is_recording,
+            "is_stopping": is_stopping(),
             "is_paused": manager.is_paused(),
             "is_active": manager.is_active(),
             "recording_duration": manager.get_recording_duration(),
@@ -783,6 +818,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     } else {
         serde_json::json!({
             "is_recording": is_recording,
+            "is_stopping": is_stopping(),
             "is_paused": false,
             "is_active": false,
             "recording_duration": null,
@@ -896,3 +932,98 @@ pub async fn get_active_audio_output() -> Result<super::playback_monitor::AudioO
         .map_err(|e| format!("Failed to get audio output info: {}", e))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard on a flag of its own: false before, true while held, false after a body that returns
+    /// `Err`, and false after one that panics (#328, #329's test (a)).
+    #[test]
+    fn the_stop_guard_clears_its_flag_on_every_exit() {
+        static FLAG: AtomicBool = AtomicBool::new(false);
+        assert!(!FLAG.load(Ordering::SeqCst), "before");
+        let body = |fail: bool| -> Result<(), String> {
+            let _guard = StopGuard::take(&FLAG);
+            assert!(FLAG.load(Ordering::SeqCst), "while held");
+            if fail { Err("a stop that fails".into()) } else { Ok(()) }
+        };
+        assert!(body(false).is_ok());
+        assert!(!FLAG.load(Ordering::SeqCst), "after a body that returns Ok");
+        assert!(body(true).is_err());
+        assert!(!FLAG.load(Ordering::SeqCst), "after a body that returns Err");
+        let panicked = std::panic::catch_unwind(|| {
+            let _guard = StopGuard::take(&FLAG);
+            panic!("a stop that panics");
+        });
+        assert!(panicked.is_err());
+        assert!(!FLAG.load(Ordering::SeqCst), "after a body that panics");
+    }
+
+    /// The real Stop on a mock app, with a transcription task that waits on a oneshot (#328, #329's test (b)).
+    /// While it waits, `get_recording_state` reports a stop and the tray's state is Stopping; the `finalizing`
+    /// event still sees the flag, `recording-stopped` sees neither flag; one rebuild is requested at each end.
+    /// Linux only: on macOS the spawned tray rebuild builds a menu off the main thread, and Windows has no
+    /// mock runtime.
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stop_in_progress_is_reported_until_just_before_recording_stopped() {
+        use std::sync::Arc;
+        use tauri::Listener;
+
+        let _turn = crate::audio::common::IDLE_CLOCK.lock().await;
+        // Put the flags back however this test ends, or a failure here wedges every test after it.
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                IS_RECORDING.store(false, Ordering::SeqCst);
+                STOP_IN_PROGRESS.store(false, Ordering::SeqCst);
+                TRANSCRIPTION_TASK.lock().unwrap().take();
+            }
+        }
+        let _restore = Restore;
+
+        let app = tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let handle = app.handle().clone();
+        let at_finalizing = Arc::new(Mutex::new(Vec::new()));
+        let at_stopped = Arc::new(Mutex::new(Vec::new()));
+        {
+            let seen = at_finalizing.clone();
+            handle.listen("recording-shutdown-progress", move |e| {
+                let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+                if v["stage"] == "finalizing" && v["progress"] == 90 {
+                    seen.lock().unwrap().push(is_stopping());
+                }
+            });
+            let seen = at_stopped.clone();
+            handle.listen("recording-stopped", move |_| {
+                seen.lock().unwrap().push((IS_RECORDING.load(Ordering::SeqCst), is_stopping()));
+            });
+        }
+
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        *TRANSCRIPTION_TASK.lock().unwrap() = Some(tokio::spawn(async move {
+            let _ = wait.await;
+        }));
+        let before = crate::tray::rebuild_requests();
+        let stop = tokio::spawn(stop_recording(handle.clone(), RecordingArgs { save_path: String::new() }));
+
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !is_stopping() {
+            assert!(std::time::Instant::now() < until, "Stop never took the guard");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(get_recording_state().await["is_stopping"], true, "while the stop waits on the transcriber");
+        assert!(matches!(crate::tray::get_current_recording_state().await, crate::tray::RecordingState::Stopping));
+        assert_eq!(crate::tray::rebuild_requests() - before, 1, "one rebuild requested at the take");
+
+        release.send(()).unwrap();
+        stop.await.unwrap().unwrap();
+
+        assert_eq!(*at_finalizing.lock().unwrap(), [true], "the finalizing event, 90");
+        assert_eq!(*at_stopped.lock().unwrap(), [(false, false)], "recording-stopped: neither recording nor stopping");
+        assert_eq!(get_recording_state().await["is_stopping"], false, "after Stop returned");
+        assert!(matches!(crate::tray::get_current_recording_state().await, crate::tray::RecordingState::Stopped));
+        assert_eq!(crate::tray::rebuild_requests() - before, 2, "one more at the drop, and none after recording-stopped");
+    }
+}
