@@ -495,10 +495,25 @@ for (const resumeRejects of [true, false]) {
   // command, or the default output passed instead, would pass every unit test of the constructor.
   const built = body.match(/check_result\([^;]*\)/g) ?? [];
   assert.equal(built.length, 2, `#299 4: the command builds its result through check_result at both sites, silent and with words: ${JSON.stringify(built)}`);
-  for (const b of built) {
-    assert.ok(/default_input_device\(\)/.test(b) && /\bsystem\b/.test(b) && !/default_output_device/.test(b),
-      `#299 4: each call passes the default input's lookup and the row: \`${b}\``);
-  }
+  // The arguments by position, split at the top level: the device, the row as it is, `heard` as each site
+  // knows it, and the default input's own lookup. A swapped pair or a negated row passes a word search.
+  const args = (call) => {
+    const out = []; let depth = 0; let cur = '';
+    for (const ch of call.slice(call.indexOf('(') + 1)) {
+      if (ch === ')' && depth === 0) break;
+      if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; continue; }
+      if ('([{'.includes(ch)) depth += 1;
+      if (')]}'.includes(ch)) depth -= 1;
+      cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  };
+  const [silentCall, wordsCall] = built.map(args);
+  assert.deepEqual(silentCall, ['device_name', 'system', 'false', 'String::new()', 'default_input_device()'],
+    `#299 4: the silent site passes the device, the row, heard=false, no text and the default input's lookup: ${JSON.stringify(silentCall)}`);
+  assert.deepEqual(wordsCall?.filter((_, i) => i !== 3), ['device_name', 'system', 'true', 'default_input_device()'],
+    `#299 4: each call passes the default input's lookup and the row, in place: ${JSON.stringify(wordsCall)}`);
   assert.ok(!/DeviceCheck\s*\{/.test(body), '#299 4: and the command builds no DeviceCheck of its own');
   // A literal, not the type's declaration or a return type.
   const nonTest = code(command).slice(0, code(command).indexOf('#[cfg(test)]'));
@@ -568,12 +583,17 @@ const READ = { save_folder: '/srv/elsewhere', auto_save: false, file_format: 'wa
  * The step against a store. `answers` is one entry per check, in order: 'words', 'silent', 'nowords'
  * or 'reject'.
  */
-async function keep({ platform = 'linux', stored = null, answers = [], holdWrite, rejectWrite } = {}) {
+// Every toast any #299 case raised: the Route says no toast, and a toast is outside the step's container,
+// so condition 6's screens cannot see one.
+const toasts299 = [];
+async function keep({ platform = 'linux', stored = null, answers = [], holdWrite, rejectWrite, hangWrite } = {}) {
   const calls = [];
+  const stubs = boundaryStubs();
+  toasts299.push(stubs.toasts);
   const seen = { completed: 0, next: 0, order: [] };
   const queue = [...answers];
   const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
-    ...boundaryStubs().modules,
+    ...stubs.modules,
     '@tauri-apps/plugin-os': { platform: () => platform },
     '@/contexts/OnboardingContext': {
       useOnboarding: () => ({
@@ -594,6 +614,7 @@ async function keep({ platform = 'linux', stored = null, answers = [], holdWrite
         if (cmd === 'get_recording_preferences') return structuredClone({ ...READ, preferred_mic_device: stored });
         if (cmd === 'set_recording_preferences') {
           seen.order.push('write');
+          if (hangWrite) await new Promise(() => {});
           if (holdWrite) await holdWrite;
           if (rejectWrite) throw new Error('Failed to save recording preferences: disk full');
           return null;
@@ -801,16 +822,32 @@ const SCREENS = {
   silent: {"text": "MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingNothing arrived. This device is open but silent — pick another.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
   nowords: {"text": "MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingAudio arrived, but nothing came back as words.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
 };
-{
+// Read half a second after each press, so a line rendered a moment later is seen too.
+const later = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
+for (const platform of ['linux', 'macos']) {
   const states = {};
-  states.idle = screenOf((await keep()).container);
+  const idle = await keep({ platform });
+  await later();
+  states.idle = screenOf(idle.container);
   for (const [k, a] of [['words', 'words'], ['silent', 'silent'], ['nowords', 'nowords']]) {
-    const { container } = await keep({ answers: [a] });
+    const { container } = await keep({ platform, answers: [a] });
     await checkMic(container);
+    await later();
     states[k] = screenOf(container);
   }
-  if (process.env.PRINT_SCREENS) console.log(JSON.stringify(states));
-  for (const k of Object.keys(SCREENS)) same(states[k], SCREENS[k], `#299 6: the ${k} screen changed`);
+  if (process.env.PRINT_SCREENS && platform === 'linux') console.log(JSON.stringify(states));
+  for (const k of Object.keys(SCREENS)) same(states[k], SCREENS[k], `#299 6: the ${k} screen changed (${platform})`);
+}
+{
+  // On macOS the step stays on screen after Continue, until Permissions renders: after the write resolved.
+  const mac = await keep({ platform: 'macos' });
+  await checkMic(mac.container);
+  await finish(mac.container, 'Continue');
+  await later();
+  same(mac.seen.next, 1, '#299 6: the sentinel: on macOS, Continue walked on after the write');
+  same(screenOf(mac.container), SCREENS.words, '#299 6: a resolved write shows nothing (macos)');
+}
+{
   let release;
   const holdWrite = new Promise((r) => { release = r; });
   const held = await keep({ holdWrite });
@@ -827,6 +864,19 @@ const SCREENS = {
   same(screenOf(rejected.container), SCREENS.words, '#299 6: a rejected write shows nothing');
 }
 
+// 7. A write that never settles does not hold first run: it is given ten seconds.
+{
+  const { container, seen } = await keep({ hangWrite: true });
+  await checkMic(container);
+  await finish(container, 'Continue');
+  await act(async () => { await new Promise((r) => setTimeout(r, 10_500)); });
+  same(seen.completed, 1, '#299 1: a write that never settles: first run still finishes after ten seconds');
+}
+holds(toasts299.every((t) => t.length === 0), `#299 6: no case raises a toast: ${JSON.stringify(toasts299.filter((t) => t.length))}`);
+{
+  const stepSource = fs.readFileSync(path.join(root, 'src/components/onboarding/steps/AudioCheckStep.tsx'), 'utf8');
+  holds(!/from ['"]sonner['"]/.test(stepSource), '#299 6: the step imports nothing from sonner');
+}
 assert.deepEqual(red299, [], `RED CONDITIONS:\n${red299.join('\n')}`);
 
 console.log(

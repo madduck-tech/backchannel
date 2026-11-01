@@ -96,7 +96,7 @@ export function AudioCheckStep() {
      * every other field stays as it was. Awaited before either reload. A failure is logged and first
      * run finishes anyway: recording then follows the default, as it did before.
      */
-    const keepMicrophone = async () => {
+    const storeMicrophone = async () => {
         const proved = kept.current;
         if (!proved) return;
         try {
@@ -108,6 +108,22 @@ export function AudioCheckStep() {
             await invoke('set_recording_preferences', { preferences: { ...stored, preferred_mic_device: microphone } });
         } catch (error) {
             console.error('[AudioCheckStep] Could not store the checked microphone:', error);
+        }
+    };
+    /** A write that never settles is a failure too: a stored folder on a stale mount blocks
+     * `ensure_recordings_directory`. Ten seconds, then first run goes on without it. */
+    const keepMicrophone = async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<void>((resolve) => {
+            timer = setTimeout(() => {
+                console.error('[AudioCheckStep] Storing the checked microphone did not settle in 10 s; first run goes on');
+                resolve();
+            }, 10_000);
+        });
+        try {
+            await Promise.race([storeMicrophone(), late]);
+        } finally {
+            clearTimeout(timer);
         }
     };
 

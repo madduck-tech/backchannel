@@ -125,10 +125,12 @@ check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writ
 // check is what stores it. The override is that mode's alone.
 {
   const lines = sources.get('stage2-core-check.sh').split('\n');
-  const at = lines.map((l, i) => (/\["preferred_mic_device"\] = None/.test(l) ? i : -1)).filter((i) => i >= 0);
+  // Any spelling of a Python write of None, and a JSON null, to the key.
+  const at = lines.map((l, i) => (/preferred_mic_device"?\]?\s*=\s*None|preferred_mic_device\s*=\s*None|"preferred_mic_device":\s*null/.test(l) && !/^\s*#/.test(l) ? i : -1)).filter((i) => i >= 0);
   const opener = at.length === 1 ? lines.slice(0, at[0]).reverse().find((l) => /^(if|fi)\b/.test(l)) : undefined;
-  check('3f the core seed is overridden in checked mode alone', at.length === 1 && opener === 'if [ "$MODE" = checked ]; then',
-    `${at.length} override(s); the block it sits in opens with '${opener}'`);
+  const statement = at.length === 1 ? lines.slice(at[0], at[0] + 4).join('\n') : '';
+  check('3f the core seed is overridden in checked mode alone, and fails closed', at.length === 1 && opener === 'if [ "$MODE" = checked ]; then' && /\|\|\s*die\b/.test(statement),
+    `${at.length} override(s); the block it sits in opens with '${opener}'; the statement: ${JSON.stringify(statement)}`);
 }
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that

@@ -171,9 +171,11 @@ printf '{"preferences":{"save_folder":"%s","auto_save":true,"file_format":"mp4",
   "$PROFILE/rec" "$MIC_SEED" "$PICK" > "$APPDATA/recording_preferences.json"
 # `checked` alone stores no microphone: first run's audio check is what must store it (#299).
 if [ "$MODE" = checked ]; then
+  # Read back, so an override that did not take cannot leave the seed to satisfy the check before Start.
   python3 -I -c 'import json, sys
-p = sys.argv[1]; d = json.load(open(p)); d["preferences"]["preferred_mic_device"] = None; json.dump(d, open(p, "w"))' \
-    "$APPDATA/recording_preferences.json"
+p = sys.argv[1]; d = json.load(open(p)); d["preferences"]["preferred_mic_device"] = None; json.dump(d, open(p, "w"))
+sys.exit(0 if json.load(open(p))["preferences"].get("preferred_mic_device") is None else 1)' \
+    "$APPDATA/recording_preferences.json" || die "checked: the seed still names a microphone after the override"
 fi
 say "seeded models from $CACHE; save_folder pinned to $PROFILE/rec"
 
