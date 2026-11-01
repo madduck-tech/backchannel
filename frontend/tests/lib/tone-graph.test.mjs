@@ -216,7 +216,8 @@ const probeCases = [
   ['the probe: a link not ours', [[SINK_NODE, ...EPIPHANY], IDLE], 1, /a link into the tone sink that is not ours: WebKitWebProcess \(pid 1/],
   ['the probe: client.api absent', [[SINK_NODE, ...WEBKIT_ON_CLIENT], IDLE], 1, /did not take the route the gate pins: client\.api is absent/],
   ['the probe: client.api=alsa', [[SINK_NODE, ...WEBKIT_ALSA], IDLE], 1, /did not take the route the gate pins: client\.api is alsa/],
-  ['the probe: a link into another node', [[SINK_NODE, ...WEBKIT_ELSEWHERE], IDLE], 1, /the probe's stream went into alsa_output\.speakers \(node 40\), not the tone sink/],
+  // With the route's own link beside it, so only the other-node rule can refuse it.
+  ['the probe: a link into another node', [[SINK_NODE, ...WEBKIT_ON_NODE, ...WEBKIT_ELSEWHERE], IDLE], 1, /the probe's stream went into alsa_output\.speakers \(node 40\), not the tone sink/],
   ['the probe: a link still there at the deadline', [[SINK_NODE, ...WEBKIT_ON_NODE], [SINK_NODE, ...WEBKIT_ON_NODE]], 1, /was still there at the deadline/],
   ['the probe: the default moved', [[SINK_NODE, ...WEBKIT_ON_NODE, meta('default.audio.sink', SINK_NAME)], IDLE], 1, /default\.audio\.sink names the tone sink/],
 ];

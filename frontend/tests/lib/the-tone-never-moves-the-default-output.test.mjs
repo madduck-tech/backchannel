@@ -37,19 +37,25 @@ for (let i = 0; i < files.length; i++) for (const s of sources(files[i])) if (!f
 check('(a) the files the pass sources', ['lib/tone-sink.sh', 'lib/harness-guard.sh'].every((f) => files.includes(f)),
   `the census found ${JSON.stringify(files)}; it must at least reach lib/tone-sink.sh and lib/harness-guard.sh`);
 
-// Split each file into its functions (`name() {` … a `}` at column 0) and the rest, its top level.
+// Split each file into its functions and the rest, its top level. A function runs from `name() {` to a `}`
+// at column 0 or a line ending `; }`, as `js() { …; }` does, or to the next definition. Closing one early
+// only moves lines to the top level, which is read whole; closing one late would hide the lines after it,
+// which is how the first version missed a write placed after `js` (its own control, 3.1). So a function
+// still open at the end of its file fails the census.
 const functions = {};
 const toplevel = [];
+const ends = (code) => /^\}/.test(code) || /;\s*\}\s*$/.test(code);
 for (const rel of [...files, 'audio-harness.sh']) {
   let fn = null; let guard = false;
   for (const line of lines(rel)) {
     const def = /^([A-Za-z_][\w]*)\(\)\s*\{/.exec(line.code);
-    if (!fn && def) { fn = def[1]; functions[fn] = [line]; if (/\}\s*$/.test(line.code.slice(def[0].length))) fn = null; continue; }
-    if (fn) { functions[fn].push(line); if (/^\}/.test(line.code)) fn = null; continue; }
+    if (def) { fn = def[1]; functions[fn] = [line]; if (/\}\s*$/.test(line.code.slice(def[0].length))) fn = null; continue; }
+    if (fn) { functions[fn].push(line); if (ends(line.code)) fn = null; continue; }
     if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then/.test(line.code)) { guard = true; continue; }
     if (guard) { if (/^fi\b/.test(line.code)) guard = false; continue; }
     toplevel.push(line);
   }
+  check('(a) every function closes', fn === null, `${rel}: ${fn}() is still open at the end of the file, so the census cannot tell its body from the top level`);
 }
 // The pass and the harness it runs are reached whole; a function is reached when a reached line names it.
 const reached = new Set();
@@ -70,6 +76,9 @@ function writes(code) {
   const after = code.slice(code.search(KEY)).replace(KEY, '').trimStart();
   return after !== '' && !/^(\d?>|\||\)|;|&|\\$)/.test(after);
 }
+// The positive sentinel: the press itself is among the lines read.
+check('(a) the census reads the press', queue.some(({ rel, code }) => rel === PASS && /audio_check_press "The other side is heard through"/.test(code)),
+  'the line that presses the tone is not among the lines the census reached');
 const written = queue.filter(({ code }) => writes(code));
 check('(a) nothing the pass reaches writes a default output', written.length === 0,
   `writes reached from the pass:\n    ${written.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('\n    ')}`);
