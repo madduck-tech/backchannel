@@ -58,7 +58,9 @@ def coreaudio(*args):
 
 
 def signature(path):
-    _, _, err = run("codesign", "-dv", path)
+    # -dvvv: without it codesign prints no CDHash, and two ad-hoc builds of one bundle read the same
+    # (#316: replacing the spike plug-in with a variant build was not reported as a change).
+    _, _, err = run("codesign", "-dvvv", path)
     keep = {}
     for line in err.splitlines():
         for key in ("Identifier", "TeamIdentifier", "Signature", "Authority", "CDHash"):
@@ -137,6 +139,12 @@ def compare(before, after, expect_added=(), allow_residue_uid=()):
         diffs.append(("defaults changed", json.dumps({"before": before.get("defaults"), "after": after.get("defaults")})))
     for field in ("device_settings_keys", "launchd_services", "launch_agents", "driver_hosts", "identities"):
         bs, as_ = before.get(field), after.get(field)
+        if field == "launchd_services" and not isinstance(bs, str) and not isinstance(as_, str):
+            # Apple's on-demand services come and go on their own: across #316's install and removal,
+            # 14 h apart, AMPLibraryAgent appeared and XprotectFramework.PluginService and
+            # timezoneupdates.tznotify went. Only services outside com.apple.* are compared.
+            bs = [x for x in (bs or []) if not x.startswith("com.apple.")]
+            as_ = [x for x in (as_ or []) if not x.startswith("com.apple.")]
         if isinstance(bs, str) or isinstance(as_, str):
             if bs != as_:
                 diffs.append((f"{field} unreadable", f"{bs} / {as_}"))

@@ -82,6 +82,20 @@ class TheComparator(unittest.TestCase):
         _, unexpected = census.compare(BASE, removed, [], census.BACKCHANNEL_UIDS)
         self.assertEqual(unexpected, [("device_settings_keys added", "SomeoneElse_UID")])
 
+    def test_apple_launchd_services_coming_and_going_are_not_differences(self):
+        after = copy.deepcopy(BASE)
+        after["launchd_services"] = ["com.apple.AMPLibraryAgent"]   # com.apple.foo went, another came
+        self.assertEqual(census.compare(BASE, after), ([], []))
+
+    def test_a_non_apple_launchd_service_left_behind_is_named(self):
+        after = copy.deepcopy(BASE)
+        after["launchd_services"] = BASE["launchd_services"] + ["tech.madduck.backchannel.helper"]
+        _, unexpected = census.compare(BASE, after)
+        self.assertEqual(unexpected, [("launchd_services added", "tech.madduck.backchannel.helper")])
+
+    def test_signatures_are_read_with_their_cdhash(self):
+        self.assertIn('"codesign", "-dvvv"', open(census.__file__).read())
+
     def test_an_unreadable_field_is_a_difference(self):
         after = copy.deepcopy(BASE)
         after["device_settings_keys"] = "unreadable: permission denied"
