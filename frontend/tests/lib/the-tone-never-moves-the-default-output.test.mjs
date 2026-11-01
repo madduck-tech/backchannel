@@ -376,14 +376,31 @@ knownAnywhere('the tone\'s button or its row', 'button line', /play a tone|heard
     `await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].find(b=>b.getAttribute('aria-label')==='The other side is heard through');return !!t&&t.textContent.indexOf('Backchannel tone sink')>=0;})()" \\`,
   ],
 });
-knownAnywhere('a raw click or keystroke', 'raw click line', /\.click\s*\(|dispatchEvent|\/click\b|\/value\b|\/actions\b/i, {
+knownAnywhere('a raw click or keystroke', 'raw click line', /\.click\b|dispatchEvent|\/click\b|\/value\b|\/actions\b|onClick|__react/i, {
   'lib/webdriver.sh': [
     `resp=$(curl -s -m 20 -X POST "$BASE/element/$el/click" -H 'Content-Type: application/json' -d '{}')`,
     `resp=$(curl -s -m 20 -X POST "$BASE/element/$el/value" -H 'Content-Type: application/json' -d "$body")`,
   ],
 });
-// And every call of the two helpers among the lines read is a known line: a new click, even of a locator that names
-// nothing, is a visible diff here (round 10's press by position).
+// **The libraries that hold those primitives' wrappers, likewise.** Round 11 sourced `webdriver.sh` from a helper of its
+// own and pressed the tone with its `click`, and sourced `gate-sinks.sh` to destroy another run's sink with
+// `gate_sink_remove`: the primitives were known lines, and whoever called their wrappers was not read. So a file that
+// sources one of them, or a line that names one, is a known line too, and a new one fails until it is listed here.
+const SRC = (lib) => `. "$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/${lib}"`;
+knownAnywhere('a library of the tone\'s or the page\'s primitives', 'library line', /webdriver\.sh|audio-check\.sh|gate-sinks\.sh|tone-sink\.sh|harness-guard\.sh|audio-check-outcome\.js/i, {
+  'lib/audio-check.sh': ['"$AUDIO_CHECK_LIB/audio-check-outcome.js" "${1:-Microphone}")'],
+  'lib/gate-sinks.sh': [SRC('harness-guard.sh')],
+  'lib/tone-sink.sh': [...KNOWN_RESTORE['lib/tone-sink.sh'].filter((t) => t.includes('tone-sink.sh')), KNOWN_RESTORE['lib/tone-sink.sh'][0]],
+  [PASS]: [SRC('lib/harness-guard.sh'), SRC('lib/tone-sink.sh'), SRC('lib/webdriver.sh'), SRC('lib/audio-check.sh')],
+  'stage2-onboarding-check.sh': [SRC('lib/harness-guard.sh'), SRC('lib/webdriver.sh'), SRC('lib/audio-check.sh'), SRC('lib/audio-check.sh')],
+  'stage2-record-check.sh': [SRC('lib/harness-guard.sh')],
+  'stage2-two-channel-check.sh': [SRC('lib/gate-sinks.sh'), SRC('lib/harness-guard.sh'), SRC('lib/webdriver.sh')],
+  'stage2-ui-check.sh': [SRC('lib/webdriver.sh')],
+  'stage2-ui-record-check.sh': [SRC('lib/webdriver.sh')],
+});
+// And every line read that names the two helpers, as a word, with quotes and backslashes removed, is a known line: a
+// new click, even of a locator that names nothing, is a visible diff here (round 10's press by position). Round 11 hid
+// one inside `"$( … )"`, through a variable (`PRESS=click; $PRESS …`) and behind a backslash (`\\click`).
 const KNOWN_CLICKS = {
   [PASS]: [
     'click "$CAT" "the catalogue button"', 'type_into "$FIELD" "$MODEL_ID" "the catalogue\'s search field"',
@@ -394,9 +411,10 @@ const KNOWN_CLICKS = {
     'click "$FIN" "the control that finishes first run"', 'click "$R" "Start recording"', 'click "$STOP" "Stop recording"',
     'click "$G" "Generate Summary"',
   ],
-  'lib/audio-check.sh': ['click "$el" "$action"'],
+  'lib/audio-check.sh': ['click "$el" "$action"', `[ "$(audio_check_field "$v" found)" = "True" ] || die "harness: after the click the driver no longer reads the '$row' row ($v)"`],
+  'lib/webdriver.sh': ['click() {', `resp=$(curl -s -m 20 -X POST "$BASE/element/$el/click" -H 'Content-Type: application/json' -d '{}')`, '"element not interactable"|"element click intercepted")', 'type_into() {'],
 };
-const clickCalls = queue.filter(({ l, code }) => code && /(^|[\s;&|(){}!`])(click|type_into)(?=\s|$|;)/.test(bare(l)) && !/^\s*(click|type_into)\(\)/.test(code));
+const clickCalls = queue.filter(({ l, code }) => code && /\b(click|type_into)\b/.test(unquoted(l, false)));
 const strayClicks = clickCalls.filter(({ rel, l }) => !(KNOWN_CLICKS[rel] ?? []).includes(l.trim()));
 check('(a\') every click among the lines read is a known line', strayClicks.length === 0, strayClicks.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
 const staleClicks = Object.entries(KNOWN_CLICKS).flatMap(([rel, list]) => list.filter((t) => clickCalls.filter((x) => x.rel === rel && x.l.trim() === t).length !== 1).map((t) => `${rel}: ${t}`));
