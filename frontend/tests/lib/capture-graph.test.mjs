@@ -91,7 +91,10 @@ if (r.status === 0) failures.push(`17 an unreadable graph read as an empty one: 
 // reader. On a split dump that adds the playing link, the link is seen; when the second array removes the
 // sink's node, or the key is absent, the first line is empty, so the refusal can tell "no default sink"
 // from "nothing plays"; and an unreadable graph exits non-zero.
-const out = (id, app) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': app, 'media.class': 'Stream/Output/Audio', 'application.name': app } } });
+// A stream's node name differs from its application's, and a node that is not a stream is linked in too,
+// so a reader that names streams by node, or lists whatever is linked, answers otherwise.
+const out = (id, app) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': `${app.toLowerCase()}-stream-${id}`, 'media.class': 'Stream/Output/Audio', 'application.name': app } } });
+const loopback = { id: 76, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': 'loopback', 'media.class': 'Audio/Source', 'application.name': 'Loopback' } } };
 const speakers = { id: 70, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': 'alsa_output.speakers', 'media.class': 'Audio/Sink' } } };
 const sinkMeta = (name) => ({ ...meta, metadata: [...meta.metadata, ...(name ? [{ subject: 0, key: 'default.audio.sink', type: 'Spa:String:JSON', value: { name } }] : [])] });
 const linked = (id, from, into) => ({ id, type: 'PipeWire:Interface:Link', info: { 'output-node-id': from, 'input-node-id': into, state: 'active' } });
@@ -99,7 +102,7 @@ const defaultOutput = (...arrays) => {
   fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${arrays.map((a) => JSON.stringify(a)).join('\n')}\nX\n`, { mode: 0o755 });
   return spawnSync('python3', ['-I', GRAPH, 'default-output'], { env, encoding: 'utf8' });
 };
-r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), out(72, 'mpv')], [linked(73, 71, 70), linked(74, 72, 70), out(75, 'unlinked')]);
+r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), out(72, 'mpv'), loopback, linked(77, 76, 70)], [linked(73, 71, 70), linked(74, 72, 70), out(75, 'unlinked')]);
 if (r.status !== 0 || r.stdout !== 'alsa_output.speakers\nFirefox\nmpv\n') failures.push(`18 default-output on a split dump: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
 r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), linked(73, 71, 70)], [{ id: 70, info: null }, { id: 73, info: null }]);
 if (r.status !== 0 || r.stdout !== '\n') failures.push(`19 default-output with the default sink's node removed: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
