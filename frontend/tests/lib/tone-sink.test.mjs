@@ -185,6 +185,26 @@ r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'flip-effective'))};
 check('2d a read that fails after the sink exists', r.status === 1 && !/WENT-ON/.test(r.stdout) && /could not be read, so nothing shows the tone sink left it alone/.test(r.stderr) && now().nodes.length === 0,
   `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 
+// 2i/2j. Given the run's stamp directory, the guard stamps its pass, and only its pass: the tone is not
+// pressed without that stamp (#266's gate adversary, round 3).
+const stamps = path.join(root, 'stamps');
+graph({ configured: HEADSET, effective: HEADSET });
+fs.rmSync(stamps, { recursive: true, force: true }); fs.mkdirSync(stamps);
+r = pass(`tone_sink_create; tone_sink_guard_default ${JSON.stringify(stamps)}; echo "ID=$TONE_SINK_ID NAME=$TONE_SINK_NAME"`);
+const ids = /ID=(\d+) NAME=(\S+)/.exec(r.stdout);
+const guardStamp = fs.existsSync(path.join(stamps, 'guard')) ? fs.readFileSync(path.join(stamps, 'guard'), 'utf8') : null;
+check('2i the guard stamps its pass, naming the sink and the node', r.status === 0 && !!ids && guardStamp !== null && new RegExp(`^guard ${ids[2]} ${ids[1]} \\d+\\.\\d{6}\\n$`).test(guardStamp),
+  `exit ${r.status}, stamp ${JSON.stringify(guardStamp)}: ${r.stdout}${r.stderr}`);
+graph({ configured: HEADSET, effective: HEADSET });
+fs.rmSync(stamps, { recursive: true, force: true }); fs.mkdirSync(stamps);
+fs.writeFileSync(path.join(bin, 'move-effective'), `#!/usr/bin/env python3
+import json, os
+S = os.environ['SHIM_STATE']; st = json.load(open(S)); st['effective'] = ${JSON.stringify(SPEAKERS)}; json.dump(st, open(S, 'w'))
+`, { mode: 0o755 });
+r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'move-effective'))}; tone_sink_guard_default ${JSON.stringify(stamps)}; echo WENT-ON`);
+check('2j a guard that refuses leaves no stamp', r.status === 1 && !/WENT-ON/.test(r.stdout) && /moved from/.test(r.stderr) && !fs.existsSync(path.join(stamps, 'guard')),
+  `exit ${r.status}, stamp ${fs.existsSync(path.join(stamps, 'guard')) ? 'written' : 'absent'}: ${r.stdout}${r.stderr}`);
+
 // 3. Destroy by name: an id that now names another node is not destroyed.
 graph({ configured: HEADSET, effective: HEADSET });
 fs.writeFileSync(path.join(bin, 'reuse-id'), `#!/usr/bin/env python3

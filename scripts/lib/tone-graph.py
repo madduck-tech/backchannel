@@ -14,20 +14,31 @@ process's nodes, so a stream that follows the default can be shown never to have
 
     tone-graph.py watch <sink-id> <root-pid> <out.jsonl> [--sentinel <pid>]
                                                            samples `pw-dump` every 250 ms until SIGTERM
-    tone-graph.py judge <out.jsonl> [--stamps <webenv> <probe> <sink-id> <sink-name>]
+    tone-graph.py judge <out.jsonl> [--stamps <dir> <sink-id> <sink-name>]
                                                            the tone's file: one line, then exits 0 (the
                                                            tone, alone) or 1; with --stamps, also 1 unless
-                                                           this run's checks before the press left both stamps
-    tone-graph.py probe-judge <out.jsonl> <sink-id> <t> [--stamp <file>]
+                                                           every check before the press left this run's
+                                                           stamp in <dir>, in order, before the first sample
+    tone-graph.py probe-judge <out.jsonl> <sink-id> <t> [--stamp <dir> <sink-name>]
                                                            the probe's file, <t> its answer's monotonic time
-    tone-graph.py webenv <root-pid> <sink-name> <pin> [--stamp <file>]
+    tone-graph.py webenv <root-pid> <sink-name> <pin> [--stamp <dir> <sink-id>]
                                                            every WebKitWebProcess under <root-pid> carries
                                                            PULSE_SINK=<sink-name> and the pin; exits 1 naming
                                                            the first one that does not
+    tone-graph.py stamp <dir> guard <sink-name> <sink-id>  the default-output guard's stamp, which the guard
+                                                           writes once its read has passed
+    tone-graph.py stamps-ok <dir> <sink-name> <sink-id> <tone.jsonl>
+                                                           exits 0 when every check before the press left this
+                                                           run's stamp, in order, and the tone's sampler holds
+                                                           a sample later than all of them; else 1, naming why
 
-A check before the press that passes writes its stamp, and the tone's judge refuses without both for this
-run's sink: a test of the pass's text can hold that the checks are there, not that they ran (#266's gate
-adversary, round 2), and a skipped or swallowed check leaves no stamp.
+**Each check before the press stamps its pass, and the press refuses without every stamp.** The four checks
+(`webenv`, `one-sink`, the guard, `probe-judge`) each write `<check> <sink-name> <sink-id> <t>` to a file
+of their own in the run's stamp directory, on a pass alone, with `t` on the monotonic clock the samples
+use. The pass's one press goes through a function that runs `stamps-ok` first, and the judge requires the
+same. A test of the pass's text can hold that the checks are there, not that they ran: round 2's stamps
+covered two checks, and a one-line edit skipped the other two with the census green (#266's gate
+adversary, round 3). A skipped, swallowed or reordered check now leaves the press nothing to accept.
     tone-graph.py closed <out.jsonl> <t>                   exits 0 once a sample taken at or after <t> holds
                                                            no link from our WebKitWebProcess
     tone-graph.py one-sink <family> <id> <name>            the graph holds one node of the family: <id>, <name>
@@ -216,16 +227,45 @@ def route(link):
     return None if api == ROUTE else f'client.api {"is absent" if api is None else "is " + api}, not {ROUTE}, on {describe(link)}'
 
 
-def stamped(webenv_stamp, probe_stamp, sink, name):
-    want = {webenv_stamp: f'webenv {name}', probe_stamp: f'probe {sink}'}
-    for path, line in want.items():
+STAMPS = ('webenv', 'one-sink', 'guard', 'probe')  # the checks before the press, in the order the pass runs them
+
+
+def write_stamp(stamp_dir, check, name, sink):
+    """A check that passed says so: which check, for which sink, and when, on the samples' clock."""
+    with open(os.path.join(stamp_dir, check), 'w') as f:
+        f.write(f'{check} {name} {sink} {time.monotonic():.6f}\n')
+
+
+def stamps_fault(stamp_dir, name, sink, before=None):
+    """None when every check before the press left this run's stamp, in order, each earlier than `before`."""
+    last = None
+    for check in STAMPS:
+        path = os.path.join(stamp_dir, check)
         try:
-            got = open(path).read().strip()
+            lines = open(path).read().splitlines()
         except OSError:
-            return f'the check before the press that writes {os.path.basename(path)} never passed in this run, so nothing shows the route was checked'
-        if got != line:
-            return f'{os.path.basename(path)} reads "{got}", not "{line}": it is not this run\'s'
+            return f'the {check} check before the press never passed in this run, so nothing shows it ran'
+        parts = lines[0].split(' ') if len(lines) == 1 else []
+        try:
+            t = float(parts[3]) if len(parts) == 4 else None
+        except ValueError:
+            t = None
+        if t is None or parts[:3] != [check, name, str(sink)]:
+            return f'the {check} stamp reads {json.dumps(chr(10).join(lines))}, not "{check} {name} {sink} <t>": it is not this run\'s'
+        if last and t <= last[1]:
+            return f'the {check} stamp is not later than the {last[0]} stamp, so the checks did not run in the pass\'s order'
+        if before is not None and t >= before:
+            return f'the {check} stamp was written after the tone\'s first sample'
+        last = (check, t)
     return None
+
+
+def first_sample(path):
+    try:
+        rows = [json.loads(line) for line in open(path) if line.strip()]
+    except (OSError, ValueError):
+        return None
+    return rows[0]['t'] if rows else None
 
 
 def judge(path, stamps=None):
@@ -242,7 +282,7 @@ def judge(path, stamps=None):
     if errors:
         print(f'{head}: a sample that could not be read cannot vouch for that moment ({errors[0]["error"]})')
         return 1
-    unstamped = stamped(*stamps) if stamps else None
+    unstamped = stamps_fault(stamps[0], stamps[2], stamps[1], rows[0]['t'] if rows else None) if stamps else None
     if unstamped:
         print(f'{head}: {unstamped}')
         return 1
@@ -346,7 +386,7 @@ def probe_judge(path, sink, answered, stamp=None):
     print(f'{head}: {sum(1 for r in samples if any(l["to_sink"] and l["state"] == "active" for l in r.get("web", [])))} with an active link '
           f'from {describe(ours[0])} into the tone sink and none elsewhere; none left {closed["t"] - answered:.2f} s after the probe answered')
     if stamp:
-        open(stamp, 'w').write(f'probe {sink}\n')
+        write_stamp(stamp[0], 'probe', stamp[1], sink)
     return 0
 
 
@@ -400,11 +440,11 @@ def webenv(root, sink_name, pin, stamp=None):
     print(f'{len(procs)} {EXPECTED} under the driver, each with PULSE_SINK={sink_name} and the pin '
           f'(found by exe: {sum(1 for _, h in procs if h == "exe")}, by comm: {sum(1 for _, h in procs if h == "comm")})')
     if stamp:
-        open(stamp, 'w').write(f'webenv {sink_name}\n')
+        write_stamp(stamp[0], 'webenv', sink_name, stamp[1])
     return 0
 
 
-def one_sink(family, sink, name):
+def one_sink(family, sink, name, stamp_dir=None):
     nodes = [(o['id'], props(o).get('node.name')) for o in dump().values() if str(o.get('type', '')).endswith('Node') and in_family(props(o).get('node.name'), family)]
     if not nodes:
         print(f'no node of the {family} family is in the graph')
@@ -417,6 +457,8 @@ def one_sink(family, sink, name):
         print(f'the {family} node in the graph is {i} named {n}, not this run\'s {sink} named {name}')
         return 1
     print(f'one node of the family, {i}, named {n}')
+    if stamp_dir:
+        write_stamp(stamp_dir, 'one-sink', name, sink)
     return 0
 
 
@@ -435,21 +477,37 @@ if __name__ == '__main__':
         watch(int(a[1]), int(a[2]), a[3], int(a[5]) if len(a) == 6 else None)
     elif a[:1] == ['judge'] and len(a) == 2:
         sys.exit(judge(a[1]))
-    elif a[:1] == ['judge'] and len(a) == 7 and a[2] == '--stamps':
-        sys.exit(judge(a[1], (a[3], a[4], int(a[5]), a[6])))
-    elif a[:1] == ['probe-judge'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
-        sys.exit(probe_judge(a[1], int(a[2]), float(a[3]), a[5] if len(a) == 6 else None))
+    elif a[:1] == ['judge'] and len(a) == 6 and a[2] == '--stamps':
+        sys.exit(judge(a[1], (a[3], int(a[4]), a[5])))
+    elif a[:1] == ['probe-judge'] and len(a) in (4, 7) and (len(a) == 4 or a[4] == '--stamp'):
+        sys.exit(probe_judge(a[1], int(a[2]), float(a[3]), (a[5], a[6]) if len(a) == 7 else None))
+    elif a[:1] == ['stamp'] and len(a) == 5 and a[2] == 'guard':
+        # Only the guard stamps from the shell; the other three checks stamp from inside their own judgement.
+        write_stamp(a[1], 'guard', a[3], int(a[4]))
+    elif a[:1] == ['stamps-ok'] and len(a) == 5:
+        first = first_sample(a[4])
+        fault = stamps_fault(a[1], a[2], int(a[3]), first) if first is not None else "the tone's sampler holds no sample yet"
+        print(fault or f'every check before the press passed for {a[2]} (node {a[3]}), in order, before the tone\'s first sample')
+        sys.exit(1 if fault else 0)
     elif a[:1] == ['closed'] and len(a) == 3:
         rows = [json.loads(line) for line in open(a[1]) if line.strip()]
         last = [r for r in rows if 'into' in r and r['t'] >= float(a[2])]
         sys.exit(0 if last and not last[-1].get('web') else 1)
-    elif a[:1] == ['webenv'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
-        sys.exit(webenv(int(a[1]), a[2], a[3], a[5] if len(a) == 6 else None))
-    elif a[:1] == ['one-sink'] and len(a) == 4:
+    elif a[:1] == ['webenv'] and len(a) in (4, 7) and (len(a) == 4 or a[4] == '--stamp'):
+        sys.exit(webenv(int(a[1]), a[2], a[3], (a[5], int(a[6])) if len(a) == 7 else None))
+    elif a[:1] == ['one-sink'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
+        # Its refusal is the pass's `die` text, so every one goes to stdout: an empty id went to stderr as a
+        # traceback and the pass died on "before the press: " and nothing else (#266's Stage 2 control R2).
         try:
-            sys.exit(one_sink(a[1], int(a[2]), a[3]))
+            sink = int(a[2])
+        except ValueError:
+            print(f'the tone sink\'s id is {json.dumps(a[2])}, not a node id, so nothing shows which node is this run\'s')
+            sys.exit(1)
+        try:
+            sys.exit(one_sink(a[1], sink, a[3], a[5] if len(a) == 6 else None))
         except Exception as e:
-            sys.exit(f'tone-graph: could not read the graph: {e}')
+            print(f'tone-graph: could not read the graph: {e}')
+            sys.exit(1)
     elif a[:1] == ['nodes'] and len(a) in (2, 3):
         family = len(a) == 3 and a[1] == '--family'
         want = a[2] if family else a[1]

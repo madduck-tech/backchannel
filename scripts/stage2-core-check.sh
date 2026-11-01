@@ -24,6 +24,18 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 say() { printf 'stage2-core: %s\n' "$*"; }
 die() { printf 'stage2-core: %s\n' "$*" >&2; exit 1; }
+# The tone is pressed here and nowhere else (#266's gate adversary, round 3). The press refuses unless every
+# check before it left this run's stamp, in order and before the tone's first sample, so no edit to what
+# wraps the checks can reach the press without each of them having passed.
+tone_press() {  # <stamp dir> <the tone's sampler file>
+  local why
+  if ! why=$(python3 -I scripts/lib/tone-graph.py stamps-ok "$1" "$TONE_SINK_NAME" "$TONE_SINK_ID" "$2"); then
+    say "the tone was not pressed: $why"
+    return 1
+  fi
+  say "$why"
+  audio_check_press "The other side is heard through" "Play a tone and listen"
+}
 
 APP="${1:-}"; [ -n "$APP" ] || die "usage: $0 <AppImage> [scores|unscored|empty|long|checked]"
 MODE="${2:-scores}"
@@ -379,15 +391,16 @@ await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].fi
 # real output: the route is checked on the application's own processes, on the graph, and with a silent
 # stream of the same web process before the tone plays.
 # - every WebKitWebProcess under the driver carries this run's PULSE_SINK and the pin;
-# Each of the two route checks leaves a stamp when it passes, and the tone's judge refuses without both,
-# so a check skipped or swallowed by whatever wraps it turns the entry red (#266's gate adversary).
-WEBENV_STAMP="$PROFILE/before-press.webenv"; PROBE_STAMP="$PROFILE/before-press.probe"
-WEBENV=$(python3 -I scripts/lib/tone-graph.py webenv "$DRIVER_PID" "$TONE_SINK_NAME" "$TONE_GST_PIN" --stamp "$WEBENV_STAMP") || die "before the press: $WEBENV"
+# Each of the four checks stamps its pass in $STAMPS, and `tone_press` and the tone's judge both refuse
+# without all four, in order, so a check skipped or swallowed by whatever wraps it plays nothing (#266's
+# gate adversary, rounds 2 and 3).
+STAMPS="$PROFILE/before-press"; mkdir "$STAMPS" || die "before the press: no stamp directory under the run's profile"
+WEBENV=$(python3 -I scripts/lib/tone-graph.py webenv "$DRIVER_PID" "$TONE_SINK_NAME" "$TONE_GST_PIN" --stamp "$STAMPS" "$TONE_SINK_ID") || die "before the press: $WEBENV"
 say "before the press: $WEBENV"
 # - the graph holds one node of the family, this run's;
-ONE=$(python3 -I scripts/lib/tone-graph.py one-sink "$TONE_SINK_FAMILY" "$TONE_SINK_ID" "$TONE_SINK_NAME") || die "before the press: $ONE"
+ONE=$(python3 -I scripts/lib/tone-graph.py one-sink "$TONE_SINK_FAMILY" "$TONE_SINK_ID" "$TONE_SINK_NAME" --stamp "$STAMPS") || die "before the press: $ONE"
 # - the effective default output is still the one read before the sink existed;
-tone_sink_guard_default
+tone_sink_guard_default "$STAMPS"
 # - the probe, a silent Web Audio context of the same web process, in a sampler file of its own: it
 #   starts, its stream enters the tone sink through `pulsesink` and nothing else, and it closes. The probe
 #   has no source, so it plays nothing. With TONE_SENTINEL_PID, the sampler also follows that process's
@@ -411,7 +424,7 @@ printf '%s' "$PROBE" | python3 -c 'import json,sys
 v = json.loads(sys.stdin.read())
 sys.exit(0 if v.get("final") == "running" and v.get("resume") == "resolved" else 1)' 2>/dev/null \
   || die "before the press: Web Audio did not start, so nothing shows the route: $PROBE"
-ROUTE=$(python3 -I scripts/lib/tone-graph.py probe-judge "$PROBE_GRAPH" "$TONE_SINK_ID" "$ANSWERED" --stamp "$PROBE_STAMP") || die "before the press: the probe's route: $ROUTE"
+ROUTE=$(python3 -I scripts/lib/tone-graph.py probe-judge "$PROBE_GRAPH" "$TONE_SINK_ID" "$ANSWERED" --stamp "$STAMPS" "$TONE_SINK_NAME") || die "before the press: the probe's route: $ROUTE"
 say "the probe's route: $ROUTE"
 
 # The tone's own sampler, in a second file. The press waits until it holds a sample, at most 5 s, so the
@@ -424,7 +437,7 @@ GRAPH_PID=$!
 END=$(( $(date +%s%3N) + 5000 ))
 until [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] || [ "$(date +%s%3N)" -ge "$END" ]; do sleep 0.2; done
 [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] || die "before the press: the tone's sampler wrote no sample within 5 s"
-audio_check_press "The other side is heard through" "Play a tone and listen"
+tone_press "$STAMPS" "$GRAPH" || die "before the press: the tone was not pressed, because a check before it did not pass"
 kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
 
 # Every judgement is made before any of them fails the pass, so a red run shows all of them.
@@ -440,7 +453,7 @@ say "the system check: ${SYS_LINE:-no line in the log for the monitor of the ton
 [ -n "$SYS_SAMPLES" ] && [ "$SYS_SAMPLES" -ge "$LO" ] && [ "$SYS_SAMPLES" -le "$HI" ] \
   || TONE_FAILS+=("${SYS_SAMPLES:-no} samples for a ${LISTEN_S}s window; one side is $LO..$HI")
 case "$SYS_LINE" in *audio=true) ;; *) TONE_FAILS+=("the application heard no audio: '${SYS_LINE:-no line}'") ;; esac
-VERDICT=$(python3 -I scripts/lib/tone-graph.py judge "$GRAPH" --stamps "$WEBENV_STAMP" "$PROBE_STAMP" "$TONE_SINK_ID" "$TONE_SINK_NAME") || TONE_FAILS+=("the graph: $VERDICT")
+VERDICT=$(python3 -I scripts/lib/tone-graph.py judge "$GRAPH" --stamps "$STAMPS" "$TONE_SINK_ID" "$TONE_SINK_NAME") || TONE_FAILS+=("the graph: $VERDICT")
 say "the tone sink, across the press: $VERDICT"
 [ ${#TONE_FAILS[@]} -eq 0 ] || die "the tone did not play into the tone sink and reach its monitor: $(printf '%s | ' "${TONE_FAILS[@]}")"
 

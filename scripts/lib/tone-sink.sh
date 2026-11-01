@@ -86,7 +86,13 @@ tone_sink_guard_default() {
     tone_sink_destroy || gone="the sink could not be confirmed destroyed; run 'bash scripts/lib/tone-sink.sh restore'"
     die "harness: the effective default output could not be read, so nothing shows the tone sink left it alone; $gone"
   fi
-  [ "$now" = "$TONE_DEFAULT_BEFORE" ] && return 0
+  if [ "$now" = "$TONE_DEFAULT_BEFORE" ]; then
+    # Called with the run's stamp directory, the guard stamps its pass, and the tone is not pressed without
+    # that stamp (#266's gate adversary, round 3).
+    [ -z "${1-}" ] || python3 -I "$TONE_GRAPH" stamp "$1" guard "$TONE_SINK_NAME" "$TONE_SINK_ID" \
+      || die "harness: the default output is still $now, but the guard could not leave its stamp in $1"
+    return 0
+  fi
   tone_sink_destroy || gone="the sink could not be confirmed destroyed; run 'bash scripts/lib/tone-sink.sh restore'"
   die "harness: the effective default output moved from $TONE_DEFAULT_BEFORE to $now since the tone sink was made (the sink taking it, or an output of the person's own changing); the run stops rather than guess which, and $gone"
 }

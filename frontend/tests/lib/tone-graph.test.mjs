@@ -275,48 +275,86 @@ time.sleep(60)`;
     ['webenv: two, the second without the variable', [[WEB, good], [WEB, { GST_PLUGIN_FEATURE_RANK: PIN }]], 1, /has PULSE_SINK=<unset>, not backchannel_tone_sink_1_1/],
     ['webenv: one, as the route needs it', [[WEB, good]], 0, /^1 WebKitWebProcess under the driver, each with PULSE_SINK=backchannel_tone_sink_1_1 and the pin \(found by exe: 1, by comm: 0\)/],
   ];
-  const stamp = path.join(dir, 'webenv.stamp');
+  const stamps = path.join(dir, 'webenv.stamps');
+  const stamp = path.join(stamps, 'webenv');
+  fs.mkdirSync(stamps, { recursive: true });
   check('webenv: the pin is read from tone-sink.sh', !!PIN, 'no TONE_GST_PIN= line in tone-sink.sh');
   for (const [name, procs, code, line] of list) {
     const kids = procs.map(([bin, env, args]) => spawn(bin, args ?? ['60'], { env: { PATH: process.env.PATH, ...env }, stdio: 'ignore' }));
     try {
       sleepFor(300);
       fs.rmSync(stamp, { force: true });
-      const r = spawnSync('python3', ['-I', TOOL, 'webenv', String(ROOT), SINK_NAME, PIN ?? '', '--stamp', stamp], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+      const r = spawnSync('python3', ['-I', TOOL, 'webenv', String(ROOT), SINK_NAME, PIN ?? '', '--stamp', stamps, String(SINK)], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
       const got = (r.stdout + r.stderr).trim();
       if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
-      // The stamp is written on a pass alone.
-      if (fs.existsSync(stamp) !== (code === 0) || (code === 0 && fs.readFileSync(stamp, 'utf8') !== `webenv ${SINK_NAME}\n`)) failures.push(`${name}: the stamp is ${fs.existsSync(stamp) ? JSON.stringify(fs.readFileSync(stamp, 'utf8')) : 'absent'} after exit ${r.status}`);
+      // The stamp is written on a pass alone, naming the check, the sink it checked and the node.
+      if (fs.existsSync(stamp) !== (code === 0) || (code === 0 && !STAMP('webenv').test(fs.readFileSync(stamp, 'utf8')))) failures.push(`${name}: the stamp is ${fs.existsSync(stamp) ? JSON.stringify(fs.readFileSync(stamp, 'utf8')) : 'absent'} after exit ${r.status}`);
     } finally {
       for (const k of kids) k.kill('SIGKILL');
     }
   }
 }
 
-// The checks before the press leave stamps, and the tone's judge refuses without both, or with another
-// run's (#266's gate adversary, round 2): a check skipped by whatever wraps it turns the entry red.
+// The four checks before the press stamp their passes, and the press (`stamps-ok`) and the tone's judge
+// refuse without all four, in order, each this run's and each before the tone's first sample (#266's gate
+// adversary, rounds 2 and 3): a check skipped, swallowed or reordered by whatever wraps it plays nothing.
+const STAMP = (check) => new RegExp(`^${check} ${SINK_NAME} ${SINK} \\d+\\.\\d{6}\\n$`);
 function stampCases() {
   const out = path.join(dir, 'webkit-on-its-node-the-monitor-read.jsonl');
-  const web = path.join(dir, 'stamp.webenv');
-  const probe = path.join(dir, 'stamp.probe');
-  const run = () => spawnSync('python3', ['-I', TOOL, 'judge', out, '--stamps', web, probe, String(SINK), SINK_NAME], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
-  const list = [
-    ['stamps: both, this run\'s', `webenv ${SINK_NAME}\n`, `probe ${SINK}\n`, 0, /none from anything else/],
-    ['stamps: no webenv stamp', null, `probe ${SINK}\n`, 1, /the check before the press that writes stamp\.webenv never passed in this run/],
-    ['stamps: no probe stamp', `webenv ${SINK_NAME}\n`, null, 1, /the check before the press that writes stamp\.probe never passed in this run/],
-    ['stamps: another run\'s', `webenv backchannel_tone_sink_9_9\n`, `probe ${SINK}\n`, 1, /stamp\.webenv reads "webenv backchannel_tone_sink_9_9", not "webenv backchannel_tone_sink_1_1": it is not this run's/],
-  ];
   check('stamps: the judged file is there', fs.existsSync(out), `no ${out}; the first case must have run`);
-  for (const [name, w, p, code, line] of list) {
-    for (const [f, v] of [[web, w], [probe, p]]) { if (v === null) fs.rmSync(f, { force: true }); else fs.writeFileSync(f, v); }
-    const r = run();
-    const got = (r.stdout + r.stderr).trim();
-    if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
+  const first = JSON.parse(fs.readFileSync(out, 'utf8').split('\n')[0]).t;
+  const sd = path.join(dir, 'stamps');
+  const line = (check, t, name = SINK_NAME, sink = SINK) => `${check} ${name} ${sink} ${t.toFixed(6)}\n`;
+  const good = { webenv: line('webenv', first - 4), 'one-sink': line('one-sink', first - 3), guard: line('guard', first - 2), probe: line('probe', first - 1) };
+  const list = [
+    ['stamps: all four, this run\'s, in order', {}, 0, /none from anything else/, /every check before the press passed for backchannel_tone_sink_1_1 \(node 50\), in order/],
+    ...['webenv', 'one-sink', 'guard', 'probe'].map((c) => [`stamps: no ${c} stamp`, { [c]: null }, 1, new RegExp(`the ${c} check before the press never passed in this run`)]),
+    ['stamps: an empty probe stamp', { probe: '' }, 1, /the probe stamp reads "", not "probe backchannel_tone_sink_1_1 50 <t>"/],
+    ['stamps: the probe stamp for another node', { probe: line('probe', first - 1, SINK_NAME, 51) }, 1, /the probe stamp reads "probe backchannel_tone_sink_1_1 51 /],
+    ['stamps: the probe stamp of another run', { probe: line('probe', first - 1, 'backchannel_tone_sink_9_9') }, 1, /the probe stamp reads "probe backchannel_tone_sink_9_9 50 /],
+    ['stamps: the webenv stamp of another run', { webenv: line('webenv', first - 4, 'backchannel_tone_sink_9_9') }, 1, /the webenv stamp reads "webenv backchannel_tone_sink_9_9 50 /],
+    ['stamps: the constant name', { guard: line('guard', first - 2, 'backchannel_tone_sink') }, 1, /the guard stamp reads "guard backchannel_tone_sink 50 /],
+    ['stamps: a stamp under another check\'s name', { 'one-sink': line('guard', first - 3) }, 1, /the one-sink stamp reads "guard /],
+    ['stamps: a second line', { guard: line('guard', first - 2) + line('guard', first - 2) }, 1, /the guard stamp reads /],
+    ['stamps: no time', { webenv: `webenv ${SINK_NAME} ${SINK}\n` }, 1, /the webenv stamp reads "webenv backchannel_tone_sink_1_1 50", not/],
+    ['stamps: the guard before one-sink', { guard: line('guard', first - 3.5) }, 1, /the guard stamp is not later than the one-sink stamp/],
+    ['stamps: the probe after the tone\'s first sample', { probe: line('probe', first + 1) }, 1, /the probe stamp was written after the tone's first sample/],
+  ];
+  for (const [name, change, code, judged, ok] of list) {
+    fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+    for (const [c, v] of Object.entries({ ...good, ...change })) if (v !== null) fs.writeFileSync(path.join(sd, c), v);
+    for (const [tool, args, want] of [['judge', ['judge', out, '--stamps', sd, String(SINK), SINK_NAME], judged], ['stamps-ok', ['stamps-ok', sd, SINK_NAME, String(SINK), out], ok ?? judged]]) {
+      const r = spawnSync('python3', ['-I', TOOL, ...args], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+      const got = (r.stdout + r.stderr).trim();
+      if (r.status !== code || !want.test(got)) failures.push(`${name} (${tool}): exit ${r.status}, "${got}" (want ${code}, ${want})`);
+    }
   }
-  // And the two checks write them when they pass: probe-judge here, webenv in its own case above.
-  const pj = path.join(dir, 'pj.stamp');
-  spawnSync('python3', ['-I', TOOL, 'probe-judge', path.join(dir, 'the-probe-the-route-then-closed.jsonl'), String(SINK), '0', '--stamp', pj], { encoding: 'utf8' });
-  check('stamps: probe-judge writes its stamp when it passes', fs.existsSync(pj) && fs.readFileSync(pj, 'utf8') === `probe ${SINK}\n`, `the stamp reads ${fs.existsSync(pj) ? JSON.stringify(fs.readFileSync(pj, 'utf8')) : 'nothing'}`);
+  // The press waits for the tone's sampler: no sample yet, nothing pressed.
+  fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+  for (const [c, v] of Object.entries(good)) fs.writeFileSync(path.join(sd, c), v);
+  const empty = path.join(dir, 'no-sample-yet.jsonl'); fs.writeFileSync(empty, '');
+  const early = spawnSync('python3', ['-I', TOOL, 'stamps-ok', sd, SINK_NAME, String(SINK), empty], { encoding: 'utf8' });
+  check('stamps: no press before the tone\'s first sample', early.status === 1 && /holds no sample yet/.test(early.stdout), `exit ${early.status}, "${early.stdout.trim()}"`);
+
+  // Each check writes its own stamp on a pass alone, and after it has judged: probe-judge and one-sink here,
+  // webenv in its own cases above, the guard in tone-sink.test.mjs.
+  for (const [name, file, want] of [['passes', 'the-probe-the-route-then-closed.jsonl', 0], ['fails', 'the-probe-a-link-into-another-node.jsonl', 1]]) {
+    const pd = path.join(dir, `pj-${want}`); fs.rmSync(pd, { recursive: true, force: true }); fs.mkdirSync(pd);
+    const src = path.join(dir, file);
+    check(`stamps: the probe file for "${name}" is there`, fs.existsSync(src), `no ${src}`);
+    const r = spawnSync('python3', ['-I', TOOL, 'probe-judge', src, String(SINK), '0', '--stamp', pd, SINK_NAME], { encoding: 'utf8' });
+    const st = path.join(pd, 'probe');
+    check(`stamps: probe-judge ${name}: exit ${want}, and a stamp only on a pass`, r.status === want && fs.existsSync(st) === (want === 0) && (want !== 0 || STAMP('probe').test(fs.readFileSync(st, 'utf8'))),
+      `exit ${r.status}, the stamp ${fs.existsSync(st) ? JSON.stringify(fs.readFileSync(st, 'utf8')) : 'absent'}`);
+  }
+  // From the shell, only the guard stamps: the other three stamp from inside their own judgement.
+  const gd = path.join(dir, 'guard-cli'); fs.rmSync(gd, { recursive: true, force: true }); fs.mkdirSync(gd);
+  for (const c of ['webenv', 'one-sink', 'probe']) {
+    const r = spawnSync('python3', ['-I', TOOL, 'stamp', gd, c, SINK_NAME, String(SINK)], { encoding: 'utf8' });
+    check(`stamps: the shell cannot stamp ${c}`, r.status !== 0 && !fs.existsSync(path.join(gd, c)), `exit ${r.status}, stamp ${fs.existsSync(path.join(gd, c)) ? 'written' : 'absent'}`);
+  }
+  const g = spawnSync('python3', ['-I', TOOL, 'stamp', gd, 'guard', SINK_NAME, String(SINK)], { encoding: 'utf8' });
+  check('stamps: the guard stamps from the shell', g.status === 0 && STAMP('guard').test(fs.readFileSync(path.join(gd, 'guard'), 'utf8')), `exit ${g.status}`);
 }
 
 // One node of the family, this run's: no node, two, or another id each refuse.
@@ -328,12 +366,18 @@ function oneSinkCases() {
     ['one-sink: two nodes', [SINK_NODE, node(51, { 'node.name': 'backchannel_tone_sink' })], 1, /2 nodes of the backchannel_tone_sink family are in the graph/],
     ['one-sink: another id', [node(51, { 'node.name': SINK_NAME })], 1, /the backchannel_tone_sink node in the graph is 51 named backchannel_tone_sink_1_1, not this run's 50/],
     ['one-sink: this run\'s', [SINK_NODE, node(52, { 'node.name': 'alsa_output.speakers' })], 0, /one node of the family, 50, named backchannel_tone_sink_1_1/],
+    // Its refusal is the pass's `die` text, so it is on stdout: an empty id once died with no words (R2).
+    ['one-sink: an empty id', [SINK_NODE], 1, /^the tone sink's id is "", not a node id/, ''],
+    ['one-sink: a graph it cannot read', null, 1, /^tone-graph: could not read the graph/],
   ];
-  for (const [name, graph, code, line] of list) {
-    fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${JSON.stringify(graph)}\nX\n`, { mode: 0o755 });
-    const r = spawnSync('python3', ['-I', TOOL, 'one-sink', 'backchannel_tone_sink', String(SINK), SINK_NAME], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
-    const got = (r.stdout + r.stderr).trim();
-    if (r.status !== code || !line.test(got)) failures.push(`${name}: exit ${r.status}, "${got}" (want ${code}, ${line})`);
+  const sd = path.join(dir, 'one-sink.stamps');
+  for (const [name, graph, code, line, id = String(SINK)] of list) {
+    fs.writeFileSync(path.join(bin, 'pw-dump'), graph === null ? '#!/bin/sh\nexit 3\n' : `#!/bin/sh\ncat <<'X'\n${JSON.stringify(graph)}\nX\n`, { mode: 0o755 });
+    fs.rmSync(sd, { recursive: true, force: true }); fs.mkdirSync(sd);
+    const r = spawnSync('python3', ['-I', TOOL, 'one-sink', 'backchannel_tone_sink', id, SINK_NAME, '--stamp', sd], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: CASE_TIMEOUT_MS });
+    if (r.status !== code || !line.test(r.stdout.trim())) failures.push(`${name}: exit ${r.status}, stdout "${r.stdout.trim()}", stderr "${r.stderr.trim()}" (want ${code}, ${line} on stdout)`);
+    const st = path.join(sd, 'one-sink');
+    if (fs.existsSync(st) !== (code === 0) || (code === 0 && !STAMP('one-sink').test(fs.readFileSync(st, 'utf8')))) failures.push(`${name}: the stamp is ${fs.existsSync(st) ? JSON.stringify(fs.readFileSync(st, 'utf8')) : 'absent'} after exit ${r.status}`);
   }
 }
 const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${detail}`); };
@@ -366,4 +410,4 @@ try {
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
 // Sanity: the tool is the one the pass runs.
 assert.match(execFileSync('grep', ['-c', 'scripts/lib/tone-graph.py', path.join(repo, 'scripts', 'stage2-core-check.sh')], { encoding: 'utf8' }), /^[1-9]/);
-console.log(`ok - tone graph: ${cases.length + probeCases.length + sentinelCases.length + lateProbe.length + probeSentinel.length} files judged, 7 web-process environments and 4 one-node graphs read; the tone is an active link from the application's own WebKitWebProcess (pid under the driver, binary from the node or its client), "into" is the sink's input side, the application must be reading the monitor, and a split pw-dump is merged`);
+console.log(`ok - tone graph: ${cases.length + probeCases.length + sentinelCases.length + lateProbe.length + probeSentinel.length} files judged, 7 web-process environments and 6 one-node graphs read, the four stamps refused in 13 ways; the tone is an active link from the application's own WebKitWebProcess (pid under the driver, binary from the node or its client), "into" is the sink's input side, the application must be reading the monitor, and a split pw-dump is merged`);
