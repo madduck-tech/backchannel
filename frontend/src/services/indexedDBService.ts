@@ -169,6 +169,35 @@ class IndexedDBService {
   }
 
   /**
+   * Set a meeting's folder path, reading and writing the row in one transaction. A read in one transaction and a
+   * write in another lost `savedToSQLite: true` when the save marked the row in between: the stop's folder update
+   * and the save both follow `recording-stopped` (#328).
+   */
+  async updateMeetingFolderPath(meetingId: string, folderPath: string): Promise<void> {
+    try {
+      if (!this.db) await this.init();
+
+      const transaction = this.db!.transaction(['meetings'], 'readwrite');
+      const store = transaction.objectStore('meetings');
+
+      return new Promise((resolve, reject) => {
+        const getRequest = store.get(meetingId);
+        getRequest.onsuccess = () => {
+          const meeting = getRequest.result;
+          if (!meeting) { resolve(); return; }
+          meeting.folderPath = folderPath;
+          const putRequest = store.put(meeting);
+          putRequest.onsuccess = () => resolve();
+          putRequest.onerror = () => reject(putRequest.error);
+        };
+        getRequest.onerror = () => reject(getRequest.error);
+      });
+    } catch (error) {
+      console.error('Failed to update the meeting folder path:', error);
+    }
+  }
+
+  /**
    * Mark meeting as saved to SQLite
    */
   async markMeetingSaved(meetingId: string): Promise<void> {

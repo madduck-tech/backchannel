@@ -8,6 +8,7 @@ import { SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { RecordingStatus } from '@/lib/recording-status';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { RecordingClocks } from '@/components/RecordingClocks';
 import { AudioLevelMeter } from '@/components/AudioLevelMeter';
@@ -43,7 +44,8 @@ const START_PHASE_LABEL: Record<Exclude<StartPhase, 'idle'>, string> = {
 
 interface RecordingControlsProps {
   isRecording: boolean;
-  onRecordingStop: (callApi?: boolean) => void;
+  /** The window's own `stop_recording` invoke: true when it resolved, false when it was rejected. It saves nothing. */
+  onRecordingStop: (stopped: boolean) => void;
   onRecordingStart: () => void;
   /** Owned by useRecordingStart — covers the button, sidebar and tray start paths. */
   isStarting: boolean;
@@ -77,8 +79,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
-
-  const [isProcessing, setIsProcessing] = useState(false);
+  // The spinner is the app-wide stop state, whichever route stopped and whatever the page saw (#328 item 1).
+  const isProcessing = recordingState.status === RecordingStatus.STOPPING;
   const [isStopping, setIsStopping] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
@@ -164,7 +166,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const stopRecordingAction = useCallback(async () => {
     console.log('Executing stop recording...');
     try {
-      setIsProcessing(true);
       const dataDir = await appDataDir();
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const savePath = `${dataDir}/recording-${timestamp}.wav`;
@@ -176,8 +177,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         }
       });
       console.log('stop_recording command completed successfully:', result);
-      setIsProcessing(false);
-      // Track successful transcription
       onRecordingStop(true);
     } catch (error) {
       console.error('Failed to stop recording:', error);
@@ -197,7 +196,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           return;
         }
       }
-      setIsProcessing(false);
       onRecordingStop(false);
     } finally {
       setIsStopping(false);
@@ -316,9 +314,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             console.log('Transcription error count incremented:', newCount);
             return newCount;
           });
-          setIsProcessing(false);
-          console.log('Calling onRecordingStop(false) due to transcript error');
-          onRecordingStop(false);
+          // A decoding error does not stop the recording, and the stop state is the backend's to end (#328).
           if (onTranscriptionError) {
             onTranscriptionError(errorMessage);
           }
@@ -345,9 +341,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             console.log('Transcription error count incremented:', newCount);
             return newCount;
           });
-          setIsProcessing(false);
-          console.log('Calling onRecordingStop(false) due to transcription error');
-          onRecordingStop(false);
+          // A decoding error does not stop the recording, and the stop state is the backend's to end (#328).
 
           // For actionable errors (like model loading failures), the main page will handle showing the model selector
           // For regular errors, they are handled by useModalState global listener which shows a toast
@@ -387,7 +381,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         }
       });
     };
-  }, [onRecordingStop, onTranscriptionError]);
+  }, [onTranscriptionError]);
 
   const busy = isStarting || isProcessing;
 
@@ -427,7 +421,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         {isProcessing && !isParentProcessing ? (
           <div className="flex items-center gap-2 px-3 py-1.5">
             <Loader2 className="h-4 w-4 animate-spin text-ink-muted" aria-hidden />
-            <span className="text-base text-ink-muted">Processing recording…</span>
+            <span className="text-base text-ink-muted">{recordingState.statusMessage || 'Processing recording…'}</span>
           </div>
         ) : !isRecording ? (
           <button
@@ -506,12 +500,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     'disabled:pointer-events-none disabled:opacity-45'
                   )}
                 >
-                  {isStopping ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Square className="h-3.5 w-3.5 fill-current" aria-hidden />
-                  )}
-                  {isStopping ? 'Stopping…' : 'Stop'}
+                  <Square className="h-3.5 w-3.5 fill-current" aria-hidden />
+                  Stop
                 </button>
               </TooltipTrigger>
               <TooltipContent>Stop and transcribe</TooltipContent>

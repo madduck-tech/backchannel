@@ -22,6 +22,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { STOP_FLOW } from '@/lib/recording-status';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { cn } from '@/lib/utils';
 import { useAppVersion } from '@/hooks/useAppVersion';
@@ -131,7 +132,10 @@ const Sidebar: React.FC = () => {
     setMeetings,
   } = useSidebar();
 
-  const { isRecording } = useRecordingState();
+  const { isRecording, status } = useRecordingState();
+  // From a stop until the saved meeting's URL commits, the rail neither claims a live recording nor offers Start: a
+  // Start here would race the previous meeting's save (#328 item 2).
+  const stopping = STOP_FLOW.includes(status);
   const { openImportDialog } = useImportDialog();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -304,7 +308,11 @@ const Sidebar: React.FC = () => {
             isCollapsed ? 'flex flex-col items-center gap-1' : 'px-gutter pb-1'
           )}
         >
-          {isRecording ? (
+          {stopping ? (
+            /* Nothing to offer and nothing live to open; the status is the app-wide stop state. Same height. On
+               Home the transport's spinner carries it. */
+            isHome ? null : <div aria-hidden className={isCollapsed ? 'h-8 w-8' : 'h-9'} />
+          ) : isRecording ? (
             isCollapsed ? (
               <RailRow
                 iconOnly

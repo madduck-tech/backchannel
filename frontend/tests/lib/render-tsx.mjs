@@ -98,6 +98,11 @@ export function loadTsx(entry, overrides = {}, barePackages = null) {
       // inside an effect.
       get navigator() { return globalThis.navigator; },
       get location() { return globalThis.window?.location; },
+      // Fourth of the kind: `indexedDBService.ts:57` and `:434` use the bare globals. jsdom 30 has no IndexedDB; a
+      // test supplies one (`fake-indexeddb`) on the outer `globalThis`, and two graphs loaded over it share one
+      // database, as a reload does (#328).
+      get indexedDB() { return globalThis.indexedDB; },
+      get IDBKeyRange() { return globalThis.IDBKeyRange; },
       setTimeout,
       clearTimeout,
       setInterval,

@@ -16,6 +16,11 @@ pub(crate) async fn acquire_engine_lifecycle_lock() -> OwnedMutexGuard<()> {
     ENGINE_LIFECYCLE_LOCK.clone().lock_owned().await
 }
 
+/// The idle clock is one static, and so is the recording flag: the tests that move either take turns, or
+/// a parallel run lets one read the other's value. A real Stop moves both (#328's test of it).
+#[cfg(test)]
+pub(crate) static IDLE_CLOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+
 /// When the transcription engine was last wanted by anybody.
 ///
 /// `Instant`, not wall clock: the deadline below must not move when the user
@@ -576,9 +581,7 @@ mod tests {
 
     /// Any use of the engine has to reset the clock, or a long meeting followed
     /// by a short pause would look idle enough to unload.
-    /// The idle clock is one static; the tests that move it take turns, or a parallel run lets one
-    /// read the other's value.
-    static IDLE_CLOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+    use super::IDLE_CLOCK;
 
     #[tokio::test]
     async fn touch_engine_idle_pushes_the_deadline_out() {

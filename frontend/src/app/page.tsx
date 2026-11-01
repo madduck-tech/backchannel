@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -19,6 +19,7 @@ import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+import { stopCount } from '@/lib/recording-stop-trigger';
 
 export default function Home() {
   // Local page state (not moved to contexts)
@@ -40,11 +41,13 @@ export default function Home() {
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(isRecording, setIsRecordingState, setIsMeetingActive);
   const { handleRecordingStart, isStarting, startPhase } = useRecordingStart(isRecording, setIsRecordingState, showModal);
 
-  // Get handleRecordingStop function and setIsStopping (state comes from global context)
-  const { handleRecordingStop, setIsStopping } = useRecordingStop(
+  // The save starts from `recording-stopped` alone, in RecordingPostProcessingProvider (#328). The page enters the stop
+  // state at the press, and leaves it itself only when its invoke is rejected before any `recording-stopped`.
+  const { setIsStopping } = useRecordingStop(
     setIsRecordingState,
     setIsRecordingDisabled
   );
+  const stopsAtPress = useRef(0);
 
   // Recovery hook
   const {
@@ -98,6 +101,19 @@ export default function Home() {
 
     performStartupChecks();
   }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
+
+  // The not-saved toast's action (#328): open the dialog here, even if it was already shown this session.
+  useEffect(() => {
+    const open = async () => {
+      sessionStorage.removeItem('recovery_dialog_shown');
+      await checkForRecoverableTranscripts();
+      setShowRecoveryDialog(true);
+      sessionStorage.setItem('recovery_dialog_shown', 'true');
+    };
+    const onOpen = () => { void open(); };
+    window.addEventListener('open-recovery', onOpen);
+    return () => window.removeEventListener('open-recovery', onOpen);
+  }, [checkForRecoverableTranscripts]);
 
   // Watch for recoverable meetings changes and show dialog once per session
   useEffect(() => {
@@ -196,7 +212,9 @@ export default function Home() {
         {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
         {(hasMicrophone || isRecording) &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-          status !== RecordingStatus.SAVING && (
+          status !== RecordingStatus.SAVING &&
+          // COMPLETED too: it is set in the tick of the save's push, and Start must not render before that URL commits.
+          status !== RecordingStatus.COMPLETED && (
             // Aligns to the content column via --rail (set by AppShell) rather
             // than re-deriving the sidebar width with inline math.
             <div
@@ -205,12 +223,18 @@ export default function Home() {
             >
               <RecordingControls
                 isRecording={recordingState.isRecording}
-                onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+                onRecordingStop={(stopped) => {
+                  // A rejected invoke after `recording-stopped` writes nothing: the save owns the state then
+                  // (`stop_recording` can return Err after the event, `lib.rs:119-127`).
+                  if (!stopped && stopCount() === stopsAtPress.current) {
+                    recordingState.setStatus(recordingState.isRecording ? RecordingStatus.RECORDING : RecordingStatus.IDLE);
+                  }
+                }}
                 onRecordingStart={handleRecordingStart}
                 isStarting={isStarting}
                 startPhase={startPhase}
                 onTranscriptReceived={() => { }} // Not actually used by RecordingControls
-                onStopInitiated={() => setIsStopping(true)}
+                onStopInitiated={() => { stopsAtPress.current = stopCount(); setIsStopping(true); }}
                 onTranscriptionError={(message) => {
                   showModal('errorAlert', message);
                 }}

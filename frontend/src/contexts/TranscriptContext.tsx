@@ -4,10 +4,10 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { Transcript, TranscriptUpdate } from '@/types';
 import { withSpeaker } from '@/lib/speaker';
 import { toast } from 'sonner';
-import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
+import { setReloadSync } from '@/lib/recording-stop-trigger';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -32,10 +32,10 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [partialText, setPartialText] = useState('');
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
-  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
-
-  // Recording state context - provides backend-synced state
-  const recordingState = useRecordingState();
+  // Restored in the initializer after a reload, so the rows that arrive after it reach the IndexedDB copy (#328 item 4).
+  // Never by a setter in an effect: the buffering effect is keyed on this id, and re-running it drops its buffer.
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(() =>
+    typeof window === 'undefined' ? null : window.sessionStorage.getItem('indexeddb_current_meeting_id'));
 
   // Refs for transcript management
   const transcriptsRef = useRef<Transcript[]>(transcripts);
@@ -121,14 +121,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         // Listen for recording-stopped event
         unlistenRecordingStopped = await recordingService.onRecordingStopped(async (payload) => {
           try {
-            if (currentMeetingId) {
-              // Update folder path in IndexedDB
-              const metadata = await indexedDBService.getMeetingMetadata(currentMeetingId);
-
-              if (metadata && payload.folder_path) {
-                metadata.folderPath = payload.folder_path;
-                await indexedDBService.saveMeetingMetadata(metadata);
-              }
+            if (currentMeetingId && payload.folder_path) {
+              // In one transaction: the save marks this row saved in the same moments (#328).
+              await indexedDBService.updateMeetingFolderPath(currentMeetingId, payload.folder_path);
             }
           } catch (error) {
             console.error('Failed to update meeting metadata on stop:', error);
@@ -389,54 +384,50 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     };
   }, [currentMeetingId]); // Add currentMeetingId dependency
 
-  // Sync transcript history and meeting name from backend on reload
-  // This fixes the issue where reloading during active recording causes state desync
+  // The reload sync: the history the backend holds for the recording, merged into the buffer by `sequence_id`. The
+  // recording state runs it on each false→true transition of the recording flag, in the same task, whatever the
+  // transcripts' length (#328 v9); a row merged before that render must not keep a reloaded page from its history.
+  // Merging, never replacing: a row delivered while the history call was pending would otherwise be lost. Answers the
+  // number of rows the history held.
   useEffect(() => {
-    const syncFromBackend = async () => {
-      // If recording is active and we have no local transcripts, sync from backend
-      if (recordingState.isRecording && transcripts.length === 0) {
-        try {
-          console.log('[Reload Sync] Recording active after reload, syncing transcript history...');
-
-          // Fetch transcript history from backend
-          const history = await transcriptService.getTranscriptHistory();
-          console.log(`[Reload Sync] Retrieved ${history.length} transcript segments from backend`);
-
-          // Convert backend format to frontend Transcript format
-          const formattedTranscripts: Transcript[] = history.map((segment: any) => ({
-            id: segment.id,
-            text: segment.text,
-            timestamp: segment.display_time, // Use display_time for UI
-            sequence_id: segment.sequence_id,
-            chunk_start_time: segment.audio_start_time,
-            is_partial: false, // History segments are always final
-            confidence: segment.confidence,
-            audio_start_time: segment.audio_start_time,
-            audio_end_time: segment.audio_end_time,
-            duration: segment.duration,
-            speaker: segment.speaker,
-            channel: segment.channel,
-          }));
-
-          transcriptsRef.current = formattedTranscripts;
-          setTranscripts(formattedTranscripts);
-          console.log('[Reload Sync] ✅ Transcript history synced successfully');
-
-          // Fetch meeting name from backend
-          const meetingName = await recordingService.getRecordingMeetingName();
-          if (meetingName) {
-            console.log('[Reload Sync] Retrieved meeting name:', meetingName);
-            setMeetingTitle(meetingName);
-            console.log('[Reload Sync] ✅ Meeting title synced successfully');
-          }
-        } catch (error) {
-          console.error('[Reload Sync] Failed to sync from backend:', error);
+    setReloadSync(async () => {
+      try {
+        const history = await transcriptService.getTranscriptHistory();
+        console.log(`[Reload Sync] Retrieved ${history.length} transcript segments from backend`);
+        const formattedTranscripts: Transcript[] = history.map((segment: any) => ({
+          id: segment.id,
+          text: segment.text,
+          timestamp: segment.display_time, // Use display_time for UI
+          sequence_id: segment.sequence_id,
+          chunk_start_time: segment.audio_start_time,
+          is_partial: false, // History segments are always final
+          confidence: segment.confidence,
+          audio_start_time: segment.audio_start_time,
+          audio_end_time: segment.audio_end_time,
+          duration: segment.duration,
+          speaker: segment.speaker,
+          channel: segment.channel,
+        }));
+        if (formattedTranscripts.length > 0) {
+          const held = new Set(transcriptsRef.current.map((t) => t.sequence_id));
+          const merged = [...transcriptsRef.current, ...formattedTranscripts.filter((t) => !held.has(t.sequence_id))]
+            .sort((a, b) => ((a.chunk_start_time || 0) - (b.chunk_start_time || 0)) || ((a.sequence_id || 0) - (b.sequence_id || 0)));
+          transcriptsRef.current = merged;
+          setTranscripts(merged);
         }
-      }
-    };
 
-    syncFromBackend();
-  }, [recordingState.isRecording]); // Run when recording state changes
+        // The name is a nicety; a failure here must not lose the rows the history answered.
+        recordingService.getRecordingMeetingName()
+          .then((meetingName) => { if (meetingName) setMeetingTitle(meetingName); })
+          .catch((error) => console.warn('[Reload Sync] Could not read the meeting name:', error));
+        return formattedTranscripts.length;
+      } catch (error) {
+        console.error('[Reload Sync] Failed to sync from backend:', error);
+        return 0;
+      }
+    });
+    return () => setReloadSync(null);
+  }, []);
 
   // Manual transcript update handler (for RecordingControls component)
   const addTranscript = useCallback((update: TranscriptUpdate) => {

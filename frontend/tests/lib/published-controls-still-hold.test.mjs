@@ -58,7 +58,8 @@ const PUBLISHED = [
   {
     id: '#83 sidebar: deleting the current meeting resets it',
     file: 'src/components/Sidebar/index.tsx',
-    line: 206,
+    // 206 until #328 read the stop state above it and imported the statuses' module.
+    line: 210,
     anchor: 'if (currentMeeting?.id === itemId) {',
     replace: '      if (false) {',
     check: ['node', 'tests/lib/sidebar.test.mjs'],
@@ -74,7 +75,8 @@ const PUBLISHED = [
     // a pin.
     id: '#84 transcript: the virtualiser is told one row fewer',
     file: 'src/components/VirtualizedTranscriptView.tsx',
-    line: 415,
+    // 415 until #328 gated the listening state on the stop state and imported the statuses' module.
+    line: 418,
     anchor: 'count: turns.length,',
     replace: '        count: turns.length - 1,',
     check: ['node', 'tests/lib/transcript-view.test.mjs'],

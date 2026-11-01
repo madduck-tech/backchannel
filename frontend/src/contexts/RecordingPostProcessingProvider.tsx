@@ -1,21 +1,26 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import React, { useEffect, useRef } from 'react';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
+import {
+  setStopHandler,
+  syncsSettled,
+  takeHistoryAnswered,
+  type StopEmission,
+} from '@/lib/recording-stop-trigger';
 
 /**
  * RecordingPostProcessingProvider
  *
- * This provider handles post-processing when recording stops from any source:
- * - Tray menu stop
- * - Global keyboard shortcut
- * - Overlay stop button
- * - Main UI stop button
+ * The one place a meeting is saved, whichever route stopped it: the window's Stop, the tray, a reload during the
+ * stop (#328). The trigger is `recording-stopped`, heard by the module-scope listener in
+ * `lib/recording-stop-trigger.ts`; this provider keeps the handler it calls current, so a re-render between two
+ * emissions of one stop cannot drop or double it.
  *
- * It listens for the 'recording-stop-complete' event from Rust backend
- * and triggers the full post-processing flow (save to database, navigate)
- * regardless of which page the user is currently on.
+ * A page that saw this recording's `recording-started` saves from its own buffer. A page that did not was reloaded
+ * during the recording or the stop: it waits for its mount sync and any reload sync in flight, and saves only if a
+ * reload sync answered a non-empty history. Otherwise it holds none of the meeting's rows, and the copy is left for
+ * recovery, with a toast that says so.
  */
 export function RecordingPostProcessingProvider({ children }: { children: React.ReactNode }) {
   // No-op functions since the global RecordingStateContext already handles state updates
@@ -23,39 +28,35 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
   const setIsRecording = () => { };
   const setIsRecordingDisabled = () => { };
 
-  const {
-    handleRecordingStop,
-  } = useRecordingStop(setIsRecording, setIsRecordingDisabled);
+  const { handleRecordingStop, resolveWithoutSave } = useRecordingStop(setIsRecording, setIsRecordingDisabled);
+
+  const decide = async (emission: StopEmission) => {
+    if (!emission.sawStart) {
+      await syncsSettled();
+      if (!takeHistoryAnswered()) {
+        console.log('[RecordingPostProcessing] This page holds none of the meeting\'s rows; left for recovery', emission.n);
+        resolveWithoutSave();
+        return;
+      }
+    }
+    const { folder_path, meeting_name } = emission.payload;
+    if (folder_path) sessionStorage.setItem('last_recording_folder_path', folder_path);
+    if (meeting_name) sessionStorage.setItem('last_recording_meeting_name', meeting_name);
+    await handleRecordingStop(emission.n);
+  };
+  // Current on every render; the trigger calls through it.
+  const latest = useRef({ decide, resolveWithoutSave });
+  latest.current = { decide, resolveWithoutSave };
 
   useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setupListener = async () => {
-      try {
-        // Listen for recording-stop-complete event from Rust
-        unlistenFn = await listen<boolean>('recording-stop-complete', (event) => {
-          console.log('[RecordingPostProcessing] Received recording-stop-complete event:', event.payload);
-
-          // Call the post-processing handler
-          // event.payload is the callApi boolean (true for normal stops)
-          handleRecordingStop(event.payload);
-        });
-
-        console.log('[RecordingPostProcessing] Event listener set up successfully');
-      } catch (error) {
-        console.error('[RecordingPostProcessing] Failed to set up event listener:', error);
-      }
-    };
-
-    setupListener();
-
-    return () => {
-      if (unlistenFn) {
-        console.log('[RecordingPostProcessing] Cleaning up event listener');
-        unlistenFn();
-      }
-    };
-  }, [handleRecordingStop]);
+    setStopHandler(
+      (emission) => { void latest.current.decide(emission); },
+      // An emission before this provider's first commit follows a reload whose mount sync has not answered: none of
+      // the meeting's rows are here.
+      () => latest.current.resolveWithoutSave(),
+    );
+    return () => setStopHandler(null);
+  }, []);
 
   return <>{children}</>;
 }
