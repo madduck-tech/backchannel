@@ -15,7 +15,8 @@
 //   round 2's static rule was beaten by one-line edits (#266's gate adversary, round 3), so what the census
 //   now holds is that the press cannot be reached any other way. One line in all the files read presses
 //   the tone, inside `tone_press`; no function is defined twice in the pass and the libraries it sources,
-//   none is defined with a builtin's name, and no alias is made;
+//   none is defined with a builtin's name, and no alias is made. No file under `scripts/` names `restore` but
+//   known lines, and every script a read line names is under `scripts/`;
 // - **(b)** the `tauri-driver` launch line carries `PULSE_SINK="$TONE_SINK_NAME"` and
 //   `GST_PLUGIN_FEATURE_RANK="$TONE_GST_PIN"`, and `$TONE_GST_PIN` holds the four entries item 4 names;
 // - **(c)** `tone-sink.sh` assigns `$TONE_SINK_NAME` once, as the family followed by a run id, and no file
@@ -169,8 +170,8 @@ const KNOWN = {
   ],
 };
 // `pw-cli destroy` too: an inline loop over the family destroyed another run's sink with the census green
-// (round 7's m1).
-const TOOL = /pw-metadata|pactl|wpctl|pw-cli\s+(destroy|d)\b/;
+// (round 7's m1). With options before the subcommand, and `pacmd`, as round 9 found.
+const TOOL = /pw-metadata|pactl|pacmd|wpctl|pw-cli\b[^|;&]*\s(destroy|d)\b/;
 const unknown = queue.filter(({ rel, code }) => TOOL.test(code) && !(KNOWN[rel] ?? []).includes(code.trim()));
 check('(a) every line that names a default-output tool is a known read', unknown.length === 0,
   `lines the pass reaches that name pw-metadata, pactl or wpctl and are not known reads:\n    ${unknown.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('\n    ')}`);
@@ -279,12 +280,74 @@ const risky = queue.filter(({ rel, l, code }) => code && RISKY.test(bare(l)) && 
 check('(a\') no alias is made', risky.length === 0, `lines with eval, alias, trap, shopt, hash, enable or posix mode that are not known lines: ${risky.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; ')}`);
 const staleRisky = Object.entries(KNOWN_RISKY).flatMap(([rel, list]) => list.filter((t) => !queue.some((x) => x.rel === rel && x.l.trim() === t)).map((t) => `${rel}: ${t}`));
 check('(a\') every known trap line is still there', staleRisky.length === 0, JSON.stringify(staleRisky));
-// `restore` runs the exempt put-back and destroys every sink of the family: nothing read runs it (round 5). Round 6:
-// a quoted path to the script, or one held in a variable, hid it from a rule that named the path, so the rule
-// names the word: `restore` as a bare word anywhere a line's code holds it, or a word that is exactly a quoted
-// "restore". A message that tells a person to run it (`run 'bash scripts/lib/tone-sink.sh restore'`) is text.
-const restores = queue.filter(({ l, code }) => code && (/(^|[^\w./])restore(?![\w./-])/.test(codeView(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\||>|<)/.test(l.replace(/(^|\s)#.*$/, ''))));
-check('(a\') nothing read runs tone-sink.sh restore', restores.length === 0, restores.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
+// `restore` runs the exempt put-back and destroys every sink of the family, another run's too, so nothing runs it but
+// a person. Rounds 5 to 8 each found a spelling a rule of where the word may sit missed; round 9 found a quoted
+// assignment, `TONE_REPAIR="restore"`, and a helper script the pass runs. So the word is a known line, by file and
+// exact text, in **every file under `scripts/`**, read or not: a line that names it anew fails until it is added here,
+// which the diff shows. The word is looked for with comments cut and every quote and backslash removed, in any case,
+// so `"re""store"`, `$'restore'` and a `${X,,}` of `RESTORE` are seen. A person-facing message naming the command
+// is a known line too.
+const unquoted = (l, js) => {
+  if (js) return /^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l;
+  if (/^\s*#/.test(l)) return '';
+  let out = ''; let q = null;
+  for (let i = 0; i < l.length; i++) {
+    const c = l[i];
+    if (q) { if (c === '\\' && q === '"') { out += l[i + 1] ?? ''; i++; continue; } if (c === q) q = null; else out += c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(l[i - 1]))) break;
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (c !== '\\') out += c;
+  }
+  return out;
+};
+const KNOWN_RESTORE = {
+  'lib/tone-sink.sh': [
+    `tone_sink_destroy || gone="the sink could not be confirmed destroyed; run 'bash scripts/lib/tone-sink.sh restore'"`,
+    `&& die "harness: a tone press was interrupted and the default output was never put back ($TONE_STATE_DIR); run 'bash scripts/lib/tone-sink.sh restore' first"`,
+    `[ -z "$stale" ] || die "harness: a tone sink is already in the graph (node \${stale% }); run 'bash scripts/lib/tone-sink.sh restore' first, rather than make a second one"`,
+    `&& die "harness: the configured default output is a tone sink; run 'bash scripts/lib/tone-sink.sh restore' first"`,
+    `&& die "harness: the effective default output is already a tone sink ($TONE_DEFAULT_BEFORE); run 'bash scripts/lib/tone-sink.sh restore' first"`,
+    `say "the graph could not be read, so node $TONE_SINK_ID ($TONE_SINK_NAME) cannot be confirmed gone; run 'bash scripts/lib/tone-sink.sh restore'"`,
+    `say "the graph could not be read after node $TONE_SINK_ID's destroy, so it cannot be confirmed gone; run 'bash scripts/lib/tone-sink.sh restore'"`,
+    `say "node $TONE_SINK_ID ($TONE_SINK_NAME) is still in the graph after its destroy; run 'bash scripts/lib/tone-sink.sh restore'"`,
+    'restore)',
+    `*) die "usage: bash scripts/lib/tone-sink.sh restore" ;;`,
+  ],
+  'test-update-locally.js': [`console.log('⚠️  IMPORTANT: Restore production endpoint after testing!');`],
+};
+// How many times each known line occurs: the first is in the two destroy paths, so it is there twice.
+const RESTORE_COUNT = { [KNOWN_RESTORE['lib/tone-sink.sh'][0]]: 2 };
+const restoreLines = [];
+const walkAll = (dir) => {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== '__pycache__') walkAll(p); continue; }
+    const js = /\.(m?js|cjs|ts)$/.test(p);
+    fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => { if (/\brestore\b/i.test(unquoted(l, js))) restoreLines.push({ rel: path.relative(SCRIPTS, p), n: i + 1, t: l.trim() }); });
+  }
+};
+walkAll(SCRIPTS);
+const restores = restoreLines.filter(({ rel, t }) => !(KNOWN_RESTORE[rel] ?? []).includes(t));
+check('(a\') nothing under scripts/ names restore but the known lines', restores.length === 0, restores.map(({ rel, n, t }) => `${rel}:${n}: ${t}`).join('; '));
+const restoreCounts = Object.entries(KNOWN_RESTORE).flatMap(([rel, list]) => list.map((t) => [rel, t, restoreLines.filter((x) => x.rel === rel && x.t === t).length])).filter(([, t, got]) => got !== (RESTORE_COUNT[t] ?? 1));
+check('(a\') every known restore line is there, as often as it is known', restoreCounts.length === 0, restoreCounts.map(([rel, t, got]) => `${rel}: ${got}x ${t}`).join('; '));
+// **A script a read line names is a file under `scripts/`,** so the rule above reads it (round 9's N2, a helper the
+// pass runs, and its spelling outside `scripts/`). A path is resolved from the repository, from `scripts/`, and from
+// the naming file's own directory (`"$(dirname …)/lib/x.sh"`, `"$VAR/x.js"`); one that resolves to no file there, or
+// leaves `scripts/`, fails.
+const SCRIPT_PATH = /[^\s;&|(){}<>=`!,]*\.(?:sh|bash|py|js|mjs|cjs|pl|rb)\b/g;
+const strayScripts = [];
+for (const { rel, n, l, code } of queue) {
+  if (!code) continue;
+  for (const [token] of unquoted(l, false).matchAll(SCRIPT_PATH)) {
+    const tail = token.replace(/^\$\{?\w+\}?/, '');
+    const here = path.join(SCRIPTS, path.dirname(rel));
+    const tries = tail.startsWith('/') ? [path.join(here, tail)] : [path.join(repo, tail), path.join(SCRIPTS, tail), path.join(here, tail)];
+    const found = tries.filter((f) => fs.existsSync(f));
+    if (found.length === 0 || found.some((f) => !path.resolve(f).startsWith(SCRIPTS + path.sep))) strayScripts.push(`${rel}:${n}: ${token}`);
+  }
+}
+check('(a\') every script a read line names is under scripts/', strayScripts.length === 0, strayScripts.join('; '));
 // Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
 // "command not found" the run went past; `eval` defines what no pattern reads).
 const unmake = shared.filter(({ code }) => /(^|[;&|({!]\s*|\b(?:then|else|do)\s+)(builtin\s+|command\s+)?(unset\s+-\w*f|eval\b)/.test(code) || /\bunset\b[^#]*\b(die|say|exit|tone_press|tone_sink_guard_default|audio_check_press)\b/.test(code));
