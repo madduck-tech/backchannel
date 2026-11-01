@@ -231,9 +231,11 @@ const meetingId = () => window.sessionStorage.getItem('indexeddb_current_meeting
 // --- item 3: one save per emission, from every route, in both orders ------------------------------------------------
 
 const ROUTES = ['in-app, invoke first', 'in-app, event first', 'tray', 'window then tray', 'second stop'];
+// The listener set changes between emissions as effects register and drop theirs, so one page load can see one stop
+// delivered with the trigger first and the next with it last: the `mixed` order.
 for (const route of ROUTES) {
-  for (const order of ['first', 'reverse']) {
-    const cell = `3 ${route}, trigger ${order === 'first' ? 'first' : 'last'}`;
+  for (const order of route === 'second stop' ? ['first', 'reverse', 'mixed'] : ['first', 'reverse']) {
+    const cell = `3 ${route}, trigger ${{ first: 'first', reverse: 'last', mixed: 'mixed' }[order]}`;
     resetWindow();
     const be = backend();
     const url = urlStore('/');
@@ -255,7 +257,7 @@ for (const route of ROUTES) {
         await act(async () => { stop?.click(); });
         await settle(10);
       }
-      await backendStops(p, be, order, {
+      await backendStops(p, be, order === 'mixed' ? (s === 0 ? 'first' : 'reverse') : order, {
         afterComplete: () => { if (route === 'in-app, invoke first') invoke.resolve(null); },
       });
       if (route === 'window then tray') await act(async () => { p.bus.emit('recording-stop-complete', true); });
