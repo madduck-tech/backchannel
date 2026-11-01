@@ -15,7 +15,9 @@
 // - **the census**, over the callers: every `audio-harness.sh up` reachable from the core pass, the
 //   onboarding pass and `gopnik.json` stage 2 passes `--system-only`, except the two-channel passes, which
 //   play into the real output on purpose; no caller looks the source up by a literal name; the core seed
-//   and the record pass's seed name `"$HARNESS_DESC (input)"`, the record pass's on every run.
+//   and the record pass's seed name `"$HARNESS_DESC (input)"`, the record pass's on every run. One
+//   exemption, named: the core pass's `checked` mode stores no microphone, so first run's audio check is
+//   what stores it (#299, 3f).
 // - **the harness, run**, against PipeWire shims that log their argv: `up --system-only` then `down`
 //   writes neither default key, and two cycles give two source names, neither the constant.
 import assert from 'node:assert/strict';
@@ -142,13 +144,20 @@ check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writ
   const override = named.find((_, k) => which[k] === 'override');
   // The nearest if, elif, else or fi above it, at any indentation, is the checked branch's opener; and the
   // statement opens on a line of its own, with nothing in front of `python3` to skip it.
-  const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^\s*(if|elif|else|fi)\b/.test(l)) : undefined;
+  // Any shell block above it, a loop included, is found at any indentation; and the three lines above the
+  // override are, exactly, the opener, its comment and `python3`, so nothing can skip or wrap it.
+  const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^\s*(if|elif|else|fi|while|until|for|case|esac|do|done)\b/.test(l)) : undefined;
   const statement = override ? lines.slice(override.i, override.i + 3).join('\n') : '';
-  const starts = override ? lines[override.i - 1] : '';
+  const above = override ? lines.slice(override.i - 3, override.i) : [];
+  // The check before Start reads the store and writes nothing to it.
+  const beforeStart = named.find((_, k) => which[k] === 'before Start');
+  const program = beforeStart ? lines.slice(beforeStart.i - 2, beforeStart.i + 5).join('\n') : '';
   check('3f the core seed is overridden in checked mode alone, and fails closed',
     JSON.stringify(which) === JSON.stringify(['seed', 'override', 'read-back', 'before Start'])
-      && opener === 'if [ "$MODE" = checked ]; then' && starts === "  python3 -I -c 'import json, sys" && /\|\|\s*die\b/.test(statement),
-    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; it starts '${starts}'; its statement: ${JSON.stringify(statement)}`);
+      && opener === 'if [ "$MODE" = checked ]; then'
+      && JSON.stringify(above) === JSON.stringify(['if [ "$MODE" = checked ]; then', '  # Read back, so an override that did not take cannot leave the seed to satisfy the check before Start.', "  python3 -I -c 'import json, sys"])
+      && /\|\|\s*die\b/.test(statement) && !/json\.dump|open\([^)]*["']w["']/.test(program),
+    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; the lines above it: ${JSON.stringify(above)}; its statement: ${JSON.stringify(statement)}; the check before Start writes: ${/json\.dump|open\([^)]*["']w["']/.test(program)}`);
 }
 
 // 3g. The gate runs `checked` (#299): without an entry, 3f's exemption would guard a mode nothing runs.
@@ -331,4 +340,4 @@ for (const pid of fs.readdirSync(live)) { try { process.kill(Number(pid), 'SIGTE
 fs.rmSync(root, { recursive: true, force: true });
 
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log(`ok - ${ups.length} harness ups reachable from the gate leave the default input alone, two-channel excepted; no caller names the source by its constant; the core and record passes name "$HARNESS_DESC (input)", the record pass on every run; every pass checks the default after up, the seed before Start and what opened after it, and drops the recordings on a failure after Start; up --system-only then down, twice, wrote no default and made two per-run sources (${names.join(', ')}); and the default-writing mode still writes the default and puts it back`);
+console.log(`ok - ${ups.length} harness ups reachable from the gate leave the default input alone, two-channel excepted; no caller names the source by its constant; the core and record passes name "$HARNESS_DESC (input)", the record pass on every run, and the core pass in every mode but checked, where first run stores it (#299); every pass checks the default after up, the seed before Start and what opened after it, and drops the recordings on a failure after Start; up --system-only then down, twice, wrote no default and made two per-run sources (${names.join(', ')}); and the default-writing mode still writes the default and puts it back`);
