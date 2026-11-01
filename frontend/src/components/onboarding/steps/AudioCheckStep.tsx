@@ -28,10 +28,21 @@ import { cn } from '@/lib/utils';
  *
  * Offered, not mandatory. `recording_commands.rs:341-354` falls back to `default_output_device()`
  * when no preference is stored, so skipping this does not leave the app unable to record.
+ *
+ * **The microphone it proves is the one the first recording opens (#299).** The last microphone check
+ * that came back with words decides, at Continue or Skip: a device other than the system default is
+ * stored as `"<name> (input)"`; the default clears a stored microphone, so recording follows the
+ * default, and otherwise writes nothing. Nothing on screen says so: the product owner's decision
+ * (2026-10-30) was no screen changes, and Settings → Recordings shows it.
  */
 
 type Device = { name: string; device_type: 'Input' | 'Output' };
-type CheckResult = { device: string; heard_audio: boolean; text: string };
+/** `is_default`: the opened device is the system default input, read by the command itself (#299). */
+type CheckResult = { device: string; heard_audio: boolean; text: string; is_default?: boolean };
+/** The struct `get_recording_preferences` returned, kept whole: it carries fields the TypeScript side
+ * does not declare (`system_audio_backend` on macOS), and a write built from anything else would null
+ * them. */
+type StoredPreferences = { preferred_mic_device?: string | null } & Record<string, unknown>;
 /**
  * `loading` is its own state rather than a silent wait inside `listening`: a model can take seconds
  * to reach memory, and a button reading *Listening…* while nothing listens is the same lie as a level
@@ -59,6 +70,14 @@ export function AudioCheckStep() {
     const [mic, setMic] = useState('');
     const [speakers, setSpeakers] = useState('');
     const [micState, setMicState] = useState<State>({ status: 'idle' });
+    /** The last microphone check that came back with words. Not the picker: a check proves the device it
+     * opened, and the picker may since have moved. A silent check, one without words, or one that failed
+     * leaves it as it was. The system row never sets it. */
+    const kept = useRef<CheckResult | null>(null);
+    const micSet = useCallback((s: State) => {
+        setMicState(s);
+        if (s.status === 'done' && s.result?.heard_audio && s.result.text) kept.current = s.result;
+    }, []);
     const [sysState, setSysState] = useState<State>({ status: 'idle' });
 
     useEffect(() => {
@@ -73,15 +92,36 @@ export function AudioCheckStep() {
     }, []);
 
     /**
+     * Store what the checks proved (#299), before first run ends. Read whole and written back whole, so
+     * every other field stays as it was. Awaited before either reload. A failure is logged and first
+     * run finishes anyway: recording then follows the default, as it did before.
+     */
+    const keepMicrophone = async () => {
+        const proved = kept.current;
+        if (!proved) return;
+        try {
+            const stored = await invoke<StoredPreferences>('get_recording_preferences');
+            let microphone: string | null;
+            if (!proved.is_default) microphone = `${proved.device} (input)`;
+            else if (stored.preferred_mic_device) microphone = null;
+            else return;
+            await invoke('set_recording_preferences', { preferences: { ...stored, preferred_mic_device: microphone } });
+        } catch (error) {
+            console.error('[AudioCheckStep] Could not store the checked microphone:', error);
+        }
+    };
+
+    /**
      * On macOS the next step is Permissions, which finishes onboarding itself. Everywhere else this
      * **is** the last step, so it finishes here — `goNext()` would land on step 5, which renders
      * nothing off macOS, and the person would sit on a blank screen.
      */
     const done = async () => {
-        if (isMac) { goNext(); return; }
+        if (isMac) { await keepMicrophone(); goNext(); return; }
         if (finishing) return;
         setFinishing(true);
         try {
+            await keepMicrophone();
             await completeOnboarding();
             await new Promise((r) => setTimeout(r, 100));
             window.location.reload();
@@ -236,7 +276,7 @@ export function AudioCheckStep() {
                     state={micState}
                     action="Check by speaking"
                     busy={checking}
-                    onCheck={() => check(mic, false, setMicState)}
+                    onCheck={() => check(mic, false, micSet)}
                 />
 
                 <Row

@@ -12,7 +12,7 @@
 //! `auto_save: false` and no folder makes `RecordingSaver` write nothing, which is the same
 //! arrangement `dictation_probe` uses.
 
-use crate::audio::devices::{list_audio_devices, AudioDevice, DeviceType};
+use crate::audio::devices::{default_input_device, list_audio_devices, AudioDevice, DeviceType};
 use crate::audio::recording_commands::is_recording_now;
 use crate::audio::recording_state::DeviceType as Channel;
 use crate::audio::{AudioChunk, RecordingManager};
@@ -35,6 +35,24 @@ pub struct DeviceCheck {
     pub heard_audio: bool,
     /// What the decoder made of it. Empty when nothing was said, or nothing intelligible was.
     pub text: String,
+    /// Whether the device opened is the system default input, read when it was proven, by the function a
+    /// start uses when no microphone is stored. First run keeps a non-default microphone it proved, and
+    /// clears a stored one when the default was proven instead (#299). Always false for a system check,
+    /// and false when no default can be read. Compared by name, so it inherits #10.
+    pub is_default: bool,
+}
+
+/// The one place a check's result is built, so both of the command's results say whether the device
+/// was the default, and a test can hold the comparison without a device.
+fn check_result(
+    device: String,
+    system: bool,
+    heard_audio: bool,
+    text: String,
+    default_input: anyhow::Result<AudioDevice>,
+) -> DeviceCheck {
+    let is_default = !system && default_input.map(|d| d.name == device).unwrap_or(false);
+    DeviceCheck { device, heard_audio, text, is_default }
 }
 
 fn find(devices: Vec<AudioDevice>, name: &str, kind: DeviceType) -> Option<AudioDevice> {
@@ -112,7 +130,7 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
     );
 
     if !heard_audio {
-        return Ok(DeviceCheck { device: device_name, heard_audio: false, text: String::new() });
+        return Ok(check_result(device_name, system, false, String::new(), default_input_device()));
     }
 
     let result = engine
@@ -120,11 +138,7 @@ pub async fn check_capture_device(name: String, system: bool) -> Result<DeviceCh
         .await
         .map_err(|e| format!("Could not transcribe what {device_name} heard: {e}"))?;
 
-    Ok(DeviceCheck {
-        device: device_name,
-        heard_audio: true,
-        text: result.text.trim().to_string(),
-    })
+    Ok(check_result(device_name, system, true, result.text.trim().to_string(), default_input_device()))
 }
 
 /// Which side of the transcription channel a check reads. A function of its own because nothing else
@@ -229,6 +243,39 @@ mod tests {
     fn the_system_row_reads_the_system_side() {
         assert_eq!(side_checked(true), Channel::System);
         assert_eq!(side_checked(false), Channel::Microphone);
+    }
+
+    fn named(name: &str) -> anyhow::Result<AudioDevice> {
+        Ok(AudioDevice::new(name.to_string(), DeviceType::Input))
+    }
+
+    #[test]
+    fn a_microphone_check_on_the_default_says_so() {
+        assert!(check_result("Digital Microphone".into(), false, true, "hi".into(), named("Digital Microphone")).is_default);
+    }
+
+    #[test]
+    fn a_microphone_check_on_another_device_is_not_the_default() {
+        assert!(!check_result("Headset Microphone".into(), false, true, "hi".into(), named("Digital Microphone")).is_default);
+    }
+
+    #[test]
+    fn no_default_to_read_is_not_the_default() {
+        let none = Err(anyhow::anyhow!("No default input device found"));
+        assert!(!check_result("Digital Microphone".into(), false, true, "hi".into(), none).is_default);
+    }
+
+    #[test]
+    fn a_system_check_is_never_the_default_input() {
+        // A monitor may share a name with an input; the system row is not a microphone either way.
+        assert!(!check_result("Digital Microphone".into(), true, true, "hi".into(), named("Digital Microphone")).is_default);
+    }
+
+    #[test]
+    fn the_result_carries_is_default_by_that_name() {
+        let value = serde_json::to_value(check_result("Digital Microphone".into(), false, false, String::new(), named("Digital Microphone"))).unwrap();
+        assert_eq!(value.get("is_default"), Some(&serde_json::Value::Bool(true)), "{value}");
+        assert_eq!(value.get("device"), Some(&serde_json::Value::String("Digital Microphone".into())));
     }
 
     #[tokio::test]
