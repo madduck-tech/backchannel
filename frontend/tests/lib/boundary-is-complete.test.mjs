@@ -9,7 +9,8 @@
 //   * **`sonner`'s surface is derived.** The layer's members come from `grep`ping `src/`, so a
 //     component that starts calling `toast.loading` moves this check, not a runtime TypeError three
 //     tests later. Falsifiable: delete a member and it names the callers.
-//   * **`lucide-react` has no surface to check.** Its stub is `new Proxy({}, { get: () => () => null })`,
+//   * **`lucide-react` has no surface to check.** Its stub is a Proxy whose every icon renders nothing,
+//     or, with `icons: 'marked'`, an `<svg data-icon>` (#299),
 //     total by construction. Section 3 runs over it anyway, and says so: the value of doing that is
 //     not catching a missing icon (impossible) but proving the *predicate* works, because the two
 //     obvious predicates do not.

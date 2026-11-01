@@ -78,7 +78,8 @@ test('K is two, or the number of Stage 2 entries running the pass', () => {
   assert.equal(keepCount('stage2-record-check.sh', gopnik('stage2-ui-record-check.sh', 6)), '2');
   // And from the real gopnik.json, which is what the passes read.
   assert.equal(lib('kept_profile_keep_count stage2-onboarding-check.sh').stdout.trim(), '10');
-  assert.equal(lib('kept_profile_keep_count stage2-core-check.sh').stdout.trim(), '4');
+  // Five since #299 added `checked`.
+  assert.equal(lib('kept_profile_keep_count stage2-core-check.sh').stdout.trim(), '5');
 });
 
 test('eleven failed onboarding modes leave ten profiles, stripped, and the oldest removed', () => {

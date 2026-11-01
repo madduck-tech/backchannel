@@ -98,8 +98,11 @@ export function namedImportsFromSource(module, dir = path.join(root, 'src')) {
   return names;
 }
 
-/** Icons render as SVG and no assertion in this repository looks at one. */
-const lucide = () => new Proxy({}, { get: () => () => null });
+/** Icons render as SVG and no assertion in this repository looks at one -- except where a test asks for
+ * `icons: 'marked'`, which renders each as an `<svg data-icon="<name>">`, so an icon added to a screen is
+ * something a test can see (#299's "no screen changes"). */
+const lucide = ({ marked = false } = {}) =>
+  new Proxy({}, { get: (_, name) => (marked ? () => createElement('svg', { 'data-icon': String(name) }) : () => null) });
 
 /**
  * `toast` is callable *and* has members — `UpdateNotification.tsx:24` calls it bare. Every member
@@ -132,12 +135,13 @@ function sonner() {
 /**
  * @param {object} [options]
  * @param {object} [options.extra]  per-test additions or replacements, the `tauri-stubs.mjs` shape
+ * @param {'marked'} [options.icons]  render each icon as an `<svg data-icon>` instead of nothing
  * @returns {{ modules: object, covered: string[], toasts: Array }}
  */
-export function boundaryStubs({ extra = {} } = {}) {
+export function boundaryStubs({ extra = {}, icons } = {}) {
   const { module: sonnerModule, calls } = sonner();
   const modules = {
-    'lucide-react': lucide(),
+    'lucide-react': lucide({ marked: icons === 'marked' }),
     sonner: sonnerModule,
     ...extra,
   };

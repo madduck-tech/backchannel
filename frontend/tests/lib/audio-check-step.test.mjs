@@ -11,6 +11,7 @@
 // **Why a tone for the system side.** It makes the check self-contained: no second participant, and
 // it fails loudly when the user picked an input that is not a monitor of their own output.
 import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -489,6 +490,43 @@ for (const resumeRejects of [true, false]) {
   );
   const sides = body.match(/side_checked\([^)]*\)/g) ?? [];
   assert.deepEqual(sides, ['side_checked(system)'], 'the side read follows the row that was pressed, not a constant');
+  // #299 condition 4: both of the command's results come from one constructor, given the default input
+  // as the start itself reads it and the row that was pressed. `is_default: false` hardcoded in the
+  // command, or the default output passed instead, would pass every unit test of the constructor.
+  const built = body.match(/check_result\([^;]*\)/g) ?? [];
+  assert.equal(built.length, 2, `#299 4: the command builds its result through check_result at both sites, silent and with words: ${JSON.stringify(built)}`);
+  // The arguments by position, split at the top level: the device, the row as it is, `heard` as each site
+  // knows it, and the default input's own lookup. A swapped pair or a negated row passes a word search.
+  const args = (call) => {
+    const out = []; let depth = 0; let cur = '';
+    for (const ch of call.slice(call.indexOf('(') + 1)) {
+      if (ch === ')' && depth === 0) break;
+      if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; continue; }
+      if ('([{'.includes(ch)) depth += 1;
+      if (')]}'.includes(ch)) depth -= 1;
+      cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  };
+  const [silentCall, wordsCall] = built.map(args);
+  assert.deepEqual(silentCall, ['device_name', 'system', 'false', 'String::new()', 'default_input_device()'],
+    `#299 4: the silent site passes the device, the row, heard=false, no text and the default input's lookup: ${JSON.stringify(silentCall)}`);
+  assert.deepEqual(wordsCall?.filter((_, i) => i !== 3), ['device_name', 'system', 'true', 'default_input_device()'],
+    `#299 4: each call passes the default input's lookup and the row, in place: ${JSON.stringify(wordsCall)}`);
+  assert.ok(!/DeviceCheck\s*\{/.test(body), '#299 4: and the command builds no DeviceCheck of its own');
+  // And the names mean what they say: the lookup imported under its own name, the row not rebound.
+  assert.ok(/^use crate::audio::devices::\{[^}]*\bdefault_input_device\b(?!\s+as\b)[^}]*\};/m.test(code(command)) && !/\bas\s+default_input_device\b/.test(code(command)),
+    '#299 4: default_input_device is the devices module\'s, imported under its own name');
+  assert.ok(!/\blet\s+(mut\s+)?system\b/.test(body), '#299 4: the command does not rebind the row it was asked to check');
+  assert.ok(!/\blet\s+(mut\s+)?default_input_device\b/.test(body), '#299 4: nor the lookup it passes');
+  assert.ok(!/\bis_default\b/.test(body), '#299 4: and the command never touches is_default itself: the constructor decides it');
+  // A literal, not the type's declaration or a return type.
+  const nonTest = code(command).slice(0, code(command).indexOf('#[cfg(test)]'));
+  const literals = nonTest.match(/(?<!struct |-> )DeviceCheck\s*\{/g) ?? [];
+  const ctor = nonTest.slice(nonTest.indexOf('fn check_result('));
+  assert.ok(literals.length === 1 && ctor.slice(0, ctor.indexOf('\n}\n')).match(/(?<!struct |-> )DeviceCheck\s*\{/),
+    `#299 4: the file's one DeviceCheck literal is inside check_result: found ${literals.length}`);
   const loadCommand = code(fs.readFileSync(path.join(root, 'src-tauri/src/transcribe_engine/commands.rs'), 'utf8'));
   const load = loadCommand.slice(loadCommand.indexOf('pub async fn transcribe_load_model'));
   assert.ok(
@@ -526,8 +564,401 @@ for (const resumeRejects of [true, false]) {
   );
 }
 
+// --- #299: the microphone first run proved is the one the first recording opens --------------------
+//
+// First run's audio check proved a microphone and kept it in component state, and nothing wrote it to
+// the store: the first recording then opened `default_input_device()`, not the device the person had
+// just heard working. The product owner decided (2026-10-30): the last microphone check that came back
+// with words decides; a non-default one is stored as `"<name> (input)"`; the default clears a stored
+// microphone and otherwise writes nothing; nothing on screen changes.
+//
+// A fixture of its own. The default is `Digital Microphone`: neither first in the list nor the
+// preselection, so only `is_default` on the check's result can name it. The struct read carries
+// `file_format: 'wav'`, which is neither Settings' initial state nor the Rust default, and
+// `system_audio_backend`, which the TypeScript interface does not declare.
+const KEEP_DEVICES = [
+  { name: 'Headset Microphone', device_type: 'Input' },
+  { name: 'USB Microphone', device_type: 'Input' },
+  { name: 'Digital Microphone', device_type: 'Input' },
+  { name: 'Speakers Monitor', device_type: 'Output' },
+];
+const DEFAULT_INPUT = 'Digital Microphone';
+const READ = { save_folder: '/srv/elsewhere', auto_save: false, file_format: 'wav', preferred_system_device: 'Speakers Monitor (output)', system_audio_backend: 'coreaudio' };
+
+/**
+ * The step against a store. `answers` is one entry per check, in order: 'words', 'silent', 'nowords'
+ * or 'reject'.
+ */
+// Every toast any #299 case raised: the Route says no toast, and a toast is outside the step's container,
+// so condition 6's screens cannot see one.
+const toasts299 = [];
+// Alerts, which dom-harness captures: as visible as a line, and as outside the container.
+const alerts299 = globalThis.__alerts.length;
+async function keep({ platform = 'linux', stored = null, answers = [], holdWrite, rejectWrite, holdComplete } = {}) {
+  const calls = [];
+  // Icons marked, so an icon the step adds is on screen for condition 6.
+  const stubs = boundaryStubs({ icons: 'marked' });
+  toasts299.push(stubs.toasts);
+  const seen = { completed: 0, next: 0, order: [] };
+  const queue = [...answers];
+  const { AudioCheckStep } = loadTsx('src/components/onboarding/steps/AudioCheckStep.tsx', {
+    ...stubs.modules,
+    '@tauri-apps/plugin-os': { platform: () => platform },
+    '@/contexts/OnboardingContext': {
+      useOnboarding: () => ({
+        selectedTranscribeModel: CHOSEN,
+        goNext: () => { seen.next += 1; seen.order.push('goNext'); },
+        completeOnboarding: async () => { seen.completed += 1; seen.order.push('complete'); if (holdComplete) await holdComplete; },
+      }),
+    },
+    '@tauri-apps/api/core': {
+      invoke: async (cmd, args) => {
+        calls.push({ cmd, args: args === undefined ? undefined : structuredClone(args) });
+        if (cmd === 'get_audio_devices') return KEEP_DEVICES;
+        if (cmd === 'transcribe_get_current_model') return CHOSEN;
+        if (cmd === 'get_recording_preferences') return structuredClone({ ...READ, preferred_mic_device: stored });
+        if (cmd === 'set_recording_preferences') {
+          seen.order.push('write');
+          if (holdWrite) await holdWrite;
+          if (rejectWrite) throw new Error('Failed to save recording preferences: disk full');
+          return null;
+        }
+        if (cmd === 'check_capture_device') {
+          const a = queue.shift() ?? 'words';
+          if (a === 'reject') throw new Error(`Could not open ${args.name}: device busy`);
+          return { device: args.name, heard_audio: a !== 'silent', text: a === 'words' ? 'testing one two' : '', is_default: !args.system && args.name === DEFAULT_INPUT };
+        }
+        return null;
+      },
+    },
+  });
+  // A Web Audio stand-in of this section's own, running, so the system row's check does not depend on
+  // what an earlier section left on window.
+  window.AudioContext = class {
+    constructor() { this.state = 'running'; }
+    resume() { return Promise.resolve(); }
+    createOscillator() { return { frequency: {}, connect: (n) => n, start: () => {}, stop: () => {} }; }
+    createGain() { return { gain: {}, connect: () => this.destination }; }
+    get destination() { return {}; }
+    async close() { this.state = 'closed'; }
+  };
+  // The real OnboardingContainer, so the step's title, description and step strip are on screen as in
+  // the product. What renders outside the container -- a dialog, a popover -- is read separately.
+  const before = new Set(document.body.children);
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  await act(async () => { createRoot(container).render(React.createElement(AudioCheckStep, null)); });
+  const outside = () => [...document.body.children].filter((e) => !before.has(e) && e !== container).map((e) => e.textContent).join('');
+  // The platform is read in an effect, from a dynamic import.
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  const writes = () => calls.filter((c) => c.cmd === 'set_recording_preferences').map((c) => c.args.preferences);
+  return { container, calls, seen, writes, outside };
+}
+// The picker as a person uses it: open the trigger, press the option. Radix opens on a click that is
+// not a mouse's pointerdown, and selects on a click likewise; the options render in a portal. Not
+// through a <form>'s hidden native <select>: in jsdom that one answers the first value with '' and
+// clears the preselection.
+// jsdom has no scrollIntoView, which an open Radix list calls on its selected option.
+window.HTMLElement.prototype.scrollIntoView ??= function scrollIntoView() {};
+async function pick(c, name) {
+  await click(c.querySelector('button[aria-label="Microphone"]'));
+  const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent.trim() === name);
+  assert.ok(option, `#299: the microphone picker offers ${name}`);
+  await click(option);
+  assert.ok(c.querySelector('button[aria-label="Microphone"]').textContent.includes(name), `#299: the picker shows ${name}`);
+}
+const checkMic = (c) => click(byText(c, 'Check by speaking'));
+const checkSystem = async (c) => {
+  await click(byText(c, 'Play a tone and listen'));
+  await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+};
+// By place, not label: the step's last two buttons are Continue and Skip, and a control that relabels one
+// must reach the case it breaks rather than end the run here.
+const finish = (c, how) => click(buttons(c).slice(-2)[how === 'Skip' ? 1 : 0]);
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 150)); });
+const finished = (seen, platform) => (platform === 'macos' ? seen.next : seen.completed);
+const as = (mic) => ({ ...READ, preferred_mic_device: mic });
+
+// Collected, not thrown: a control then shows every case it turns red, not only the first.
+const red299 = [];
+const same = (actual, want, label) => { if (!isDeepStrictEqual(actual, want)) red299.push(`${label} -- got ${JSON.stringify(actual)}, want ${JSON.stringify(want)}`); };
+const holds = (cond, label) => { if (!cond) red299.push(label); };
+// A rejection that escapes the step's handlers is a defect of its own, and must not end the run before the
+// list below is printed.
+process.on('unhandledRejection', (e) => { red299.push(`#299: a rejection escaped the step: ${e}`); });
+
+// --- #299 condition 1: a non-default check with words is stored, and nothing else changes ----------
+for (const platform of ['linux', 'macos']) {
+  for (const how of ['Continue', 'Skip']) {
+    const { container, seen, writes } = await keep({ platform });
+    await checkMic(container);
+    await finish(container, how);
+    await settle();
+    same(writes(), [as('Headset Microphone (input)')],
+      `#299 1: ${platform}, ${how}: the untouched preselection, checked with words, must be stored as "<name> (input)", and every other field written back as read`);
+    same(finished(seen, platform), 1, `#299 1: ${platform}, ${how}: and first run still finishes`);
+  }
+}
+for (const platform of ['linux', 'macos']) {
+  // The write settles first, before either reload.
+  let release;
+  const holdWrite = new Promise((r) => { release = r; });
+  const { container, seen, writes } = await keep({ platform, holdWrite });
+  await checkMic(container);
+  await finish(container, 'Continue');
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  same(writes().length, 1, `#299 1: ${platform}: the write has started`);
+  same(finished(seen, platform), 0, `#299 1: ${platform}: and nothing finishes first run while it is held: ${seen.order.join(' > ')}`);
+  await act(async () => { release(); await holdWrite; });
+  await settle();
+  same(finished(seen, platform), 1, `#299 1: ${platform}: once it settles, first run finishes: ${seen.order.join(' > ')}`);
+}
+for (const platform of ['linux', 'macos']) {
+  // A write that fails does not stop first run.
+  const { container, seen, writes } = await keep({ platform, rejectWrite: true });
+  await checkMic(container);
+  await finish(container, 'Continue');
+  await settle();
+  same(writes().length, 1, `#299 1: ${platform}: the failing write was made`);
+  same(finished(seen, platform), 1, `#299 1: ${platform}: and first run still finishes`);
+}
+{
+  // A second press while the write is held writes once and finishes once (the guarantee at :56-57).
+  let release;
+  const holdWrite = new Promise((r) => { release = r; });
+  const { container, seen, writes } = await keep({ holdWrite });
+  await checkMic(container);
+  await finish(container, 'Continue');
+  await finish(container, 'Continue');
+  await finish(container, 'Skip');
+  await act(async () => { release(); await holdWrite; });
+  await settle();
+  same(writes().length, 1, `#299 1: three presses while the write is held write once: ${seen.order.join(' > ')}`);
+  same(seen.completed, 1, `#299 1: and finish once: ${seen.order.join(' > ')}`);
+}
+
+// --- #299 condition 2: only the last microphone check with words counts --------------------------
+{
+  const cases = [
+    ['(a) a silent check', ['silent'], async () => {}, []],
+    ['(b) audio without words', ['nowords'], async () => {}, []],
+    ['(c) words, then another silent', ['words', 'silent'], async (c) => { await pick(c, 'USB Microphone'); await checkMic(c); }, [as('Headset Microphone (input)')]],
+    ['(d) words, then the picker moved with no check', ['words'], async (c) => { await pick(c, 'USB Microphone'); }, [as('Headset Microphone (input)')]],
+    ['(e) words, then another with words', ['words', 'words'], async (c) => { await pick(c, 'USB Microphone'); await checkMic(c); }, [as('USB Microphone (input)')]],
+    ['(f) words, then the system row with words', ['words', 'words'], async (c) => { await checkSystem(c); }, [as('Headset Microphone (input)')]],
+    ['(g) words, then another check rejected', ['words', 'reject'], async (c) => { await pick(c, 'USB Microphone'); await checkMic(c); }, [as('Headset Microphone (input)')]],
+  ];
+  for (const [name, answers, then, want] of cases) {
+    const { container, writes } = await keep({ answers });
+    await checkMic(container);
+    await then(container);
+    await finish(container, 'Continue');
+    await settle();
+    same(writes(), want, `#299 2${name}: ${JSON.stringify(writes())}`);
+  }
+}
+
+// --- #299 condition 3: the system default clears a stored microphone, and writes nothing otherwise ---
+{
+  const USB = 'USB Microphone (input)';
+  const cases = [
+    ['(a) none stored, the default with words', null, async (c) => { await pick(c, DEFAULT_INPUT); await checkMic(c); }, ['words'], [], ['linux', 'macos'], ['Continue']],
+    ['(b) one stored, the default with words', USB, async (c) => { await pick(c, DEFAULT_INPUT); await checkMic(c); }, ['words'], [as(null)], ['linux', 'macos'], ['Continue', 'Skip']],
+    ['(c) one stored, another with words, then the default with words', USB, async (c) => { await checkMic(c); await pick(c, DEFAULT_INPUT); await checkMic(c); }, ['words', 'words'], [as(null)], ['linux'], ['Continue']],
+    ['(d) one stored, only a silent check of the default', USB, async (c) => { await pick(c, DEFAULT_INPUT); await checkMic(c); }, ['silent'], [], ['linux'], ['Continue']],
+    ['(e) one stored, another with words', USB, async (c) => { await checkMic(c); }, ['words'], [as('Headset Microphone (input)')], ['linux', 'macos'], ['Continue']],
+    ['(f) none stored, another with words, then the default with words', null, async (c) => { await checkMic(c); await pick(c, DEFAULT_INPUT); await checkMic(c); }, ['words', 'words'], [], ['linux'], ['Continue']],
+    ['(g) one stored, the default with words, then another with words', USB, async (c) => { await pick(c, DEFAULT_INPUT); await checkMic(c); await pick(c, 'Headset Microphone'); await checkMic(c); }, ['words', 'words'], [as('Headset Microphone (input)')], ['linux'], ['Continue']],
+  ];
+  for (const [name, stored, steps, answers, want, platforms, hows] of cases) {
+    for (const platform of platforms) {
+      for (const how of hows) {
+        const { container, seen, writes } = await keep({ platform, stored, answers });
+        await steps(container);
+        await finish(container, how);
+        await settle();
+        same(writes(), want, `#299 3${name}, ${platform}, ${how}: ${JSON.stringify(writes())}`);
+        same(finished(seen, platform), 1, `#299 3${name}, ${platform}, ${how}: first run finishes`);
+      }
+    }
+  }
+}
+
+// --- #299 condition 5: Settings → Recordings shows what the step stored ---------------------------
+{
+  const { container, writes } = await keep();
+  await checkMic(container);
+  await finish(container, 'Continue');
+  await settle();
+  const stored = writes()[0];
+  holds(stored, '#299 5: the sentinel: condition 1 wrote a struct');
+  if (stored) {
+    const { RecordingSettings } = loadTsx('src/components/RecordingSettings.tsx', {
+      ...boundaryStubs().modules,
+      '@tauri-apps/api/core': {
+        invoke: async (cmd) => {
+          if (cmd === 'get_recording_preferences') return structuredClone(stored);
+          if (cmd === 'get_audio_devices') return KEEP_DEVICES;
+          if (cmd === 'get_default_recordings_folder_path') return '/srv/elsewhere';
+          // AudioBackendSelector's list, which it reads whatever the platform: none here.
+          if (cmd === 'get_audio_backend_info') return [];
+          return null;
+        },
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const log = console.log;
+    console.log = () => {};
+    await act(async () => { createRoot(host).render(React.createElement('form', null, React.createElement(RecordingSettings, null))); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    console.log = log;
+    const trigger = host.querySelector('button[role="combobox"]');
+    const native = host.querySelectorAll('select')[0];
+    const shown = trigger?.textContent.trim() || '';
+    holds(
+      shown === 'Headset Microphone' || (native && native.value === 'Headset Microphone (input)' && !/Default Microphone/.test(shown)),
+      `#299 5: Settings' microphone picker must read the microphone first run stored: the trigger reads '${shown}', the native select '${native?.value}'`
+    );
+  }
+}
+
+// --- #299 condition 6: nothing on screen changes (ADR 0023) ----------------------------------------
+//
+// The step's text, button labels and aria-labels, inside the real OnboardingContainer, against literals
+// captured at `main` (`133d100`) by this same function: idle, after each of the three outcomes, and
+// `finishing` -- after Continue off macOS, where first run disables Continue and Skip while it finishes,
+// at main too. Every Linux read after Continue (the write held, rejected, resolved, completeOnboarding
+// running) compares with `finishing`; macOS, which sets no `finishing`, compares with the after-words
+// state. Since `shape` records `disabled`, the issue's "compare with the after-words literal" cannot hold
+// for Linux any more, and `finishing` differs from it in exactly that: Continue and Skip disabled.
+// `current` is the step strip's marked step, which has no text of its own; `shape` is every element by
+// tag, role, aria-hidden, class, disabled, title, hidden, style and icon, so a spinner, a tooltip or a
+// hidden paragraph is a change too. What renders outside the container is read by `outside()`.
+const screenOf = (c) => ({
+  text: c.textContent,
+  buttons: buttons(c).map((b) => b.textContent.trim()),
+  labels: [...c.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')),
+  current: [...c.querySelectorAll('[aria-current]')].map((e) => `${e.getAttribute('aria-current')}:${e.textContent}`),
+  shape: [...c.querySelectorAll('*')].map((e) => [e.tagName.toLowerCase(), e.getAttribute('role') ?? '', e.getAttribute('aria-hidden') ?? '',
+    e.getAttribute('class') ?? '', e.hasAttribute('disabled') ? 'disabled' : '', e.getAttribute('title') ?? '', e.hasAttribute('hidden') ? 'hidden' : '',
+    e.getAttribute('style') ?? '', e.getAttribute('data-icon') ?? ''].join('|')).join(' '),
+});
+const SCREENS = {
+  idle: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"], "current": ["step:4Audio check"], "shape": "div|||fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink||||| nav|||flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 text-ink border-brand-soft-ink||||| b|||font-mono font-normal||||| main|||grid min-h-0 grid-rows-[auto_minmax(0,1fr)]||||| div|||px-6 pt-7||||| div|||mx-auto w-full max-w-[1000px]||||| h1|||font-display text-2xl font-semibold leading-tight tracking-tight text-ink||||| p|||mt-2 max-w-[68ch] text-sm text-ink-muted||||| div|||min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]||||| div|||mx-auto w-full max-w-[1000px]||||| div|||mx-auto flex w-full max-w-lg flex-col gap-6||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-brand text-brand-ink hover:bg-brand-hover active:brightness-95 px-3.5 h-11 flex-1||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 text-ink-muted hover:bg-ink/[0.05] hover:text-ink active:bg-ink/[0.09] px-3.5 h-11||||| p|||text-base leading-relaxed text-ink-muted||||| div||||||||"},
+  words: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingHeard: testing one twoThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"], "current": ["step:4Audio check"], "shape": "div|||fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink||||| nav|||flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 text-ink border-brand-soft-ink||||| b|||font-mono font-normal||||| main|||grid min-h-0 grid-rows-[auto_minmax(0,1fr)]||||| div|||px-6 pt-7||||| div|||mx-auto w-full max-w-[1000px]||||| h1|||font-display text-2xl font-semibold leading-tight tracking-tight text-ink||||| p|||mt-2 max-w-[68ch] text-sm text-ink-muted||||| div|||min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]||||| div|||mx-auto w-full max-w-[1000px]||||| div|||mx-auto flex w-full max-w-lg flex-col gap-6||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| span|||text-base text-ink||||| b|||font-medium||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-brand text-brand-ink hover:bg-brand-hover active:brightness-95 px-3.5 h-11 flex-1||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 text-ink-muted hover:bg-ink/[0.05] hover:text-ink active:bg-ink/[0.09] px-3.5 h-11||||| p|||text-base leading-relaxed text-ink-muted||||| div||||||||"},
+  silent: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingNothing arrived. This device is open but silent — pick another.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"], "current": ["step:4Audio check"], "shape": "div|||fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink||||| nav|||flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 text-ink border-brand-soft-ink||||| b|||font-mono font-normal||||| main|||grid min-h-0 grid-rows-[auto_minmax(0,1fr)]||||| div|||px-6 pt-7||||| div|||mx-auto w-full max-w-[1000px]||||| h1|||font-display text-2xl font-semibold leading-tight tracking-tight text-ink||||| p|||mt-2 max-w-[68ch] text-sm text-ink-muted||||| div|||min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]||||| div|||mx-auto w-full max-w-[1000px]||||| div|||mx-auto flex w-full max-w-lg flex-col gap-6||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| span|||text-base text-warn-ink||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-brand text-brand-ink hover:bg-brand-hover active:brightness-95 px-3.5 h-11 flex-1||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 text-ink-muted hover:bg-ink/[0.05] hover:text-ink active:bg-ink/[0.09] px-3.5 h-11||||| p|||text-base leading-relaxed text-ink-muted||||| div||||||||"},
+  nowords: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingAudio arrived, but nothing came back as words.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"], "current": ["step:4Audio check"], "shape": "div|||fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink||||| nav|||flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 text-ink border-brand-soft-ink||||| b|||font-mono font-normal||||| main|||grid min-h-0 grid-rows-[auto_minmax(0,1fr)]||||| div|||px-6 pt-7||||| div|||mx-auto w-full max-w-[1000px]||||| h1|||font-display text-2xl font-semibold leading-tight tracking-tight text-ink||||| p|||mt-2 max-w-[68ch] text-sm text-ink-muted||||| div|||min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]||||| div|||mx-auto w-full max-w-[1000px]||||| div|||mx-auto flex w-full max-w-lg flex-col gap-6||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| span|||text-base text-warn-ink||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-brand text-brand-ink hover:bg-brand-hover active:brightness-95 px-3.5 h-11 flex-1||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 text-ink-muted hover:bg-ink/[0.05] hover:text-ink active:bg-ink/[0.09] px-3.5 h-11||||| p|||text-base leading-relaxed text-ink-muted||||| div||||||||"},
+  finishing: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingHeard: testing one twoThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"], "current": ["step:4Audio check"], "shape": "div|||fixed inset-0 z-modal grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-canvas text-ink||||| nav|||flex h-11 items-center gap-7 border-b border-line bg-panel px-6 text-xs||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 border-transparent text-ink||||| b|||font-mono font-normal||||| span|||-mb-px flex items-center gap-2 self-stretch border-b-2 text-ink border-brand-soft-ink||||| b|||font-mono font-normal||||| main|||grid min-h-0 grid-rows-[auto_minmax(0,1fr)]||||| div|||px-6 pt-7||||| div|||mx-auto w-full max-w-[1000px]||||| h1|||font-display text-2xl font-semibold leading-tight tracking-tight text-ink||||| p|||mt-2 max-w-[68ch] text-sm text-ink-muted||||| div|||min-h-0 overflow-y-auto px-6 pb-6 [scrollbar-gutter:stable]||||| div|||mx-auto w-full max-w-[1000px]||||| div|||mx-auto flex w-full max-w-lg flex-col gap-6||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| span|||text-base text-ink||||| b|||font-medium||||| div|||flex flex-col gap-2 rounded-md border border-line bg-elevated p-3||||| span|||text-md font-medium text-ink||||| button|combobox||flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-line-strong bg-sunken px-3 py-2 text-sm text-ink transition-colors data-[placeholder]:text-ink-faint hover:border-line-strong focus:border-brand focus:bg-elevated disabled:cursor-not-allowed disabled:opacity-45 [&>span]:line-clamp-1||||| span|||||||pointer-events: none;| svg||||||||ChevronDown p|||text-base leading-relaxed text-ink-muted||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-line-strong bg-elevated text-ink hover:bg-ink/[0.04] active:bg-ink/[0.08] h-8 px-2.5 text-sm||||| div|||flex items-center gap-3||||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-brand text-brand-ink hover:bg-brand-hover active:brightness-95 px-3.5 h-11 flex-1|disabled|||| button|||inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,opacity] duration-fast focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 text-ink-muted hover:bg-ink/[0.05] hover:text-ink active:bg-ink/[0.09] px-3.5 h-11|disabled|||| p|||text-base leading-relaxed text-ink-muted||||| div||||||||"},
+};
+// Read half a second after each press, so a line rendered a moment later is seen too.
+const later = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
+for (const platform of ['linux', 'macos']) {
+  const states = {};
+  const idle = await keep({ platform });
+  await later();
+  states.idle = screenOf(idle.container);
+  holds(idle.outside() === '', `#299 6: nothing renders outside the step, idle (${platform}): ${idle.outside()}`);
+  for (const [k, a] of [['words', 'words'], ['silent', 'silent'], ['nowords', 'nowords']]) {
+    const one = await keep({ platform, answers: [a] });
+    await checkMic(one.container);
+    await later();
+    states[k] = screenOf(one.container);
+    holds(one.outside() === '', `#299 6: nothing renders outside the step, ${k} (${platform}): ${one.outside()}`);
+  }
+  if (platform === 'linux') {
+    // After Continue off macOS the buttons are disabled while first run finishes, at main too: the state
+    // every later Linux read is compared with.
+    let release;
+    const holdComplete = new Promise((r) => { release = r; });
+    const fin = await keep({ platform, holdComplete });
+    await checkMic(fin.container);
+    await finish(fin.container, 'Continue');
+    await later();
+    states.finishing = screenOf(fin.container);
+    holds(fin.outside() === '', `#299 6: nothing renders outside the step while first run finishes (linux): ${fin.outside()}`);
+    await act(async () => { release(); await holdComplete; });
+  }
+  if (process.env.PRINT_SCREENS && platform === 'linux') console.log(JSON.stringify(states));
+  for (const k of Object.keys(SCREENS)) if (k in states) same(states[k], SCREENS[k], `#299 6: the ${k} screen changed (${platform})`);
+}
+{
+  // Off macOS the step stays on screen after a write that resolved, through completeOnboarding and the
+  // moment before the reload: where a "Saved" line would go.
+  const linux = await keep({ platform: 'linux' });
+  await checkMic(linux.container);
+  await finish(linux.container, 'Continue');
+  // Early and late: a line that shows for a moment, or only after a while.
+  for (const [at, wait] of [['150 ms', 150], ['600 ms', 450]]) {
+    await act(async () => { await new Promise((r) => setTimeout(r, wait)); });
+    same(linux.writes().length === 1 && linux.seen.completed === 1, true, `#299 6: the sentinel: off macOS, the write resolved and first run finished, at ${at}`);
+    same(screenOf(linux.container), SCREENS.finishing, `#299 6: a resolved write shows nothing (linux) at ${at}`);
+    holds(linux.outside() === '', `#299 6: nothing renders outside the step after a resolved write (linux) at ${at}: ${linux.outside()}`);
+  }
+}
+{
+  // ... and while completeOnboarding, which makes IPC calls in the app, is still running.
+  let release;
+  const holdComplete = new Promise((r) => { release = r; });
+  const linux = await keep({ platform: 'linux', holdComplete });
+  await checkMic(linux.container);
+  await finish(linux.container, 'Continue');
+  await later();
+  same(linux.writes().length === 1 && linux.seen.completed === 1, true, '#299 6: the sentinel: the write resolved and completeOnboarding is running');
+  // Continue and Skip are disabled while finishing, as at main after Continue: compared with that.
+  same(screenOf(linux.container), SCREENS.finishing, '#299 6: finishing shows nothing new (linux)');
+  holds(linux.outside() === '', `#299 6: nothing renders outside the step while completeOnboarding runs (linux): ${linux.outside()}`);
+  await act(async () => { release(); await holdComplete; });
+}
+{
+  // On macOS the step stays on screen after Continue, until Permissions renders: after the write resolved.
+  const mac = await keep({ platform: 'macos' });
+  await checkMic(mac.container);
+  await finish(mac.container, 'Continue');
+  await later();
+  same(mac.seen.next, 1, '#299 6: the sentinel: on macOS, Continue walked on after the write');
+  same(screenOf(mac.container), SCREENS.words, '#299 6: a resolved write shows nothing (macos)');
+  holds(mac.outside() === '', `#299 6: nothing renders outside the step after a resolved write (macos): ${mac.outside()}`);
+}
+{
+  for (const platform of ['linux', 'macos']) {
+    // Read half a second into the hold, where a "Saving…" line would be.
+    let release;
+    const holdWrite = new Promise((r) => { release = r; });
+    const held = await keep({ platform, holdWrite });
+    await checkMic(held.container);
+    await finish(held.container, 'Continue');
+    // Half a second into the hold, and three seconds: a line shown only once a write is slow is one of
+    // these.
+    for (const [at, wait] of [['0.5 s', 500], ['3 s', 2500]]) {
+      await act(async () => { await new Promise((r) => setTimeout(r, wait)); });
+      same(held.seen.order.includes('write') && finished(held.seen, platform) === 0, true, `#299 6: the sentinel: the write is held at ${at} (${platform})`);
+      same(screenOf(held.container), platform === 'linux' ? SCREENS.finishing : SCREENS.words, `#299 6: Continue with the write held shows nothing new at ${at} (${platform})`);
+      holds(held.outside() === '', `#299 6: nothing renders outside the step with the write held at ${at} (${platform}): ${held.outside()}`);
+    }
+    await act(async () => { release(); await holdWrite; });
+  }
+  const rejected = await keep({ rejectWrite: true });
+  await checkMic(rejected.container);
+  await finish(rejected.container, 'Continue');
+  await settle();
+  same(rejected.seen.completed, 1, '#299 6: the sentinel: after the rejection, first run finished');
+  same(screenOf(rejected.container), SCREENS.finishing, '#299 6: a rejected write shows nothing');
+  holds(rejected.outside() === '', `#299 6: nothing renders outside the step after a rejected write: ${rejected.outside()}`);
+}
+
+holds(toasts299.every((t) => t.length === 0), `#299 6: no case raises a toast: ${JSON.stringify(toasts299.filter((t) => t.length))}`);
+holds(globalThis.__alerts.length === alerts299, `#299 6: no case raises an alert: ${JSON.stringify(globalThis.__alerts.slice(alerts299))}`);
+{
+  const stepSource = fs.readFileSync(path.join(root, 'src/components/onboarding/steps/AudioCheckStep.tsx'), 'utf8');
+  holds(!/from ['"]sonner['"]/.test(stepSource), '#299 6: the step imports nothing from sonner');
+}
+assert.deepEqual(red299, [], `RED CONDITIONS:\n${red299.join('\n')}`);
+
 console.log(
   'ok - audio check: both devices are listed and opened by name, the microphone is proven by the ' +
     'words it heard, the system side is proven by a tone the app plays, each failure names itself, ' +
-    'the step is skippable, and the command refuses to disturb a recording'
+    'the step is skippable, and the command refuses to disturb a recording; and the last microphone ' +
+    'check with words is stored at Continue or Skip, the default clearing a stored one, with nothing ' +
+    'new on screen (#299)'
 );
