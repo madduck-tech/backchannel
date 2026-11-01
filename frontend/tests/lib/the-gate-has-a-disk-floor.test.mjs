@@ -31,7 +31,7 @@ function checkout(name, { target = true } = {}) {
   fs.mkdirSync(path.join(work, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(repo, 'scripts', 'disk-floor.sh'), path.join(work, 'scripts', 'disk-floor.sh'));
   fs.mkdirSync(path.join(work, 'scripts', 'lib'));
-  fs.copyFileSync(path.join(repo, 'scripts', 'lib', 'disk-floor-default.sh'), path.join(work, 'scripts', 'lib', 'disk-floor-default.sh'));
+  for (const f of ['lib/disk-floor-default.sh', 'disk-sweep.sh', 'lib/target-cap-default.sh']) fs.copyFileSync(path.join(repo, 'scripts', f), path.join(work, 'scripts', f));
   if (target) write(path.join(work, 'target', 'debug', 'incremental', 'blob'), Buffer.alloc(2_000_000));
   const g = (...a) => spawnSync('git', ['-C', work, ...a], { encoding: 'utf8' });
   g('init', '-q');
@@ -160,7 +160,9 @@ test('a copy that fails stops the pass', () => {
 // The censuses: where the floor runs, and that no pass copies its seed around it.
 test('the floor is Stage 1 entry 2 and Stage 2 entry 4, and fronts every Stage 1 cargo entry', () => {
   const { stage1, stage2 } = JSON.parse(fs.readFileSync(path.join(repo, 'gopnik.json'), 'utf8')).verification;
-  assert.equal(stage1[1], 'scripts/disk-floor.sh');
+  // #257 adds --profiles here, and only here: the whole-profile step runs before any build.
+  assert.equal(stage1[1], 'scripts/disk-floor.sh --profiles');
+  assert.deepEqual([...stage1, ...stage2].filter((c) => c.includes('--profiles')), ['scripts/disk-floor.sh --profiles'], '--profiles is passed outside Stage 1 entry 2');
   assert.equal(stage2[3], 'scripts/disk-floor.sh');
   assert.match(stage2[2], /tauri build --bundles appimage/, 'the AppImage build is no longer entry 3');
   const cargo = stage1.filter((c) => c.includes('cargo '));
@@ -169,6 +171,29 @@ test('the floor is Stage 1 entry 2 and Stage 2 entry 4, and fronts every Stage 1
   for (const [f, needle] of [['.github/workflows/stage2-artifact.yml', 'Stage 2 starts at entry 4'], ['frontend/tests/lib/stage2-artifact-matches-the-gate.test.mjs', 'starts Stage 2 at entry 4']]) {
     assert.ok(fs.readFileSync(path.join(repo, f), 'utf8').includes(needle), `${f} still tells a person with a downloaded artifact to skip the floor`);
   }
+});
+
+test('the full floor sweeps first; --brief never does; without --profiles no profile goes (#257)', () => {
+  const fx = checkout('swept');
+  const ID = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
+  const g = (...a) => spawnSync('git', ['-C', fx.work, ...ID, ...a], { encoding: 'utf8' });
+  g('add', '-A'); g('commit', '-qm', 'fixture'); g('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  const wt = path.join(fx.work, '..', 'swept-done');
+  g('worktree', 'add', '-q', '--detach', wt, 'HEAD');
+  const old = new Date(Date.now() - 2 * 86400000);
+  const age = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name === '.git') continue; const p = path.join(d, e.name); if (e.isDirectory()) age(p); fs.lutimesSync(p, old, old); } };
+  age(wt);
+  // A Cargo target over a 1-byte cap, with incremental/ and a profile's artifacts.
+  const t = path.join(fx.work, 'target');
+  fs.writeFileSync(path.join(t, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n');
+  fs.writeFileSync(path.join(t, 'debug', '.cargo-lock'), '');
+  fs.mkdirSync(path.join(t, 'debug', 'deps'), { recursive: true }); fs.writeFileSync(path.join(t, 'debug', 'deps', 'liba.rlib'), 'x');
+  const brief = floor(fx, { BC_TARGET_CAP_BYTES: '1' }, ['--brief']);
+  assert.ok(fs.existsSync(wt) && fs.existsSync(path.join(t, 'debug', 'incremental')), `--brief swept:\n${brief.out}`);
+  const full = floor(fx, { BC_TARGET_CAP_BYTES: '1' });
+  assert.ok(!fs.existsSync(wt), `the full floor did not sweep a worktree that is done:\n${full.out}`);
+  assert.ok(!fs.existsSync(path.join(t, 'debug', 'incremental')), `the full floor did not cap the target:\n${full.out}`);
+  assert.ok(fs.existsSync(path.join(t, 'debug', 'deps', 'liba.rlib')), `the floor emptied a profile without --profiles:\n${full.out}`);
 });
 
 test('the floor has one default, which the check and the seed copy both read', () => {
