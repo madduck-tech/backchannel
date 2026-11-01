@@ -117,7 +117,7 @@ cleanup() {
   # the harness each have a repair of their own.
   trap - INT TERM
   [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
-  # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
+  # Not silenced: a destroy that did not take must say so here, not only in the next run.
   type tone_sink_destroy >/dev/null 2>&1 && tone_sink_destroy
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
@@ -400,8 +400,9 @@ except Exception: v = None
 print(v if isinstance(v, str) else "the probe did not answer: " + repr(v)[:200])')
 ANSWERED=$(python3 -I -c 'import time; print(time.monotonic())')
 say "Web Audio in this build: $PROBE"
-# On until a sample after the answer holds no link from our web process, for at most 5 s.
-for _ in $(seq 1 25); do python3 -I scripts/lib/tone-graph.py closed "$PROBE_GRAPH" "$ANSWERED" && break; sleep 0.2; done
+# On until a sample after the answer holds no link from our web process, for at most 5 s by the clock.
+END=$(( $(date +%s%3N) + 5000 ))
+until python3 -I scripts/lib/tone-graph.py closed "$PROBE_GRAPH" "$ANSWERED" || [ "$(date +%s%3N)" -ge "$END" ]; do sleep 0.2; done
 kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
 printf '%s' "$PROBE" | python3 -c 'import json,sys
 v = json.loads(sys.stdin.read())
@@ -417,7 +418,8 @@ GRAPH="$PROFILE/tone-graph.jsonl"
 # from a WebKitWebProcess under it, not from any WebKitGTK program on the machine.
 python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH" ${TONE_SENTINEL_PID:+--sentinel "$TONE_SENTINEL_PID"} &
 GRAPH_PID=$!
-for _ in $(seq 1 25); do [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] && break; sleep 0.2; done
+END=$(( $(date +%s%3N) + 5000 ))
+until [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] || [ "$(date +%s%3N)" -ge "$END" ]; do sleep 0.2; done
 [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] || die "before the press: the tone's sampler wrote no sample within 5 s"
 audio_check_press "The other side is heard through" "Play a tone and listen"
 kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""

@@ -79,6 +79,7 @@ if a[0] == 'create-node':
     if st.get('moveOnCreate'): st['effective'] = '{"name":"%s"}' % name
     save()
 elif a[0] == 'destroy':
+    if st.get('failDestroy'): sys.exit(1)
     st.setdefault('destroyed', []).append(a[1])
     st['nodes'] = [n for n in st['nodes'] if str(n['id']) != a[1]]; save()
 `);
@@ -137,6 +138,16 @@ check('2a moved at once', r.status === 1 && !/WENT-ON/.test(r.stdout) && /moved 
 graph({ configured: HEADSET, effective: SPEAKERS, moveAfterReads: 3 });
 r = pass('tone_sink_create; echo WENT-ON');
 check('2b moved on the third read after the ports appeared', r.status === 1 && !/WENT-ON/.test(r.stdout) && /moved from \{"name":"alsa_output.usb-speakers"\} to \{"name":"backchannel_tone_sink_\d+_\d+"\}/.test(r.stderr) && now().nodes.length === 0,
+  `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+// ... on the seventh read: inside the 2 s window, past a 1 s one.
+graph({ configured: HEADSET, effective: SPEAKERS, moveAfterReads: 7 });
+r = pass('tone_sink_create; echo WENT-ON');
+check('2e moved on the seventh read', r.status === 1 && !/WENT-ON/.test(r.stdout) && /moved from/.test(r.stderr) && now().nodes.length === 0,
+  `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+// ... and a destroy that does not take is said, and leaves the id for the exit trap and restore.
+graph({ configured: HEADSET, effective: SPEAKERS, moveOnCreate: true, failDestroy: true });
+r = pass('tone_sink_create; echo WENT-ON');
+check('2f a destroy that did not take is said', r.status === 1 && /the sink could NOT be destroyed; run 'bash scripts\/lib\/tone-sink\.sh restore'/.test(r.stderr) && now().nodes.length === 1,
   `exit ${r.status}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 graph({ configured: HEADSET, effective: SPEAKERS });
 flip({ failEffective: true });

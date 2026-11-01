@@ -190,7 +190,12 @@ def describe(link):
 
 
 def named_default(samples):
-    """The first sample in which a default-output key names a node of the tone sink's family (#266)."""
+    """The first sample in which a default-output key names a node of the tone sink's family (#266), or one
+    with no `default.audio.sink` at all: real `pw-dump` output carries it in every sample (M1: 39 of 39 and
+    14 of 14), so its absence is a sample that cannot show the default stayed put."""
+    for r in samples:
+        if not (r.get('defaults') or {}).get('default.audio.sink'):
+            return f'at t={r["t"]} the sample holds no default.audio.sink, so nothing shows the default output stayed put'
     for r in samples:
         for key in DEFAULT_KEYS:
             if in_family((r.get('defaults') or {}).get(key)):
@@ -301,6 +306,10 @@ def probe_judge(path, sink, answered):
     off = next((f for f in map(route, ours) if f), None)
     if off:
         print(f'{head}: the probe did not take the route the gate pins: {off}')
+        return 1
+    stray = sentinel_fault(samples)
+    if stray:
+        print(f'{head}: {stray}')
         return 1
     after = [r for r in samples if r['t'] >= answered]
     if not after:

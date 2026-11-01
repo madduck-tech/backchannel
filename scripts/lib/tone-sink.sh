@@ -77,15 +77,18 @@ tone_sink_nodes() {
 
 # The effective default output is still the one read before this run's sink existed, or the sink is
 # destroyed and the pass stops, naming both values.
+# The words say whether the sink is gone: a destroy that did not take leaves the id, for the exit trap and
+# for `restore` (#266's gate adversary). The move need not be the sink's own doing, a headset connecting
+# moves the default too, but the run cannot tell the two apart, so it stops either way.
 tone_sink_guard_default() {
-  local now
+  local now gone="the sink is destroyed"
   if ! now=$(tone_sink_effective); then
-    tone_sink_destroy
-    die "harness: the effective default output could not be read, so nothing shows the tone sink left it alone; the sink is destroyed"
+    tone_sink_destroy || gone="the sink could NOT be destroyed; run 'bash scripts/lib/tone-sink.sh restore'"
+    die "harness: the effective default output could not be read, so nothing shows the tone sink left it alone; $gone"
   fi
   [ "$now" = "$TONE_DEFAULT_BEFORE" ] && return 0
-  tone_sink_destroy
-  die "harness: the effective default output moved from $TONE_DEFAULT_BEFORE to $now once the tone sink existed; the sink is destroyed"
+  tone_sink_destroy || gone="the sink could NOT be destroyed; run 'bash scripts/lib/tone-sink.sh restore'"
+  die "harness: the effective default output moved from $TONE_DEFAULT_BEFORE to $now since the tone sink was made (the sink taking it, or an output of the person's own changing); the run stops rather than guess which, and $gone"
 }
 
 tone_sink_create() {
@@ -167,11 +170,16 @@ tone_sink_put_back() {
 # freed id to the next object (three `pw-dump` clients in a row each got id 99, #266's critic), so once the
 # sink is gone the id may be someone else's. A run stopped before its node's id was read leaves the node,
 # for `restore` to clear.
+# Returns non-zero, and keeps the id, when the node is still there after the destroy.
 tone_sink_destroy() {
   [ -n "$TONE_SINK_ID" ] || return 0
   local name
   if name=$(python3 -I "$TONE_GRAPH" name-of "$TONE_SINK_ID" 2>/dev/null) && [ "$name" = "$TONE_SINK_NAME" ]; then
     pw-cli destroy "$TONE_SINK_ID" >/dev/null 2>&1
+    if ! name=$(python3 -I "$TONE_GRAPH" name-of "$TONE_SINK_ID" 2>/dev/null) || [ "$name" = "$TONE_SINK_NAME" ]; then
+      say "node $TONE_SINK_ID ($TONE_SINK_NAME) is still in the graph, or the graph could not be read, after its destroy; run 'bash scripts/lib/tone-sink.sh restore'"
+      return 1
+    fi
   else
     say "node $TONE_SINK_ID no longer names $TONE_SINK_NAME (it reads '${name:-<unreadable>}'), so it is left alone"
   fi
