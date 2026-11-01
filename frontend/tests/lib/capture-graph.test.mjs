@@ -87,6 +87,28 @@ fs.writeFileSync(path.join(bin, 'pw-dump'), '#!/bin/sh\nexit 1\n', { mode: 0o755
 r = spawnSync('python3', ['-I', GRAPH, 'nodes'], { env, encoding: 'utf8' });
 if (r.status === 0) failures.push(`17 an unreadable graph read as an empty one: exit ${r.status}, '${r.stdout}'`);
 
+// `default-output` (#320): the node `default.audio.sink` names, then what plays into it, through the same
+// reader. On a split dump that adds the playing link, the link is seen; when the second array removes the
+// sink's node, or the key is absent, the first line is empty, so the refusal can tell "no default sink"
+// from "nothing plays"; and an unreadable graph exits non-zero.
+const out = (id, app) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': app, 'media.class': 'Stream/Output/Audio', 'application.name': app } } });
+const speakers = { id: 70, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': 'alsa_output.speakers', 'media.class': 'Audio/Sink' } } };
+const sinkMeta = (name) => ({ ...meta, metadata: [...meta.metadata, ...(name ? [{ subject: 0, key: 'default.audio.sink', type: 'Spa:String:JSON', value: { name } }] : [])] });
+const linked = (id, from, into) => ({ id, type: 'PipeWire:Interface:Link', info: { 'output-node-id': from, 'input-node-id': into, state: 'active' } });
+const defaultOutput = (...arrays) => {
+  fs.writeFileSync(path.join(bin, 'pw-dump'), `#!/bin/sh\ncat <<'X'\n${arrays.map((a) => JSON.stringify(a)).join('\n')}\nX\n`, { mode: 0o755 });
+  return spawnSync('python3', ['-I', GRAPH, 'default-output'], { env, encoding: 'utf8' });
+};
+r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), out(72, 'mpv')], [linked(73, 71, 70), linked(74, 72, 70), out(75, 'unlinked')]);
+if (r.status !== 0 || r.stdout !== 'alsa_output.speakers\nFirefox\nmpv\n') failures.push(`18 default-output on a split dump: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), linked(73, 71, 70)], [{ id: 70, info: null }, { id: 73, info: null }]);
+if (r.status !== 0 || r.stdout !== '\n') failures.push(`19 default-output with the default sink's node removed: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+r = defaultOutput([sinkMeta(null), speakers, out(71, 'Firefox'), linked(73, 71, 70)]);
+if (r.status !== 0 || r.stdout !== '\n') failures.push(`20 default-output with no default.audio.sink key: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+fs.writeFileSync(path.join(bin, 'pw-dump'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+r = spawnSync('python3', ['-I', GRAPH, 'default-output'], { env, encoding: 'utf8' });
+if (r.status === 0) failures.push(`21 default-output read an unreadable graph: exit ${r.status}, '${r.stdout}'`);
+
 // A pid file written before the watch began names a group that may belong to anyone by now.
 const pids = path.join(root, 'pids');
 fs.mkdirSync(pids);
@@ -142,4 +164,4 @@ for (const pid of [live, passRoot]) { try { process.kill(Number(pid), 'SIGTERM')
 
 fs.rmSync(root, { recursive: true, force: true });
 assert.deepEqual(failures, [], `RED CONDITIONS:\n${failures.join('\n')}`);
-console.log('ok - capture-graph check: holds a correct entry; breaks on a recorder off the effective default, a default naming a harness node, an application link from anything but the harness source or the entry\'s system device, no harness link, two harness sources, a recording that never took the harness with a system device, an unreadable sample, a stop or no samples; reads a split dump as one graph with its metadata, fails on an unreadable one, ignores pid files older than the watch, tells an exited capture from a live foreign one for a moment and no longer, and breaks on a node ended for longer or on a probe of the pass linked from anything but a harness node');
+console.log('ok - capture-graph check: holds a correct entry; breaks on a recorder off the effective default, a default naming a harness node, an application link from anything but the harness source or the entry\'s system device, no harness link, two harness sources, a recording that never took the harness with a system device, an unreadable sample, a stop or no samples; reads a split dump as one graph with its metadata, fails on an unreadable one, gives the default output\'s sink and what plays into it or an empty line when there is no such sink, ignores pid files older than the watch, tells an exited capture from a live foreign one for a moment and no longer, and breaks on a node ended for longer or on a probe of the pass linked from anything but a harness node');

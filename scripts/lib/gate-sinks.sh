@@ -10,17 +10,28 @@
 #   gate_sinks_destroy           removes both, by the ids this run created
 #   gate_sink_remove <name>      removes one of them now, and returns once the graph no longer has it
 #   gate_sink_is_default <name>  exits 0 when <name> is the effective default output
+#
+# The descriptions are read through #293's `harness_description`, so a split `pw-dump` is one graph (#320).
+# This file sources `harness-guard.sh` itself: two-channel sources it only after `gate_sinks_create` runs.
 
 GATE_SINK_A=backchannel_gate_sink_a
 GATE_SINK_B=backchannel_gate_sink_b
 GATE_SINK_IDS=""
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness-guard.sh"
+
 gate__nodes() { python3 -I "$(dirname "${BASH_SOURCE[0]}")/tone-graph.py" nodes "$1"; }
-gate__desc() {
-  pw-dump | python3 -c 'import json,sys
-for o in json.load(sys.stdin):
-    p=(o.get("info") or {}).get("props") or {}
-    if p.get("node.name")==sys.argv[1]: print(p.get("node.description") or ""); break' "$1"
+
+# GATE_DESC_A and GATE_DESC_B, or the pass stops: on either read failing, with words naming the graph as
+# unreadable, and on two descriptions that are not distinct. Each read is checked on its own, because a
+# report from the second cannot stand for the first (#320's critic, round 4). A statement of its own, never
+# `$(…)`: `harness_description` returns 1 silently, and `GATE_DESC_A=$(…)` under `set -e` exits with
+# nothing said.
+gate__descs() {
+  if ! GATE_DESC_A=$(harness_description "$GATE_SINK_A"); then die "the audio graph could not be read, so gate sink A has no description"; fi
+  if ! GATE_DESC_B=$(harness_description "$GATE_SINK_B"); then die "the audio graph could not be read, so gate sink B has no description"; fi
+  [ -n "$GATE_DESC_A" ] && [ -n "$GATE_DESC_B" ] && [ "$GATE_DESC_A" != "$GATE_DESC_B" ] \
+    || die "the two sinks do not present distinct descriptions ('$GATE_DESC_A', '$GATE_DESC_B')"
 }
 
 gate_sinks_create() {
@@ -39,9 +50,7 @@ gate_sinks_create() {
     [ "$(printf '%s\n' "$ids" | grep -c .)" = 1 ] || die "$name did not appear in the graph exactly once"
     GATE_SINK_IDS="$GATE_SINK_IDS $ids"
   done
-  GATE_DESC_A=$(gate__desc "$GATE_SINK_A"); GATE_DESC_B=$(gate__desc "$GATE_SINK_B")
-  [ -n "$GATE_DESC_A" ] && [ -n "$GATE_DESC_B" ] && [ "$GATE_DESC_A" != "$GATE_DESC_B" ] \
-    || die "the two sinks do not present distinct descriptions ('$GATE_DESC_A', '$GATE_DESC_B')"
+  gate__descs
 }
 
 gate_sinks_destroy() {

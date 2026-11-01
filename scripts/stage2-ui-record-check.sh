@@ -42,6 +42,8 @@ SAMPLE="${BC_SAMPLE:-$(ls ~/.cargo/git/checkouts/transcribe.cpp-*/*/samples/jfk.
 
 say() { printf 'stage2-ui-record-check: %s\n' "$*"; }
 die() { printf 'stage2-ui-record-check: %s\n' "$*" >&2; exit 1; }
+# The sink pick, through the shared reader (#320).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/graph-reads.sh"
 
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
@@ -58,18 +60,8 @@ for pid in $(ls /proc | grep -E '^[0-9]+$'); do
 done
 
 # The sink whose monitor will be picked, and a different one to play into for the control.
-read -r TARGET_SINK TARGET_DESC OTHER_SINK <<<"$(pw-dump | python3 -c '
-import json, sys
-sinks = []
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("media.class") == "Audio/Sink":
-        sinks.append((p.get("node.name"), p.get("node.description", "")))
-speaker = next((s for s in sinks if "Speaker" in s[1]), None) or (sinks[0] if sinks else None)
-other   = next((s for s in sinks if s[0] != (speaker[0] if speaker else None)), None)
-print(speaker[0], "|".join(speaker[1].split()), other[0] if other else "")')"
-[ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
-PICK="Monitor of ${TARGET_DESC//|/ }"
+pick_ui_record_sink
+PICK="Monitor of $TARGET_DESC"
 say "will pick '$PICK'"
 
 PLAY_INTO=""
