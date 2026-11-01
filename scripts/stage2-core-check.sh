@@ -118,7 +118,7 @@ cleanup() {
   trap - INT TERM
   [ -n "$GRAPH_PID" ] && kill -TERM "$GRAPH_PID" 2>/dev/null
   # Not silenced: a restore that fails on a dying run must say so here, not only in the next run.
-  type tone_sink_destroy >/dev/null 2>&1 && { tone_sink_destroy || say "the default output was NOT put back; run 'bash scripts/lib/tone-sink.sh restore'"; }
+  type tone_sink_destroy >/dev/null 2>&1 && tone_sink_destroy
   [ -n "$HARNESS_UP" ] && scripts/audio-harness.sh down >/dev/null 2>&1
   if [ -n "$PROFILE" ] && [ "$PASSED" = 1 ]; then rm -rf "$PROFILE"
   elif [ -n "$PROFILE" ]; then kept_profile_strip "$PROFILE"; printf 'stage2-core: profile kept: %s\n' "$PROFILE" >&2; fi
@@ -145,7 +145,9 @@ HARNESS_SRC=$(scripts/audio-harness.sh src-name) || die "the harness names no so
 HARNESS_DESC=$(harness_description "$HARNESS_SRC") || die "the audio graph could not be read"
 [ -n "$HARNESS_DESC" ] || die "the harness source $HARNESS_SRC is not in the graph"
 MIC_SEED="$HARNESS_DESC (input)"
-# Before the application starts, so the audio check's device list contains the tone sink's monitor.
+# Before the application starts, so the audio check's device list contains the tone sink's monitor. The
+# sink has this run's own name and is never made the default output (#266): `create` refuses the run if
+# the effective default moved once the sink existed.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/tone-sink.sh"
 tone_sink_create
 
@@ -180,8 +182,12 @@ fi
 say "seeded models from $CACHE; save_folder pinned to $PROFILE/rec"
 
 DRIVER_LOG="$PROFILE/tauri-driver.log"
+# The tone reaches its sink by name (#266): libpulse, and so GStreamer's `pulsesink`, reads `PULSE_SINK`,
+# and the pin ranks every other audio sink out, so `autoaudiosink` cannot choose one that follows the
+# person's default output.
 HOME="$PROFILE/home" XDG_CONFIG_HOME="$PROFILE/home/.config" \
   XDG_DATA_HOME="$PROFILE/home/.local/share" XDG_CACHE_HOME="$PROFILE/home/.cache" \
+  PULSE_SINK="$TONE_SINK_NAME" GST_PLUGIN_FEATURE_RANK="$TONE_GST_PIN" \
   setsid tauri-driver --port "$PORT" --native-port "$NATIVE_PORT" > "$DRIVER_LOG" 2>&1 &
 DRIVER_PID=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$PORT/status" && break; sleep 0.25; done
@@ -351,14 +357,14 @@ if [ ${#WORDS[@]} -gt 0 ]; then
   say "the decoded text holds $N distinct words of the sample: $(audio_check_field "$AUDIO_CHECK" decoded)"
 fi
 
-# --- the system row: the tone, pressed in the running application (#168, #173) ---------------------
+# --- the system row: the tone, pressed in the running application (#168, #173, #266) --------------
 #
-# The tone plays through the default output, which for this one press is `lib/tone-sink.sh`'s null
-# sink, so it never sounds in the person's speakers; the row listens on that sink's monitor. Until
-# #173 the AppImage had no GStreamer plugins, Web Audio had no output, and this press answered
-# `Nothing arrived`. The row's answer alone cannot say *what* arrived, because WirePlumber moves
-# streams already playing into a new default output; so the graph is sampled across the press
-# (`lib/tone-graph.py`) and every link into the sink must come from WebKit.
+# The tone plays into `lib/tone-sink.sh`'s null sink, by name, so it never sounds in the person's
+# speakers; the row listens on that sink's monitor. Until #173 the AppImage had no GStreamer plugins, Web
+# Audio had no output, and this press answered `Nothing arrived`. The row's answer alone cannot say *what*
+# arrived, so the graph is sampled across the press (`lib/tone-graph.py`) and every link into the sink must
+# come from WebKit. Until #266 the default output was moved to the sink for the press, and WirePlumber's
+# `follow` moved every stream without a target of its own in with it; now the default is never moved.
 STRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"The other side is heard through\"]"}')
 [ -n "$STRIG" ] || die "no system picker on the audio check"
 click "$STRIG" "the system picker"
@@ -369,28 +375,52 @@ click "$SOPT" "the tone sink's monitor"
 await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].find(b=>b.getAttribute('aria-label')==='The other side is heard through');return !!t&&t.textContent.indexOf('Backchannel tone sink')>=0;})()" \
       "the system picker to show the tone sink's monitor" 10
 
-GRAPH="$PROFILE/tone-graph.jsonl"
-# The driver's pid is the root of the application's process tree: a link counts as the tone only
-# from a WebKitWebProcess under it, not from any WebKitGTK program on the machine.
-python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH" &
+# **Before the press, in order, each failing closed and naming itself (#266).** No tone may reach the
+# real output: the route is checked on the application's own processes, on the graph, and with a silent
+# stream of the same web process before the tone plays.
+# - every WebKitWebProcess under the driver carries this run's PULSE_SINK and the pin;
+WEBENV=$(python3 -I scripts/lib/tone-graph.py webenv "$DRIVER_PID" "$TONE_SINK_NAME" "$TONE_GST_PIN") || die "before the press: $WEBENV"
+say "before the press: $WEBENV"
+# - the graph holds one node of the family, this run's;
+ONE=$(python3 -I scripts/lib/tone-graph.py one-sink "$TONE_SINK_FAMILY" "$TONE_SINK_ID" "$TONE_SINK_NAME") || die "before the press: $ONE"
+# - the effective default output is still the one read before the sink existed;
+tone_sink_guard_default
+# - the probe, a silent Web Audio context of the same web process, in a sampler file of its own: it
+#   starts, its stream enters the tone sink through `pulsesink` and nothing else, and it closes. The probe
+#   has no source, so it plays nothing. With TONE_SENTINEL_PID, the sampler also follows that process's
+#   streams (#266 item 5).
+PROBE_GRAPH="$PROFILE/probe-graph.jsonl"
+python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$PROBE_GRAPH" ${TONE_SENTINEL_PID:+--sentinel "$TONE_SENTINEL_PID"} &
 GRAPH_PID=$!
-tone_sink_make_default
-audio_check_press "The other side is heard through" "Play a tone and listen"
-kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
-
-# What Web Audio does here, after the press so the tone was the web process's first context: the
-# context's states and what `resume()` did. It is a check, not only a record: a context that does not
-# reach `running` here means the tone above did not play either, whatever the row said. It runs after
-# the sampler stops, so its own link cannot stand in for the tone's. It runs before the restore, so
-# its silent stream opens in the null sink, not in the person's headset.
 PROBE=$(python3 -c 'import json,sys; print(json.dumps({"script": open(sys.argv[1]).read(), "args": []}))' scripts/lib/web-audio-probe.js \
   | curl -s -m 20 -X POST "$BASE/execute/async" -H 'Content-Type: application/json' -d @- \
   | python3 -c 'import json,sys
 try: v = json.load(sys.stdin).get("value")
 except Exception: v = None
 print(v if isinstance(v, str) else "the probe did not answer: " + repr(v)[:200])')
+ANSWERED=$(python3 -I -c 'import time; print(time.monotonic())')
 say "Web Audio in this build: $PROBE"
-tone_sink_restore || die "the default output could not be put back; run 'bash scripts/lib/tone-sink.sh restore'"
+# On until a sample after the answer holds no link from our web process, for at most 5 s.
+for _ in $(seq 1 25); do python3 -I scripts/lib/tone-graph.py closed "$PROBE_GRAPH" "$ANSWERED" && break; sleep 0.2; done
+kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
+printf '%s' "$PROBE" | python3 -c 'import json,sys
+v = json.loads(sys.stdin.read())
+sys.exit(0 if v.get("final") == "running" and v.get("resume") == "resolved" else 1)' 2>/dev/null \
+  || die "before the press: Web Audio did not start, so nothing shows the route: $PROBE"
+ROUTE=$(python3 -I scripts/lib/tone-graph.py probe-judge "$PROBE_GRAPH" "$TONE_SINK_ID" "$ANSWERED") || die "before the press: the probe's route: $ROUTE"
+say "the probe's route: $ROUTE"
+
+# The tone's own sampler, in a second file. The press waits until it holds a sample, at most 5 s, so the
+# judge never races the first one.
+GRAPH="$PROFILE/tone-graph.jsonl"
+# The driver's pid is the root of the application's process tree: a link counts as the tone only
+# from a WebKitWebProcess under it, not from any WebKitGTK program on the machine.
+python3 -I scripts/lib/tone-graph.py watch "$TONE_SINK_ID" "$DRIVER_PID" "$GRAPH" ${TONE_SENTINEL_PID:+--sentinel "$TONE_SENTINEL_PID"} &
+GRAPH_PID=$!
+for _ in $(seq 1 25); do [ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] && break; sleep 0.2; done
+[ -n "$(head -c1 "$GRAPH" 2>/dev/null)" ] || die "before the press: the tone's sampler wrote no sample within 5 s"
+audio_check_press "The other side is heard through" "Play a tone and listen"
+kill -TERM "$GRAPH_PID" 2>/dev/null; wait "$GRAPH_PID" 2>/dev/null; GRAPH_PID=""
 
 # Every judgement is made before any of them fails the pass, so a red run shows all of them.
 TONE_FAILS=()
@@ -407,11 +437,7 @@ say "the system check: ${SYS_LINE:-no line in the log for the monitor of the ton
 case "$SYS_LINE" in *audio=true) ;; *) TONE_FAILS+=("the application heard no audio: '${SYS_LINE:-no line}'") ;; esac
 VERDICT=$(python3 -I scripts/lib/tone-graph.py judge "$GRAPH") || TONE_FAILS+=("the graph: $VERDICT")
 say "the tone sink, across the press: $VERDICT"
-printf '%s' "$PROBE" | python3 -c 'import json,sys
-v = json.loads(sys.stdin.read())
-sys.exit(0 if v.get("final") == "running" and v.get("resume") == "resolved" else 1)' 2>/dev/null \
-  || TONE_FAILS+=("Web Audio did not start: $PROBE")
-[ ${#TONE_FAILS[@]} -eq 0 ] || die "the tone did not play into the default output and reach its monitor: $(printf '%s | ' "${TONE_FAILS[@]}")"
+[ ${#TONE_FAILS[@]} -eq 0 ] || die "the tone did not play into the tone sink and reach its monitor: $(printf '%s | ' "${TONE_FAILS[@]}")"
 
 FIN=$(by_text "Continue"); [ -n "$FIN" ] || FIN=$(by_text "Finish"); [ -n "$FIN" ] || FIN=$(by_text "Done")
 [ -n "$FIN" ] || die "nothing finishes the audio check; buttons: $(js '"return [...document.querySelectorAll(\"button\")].map(b=>b.textContent.trim()).filter(Boolean).join(\" / \")"')"
