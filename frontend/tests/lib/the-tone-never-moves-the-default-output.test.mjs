@@ -30,6 +30,22 @@ const SCRIPTS = path.join(repo, 'scripts');
 const failures = [];
 const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${detail}`); };
 const lines = (rel) => fs.readFileSync(path.join(SCRIPTS, rel), 'utf8').split('\n').map((l, i) => ({ rel, n: i + 1, l, code: /^\s*#/.test(l) ? '' : l }));
+// A line with its quoted text emptied and its trailing comment cut: what bash runs as words. The rules that
+// must fail closed read this, not a pattern of where a word may sit (#266's gate adversary, round 5: every
+// pattern of positions missed a spelling, `if . lib; then` and a case arm among them).
+const bare = (l) => {
+  let out = ''; let q = null;
+  for (let i = 0; i < l.length; i++) {
+    const c = l[i];
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (q === '"') { if (c === '\\') { i++; continue; } if (c === '"') q = null; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(l[i - 1]))) break;
+    if (c === "'" || c === '"') { q = c; out += c + c; continue; }
+    out += c;
+  }
+  return out;
+};
+const WORD = (w) => new RegExp(`(^|[\\s;&|(){}!\`])(${w})(?=\\s|$|;|\\)|=)`);
 
 // --- (a) -----------------------------------------------------------------------------------------------
 
@@ -46,10 +62,17 @@ const resolve = (rel, arg) => {
     || /^"\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)\/([\w./-]+\.sh)"$/.exec(arg);
   return m ? path.posix.join(path.posix.dirname(rel), m[1]) : null;
 };
-const files = [PASS];
+// **Fail closed:** a line whose bare words hold `.` or `source` as a command word must be one the resolver reads
+// (round 5). And the harness's own sources are followed too: it runs as a process of its own, but a library it
+// sources is code the pass runs.
+const SOURCE_WORD = WORD('\\.|source');
+const files = [PASS, 'audio-harness.sh'];
 for (let i = 0; i < files.length; i++) {
-  for (const { n, code } of lines(files[i])) {
-    for (const m of code.matchAll(SOURCES)) {
+  for (const { n, l, code } of lines(files[i])) {
+    const found = [...code.matchAll(SOURCES)];
+    const bareSource = code && SOURCE_WORD.test(bare(l));
+    check('(a) every source word is a source the census reads', !bareSource || found.length > 0, `${files[i]}:${n}: \`${l.trim()}\` holds a source word the census does not follow`);
+    for (const m of found) {
       const target = resolve(files[i], m[1]);
       check('(a) every sourced file is resolved', target !== null, `${files[i]}:${n}: \`${code.trim()}\` sources something the census cannot read`);
       if (target && !files.includes(target)) files.push(target);
@@ -68,22 +91,25 @@ check('(a) the files the pass sources', ['lib/tone-sink.sh', 'lib/harness-guard.
 const EXEMPT = { 'lib/tone-sink.sh': 'tone_sink_put_back' };
 const queue = [];
 const exempt = [];
-for (const rel of [...files, 'audio-harness.sh']) {
-  let inExempt = false; let guard = false;
+for (const rel of files) {
+  let inExempt = false; let guard = false; let depth = 0;
   for (const line of lines(rel)) {
     if (EXEMPT[rel] && new RegExp(`^${EXEMPT[rel]}\\(\\)\\s*\\{`).test(line.code)) { inExempt = true; exempt.push(line); continue; }
     if (inExempt) {
       // A definition inside it means its end was not found, and whatever it swallowed went unread.
-      const inner = /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\(\)\s*\{)/.test(line.code);
+      const inner = /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w:-]*\s*\(\s*\))/.test(line.code);
       check('(a) the exempt function closes before the next definition', !inner, `${rel}:${line.n}: a definition inside ${EXEMPT[rel]}(), so its end was not found`);
       if (inner) { inExempt = false; queue.push(line); continue; }
-      exempt.push(line); if (/^\s*\}\s*$/.test(line.code) || /;\s*\}\s*$/.test(line.code)) inExempt = false; continue;
+      exempt.push(line); if (/^\s*\}\s*(#.*)?$/.test(line.code) || /;\s*\}\s*(#.*)?$/.test(line.code)) inExempt = false; continue;
     }
-    if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then\s*$/.test(line.code)) { guard = true; continue; }
+    if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then\s*$/.test(line.code)) { guard = true; depth = 1; continue; }
     if (guard) {
-      // Its `else` would run when the file is sourced, unread (round 4's R1).
-      check('(a) a direct-run block has no else', !/^(else|elif)\b/.test(line.code), `${rel}:${line.n}: \`${line.code.trim()}\` in the direct-run block runs when the file is sourced`);
-      if (/^fi\s*$/.test(line.code)) guard = false; continue;
+      // Its own `else`, at any indent, would run when the file is sourced, unread (rounds 4 and 5). Depth is
+      // tracked so the `if`s nested inside it keep theirs.
+      const words = bare(line.l);
+      if (depth === 1) check('(a) a direct-run block has no else', !/^\s*(else|elif)\b/.test(words), `${rel}:${line.n}: \`${line.code.trim()}\` in the direct-run block runs when the file is sourced`);
+      depth += (words.match(/(^|[\s;&|])if(?=\s)/g) || []).length - (words.match(/(^|[\s;&|])fi(?=\s|$|;)/g) || []).length;
+      if (depth === 0) guard = false; continue;
     }
     queue.push(line);
   }
@@ -178,7 +204,8 @@ if (first !== null && press !== null) {
 // **One press, inside `tone_press`.** The tone's button is named on one line among everything read, and that
 // line is in the body of the pass's one `tone_press`, which refuses without the four stamps. A second press
 // above the checks was invisible to a census that matched one spelling (round 3).
-const PRESS_TEXT = /Play a tone and listen/;
+// Any spelling of the button's start: round 5 found an XPath `starts-with(…,"Play a tone")` click.
+const PRESS_TEXT = /Play a tone/i;
 const presses = queue.filter(({ code }) => PRESS_TEXT.test(code));
 const body = (() => {
   const start = passLines.find(({ code }) => /^tone_press\(\)\s*\{/.test(code));
@@ -194,20 +221,38 @@ check('(a\') tone_press refuses without the stamps', !!body && passLines.some(({
 // **No function is defined twice, none with a builtin's name, and no alias.** Redefining the guard, `die` or
 // `exit` above the checks, or aliasing one, kept round 2's census green (round 3). The pass and the
 // libraries it sources share one shell; `audio-harness.sh` runs in its own and is left out.
-const DEF = /(?:^\s*|[;&|{]\s*|\b(?:then|else|do)\s+)(?:function\s+([^\s(){}]+)|([A-Za-z_][\w.:-]*)\s*\(\s*\)\s*\{)/;
+// A definition is `name()` anywhere in a line's bare words, whatever follows it: a brace on the next line, a body
+// in `( … )`, a compound command (round 5). Names starting with `[`, `.` or `:` are caught too.
+const DEF = /(?:^|[\s;&|(){}!`])(?:function\s+([^\s(){}]+)|([A-Za-z_][\w:-]*|\[|\.|:)\s*\(\s*\))/g;
 const shared = queue.filter(({ rel }) => rel !== 'audio-harness.sh');
 const defined = new Map();
-for (const { rel, n, code } of shared) {
-  const m = DEF.exec(code);
-  if (m) { const name = m[1] ?? m[2]; defined.set(name, [...(defined.get(name) ?? []), `${rel}:${n}`]); }
+for (const { rel, n, l, code } of queue) {
+  if (!code) continue;
+  for (const m of bare(l).matchAll(DEF)) {
+    const name = m[1] ?? m[2];
+    const key = rel === 'audio-harness.sh' ? `audio-harness.sh:${name}` : name;
+    defined.set(key, [...(defined.get(key) ?? []), `${rel}:${n}`]);
+  }
 }
 const twice = [...defined].filter(([, at]) => at.length > 1);
 check('(a\') no function is defined twice', twice.length === 0, twice.map(([name, at]) => `${name} at ${at.join(', ')}`).join('; '));
 const BUILTINS = ['exit', 'return', 'builtin', 'command', 'source', '.', 'eval', 'exec', 'set', 'shopt', 'trap', 'alias', 'unalias', 'enable', 'printf', 'echo', 'read', 'test', '[', 'kill', 'wait', 'sleep', 'mkdir', 'python3', 'curl', 'cat', 'true', 'false', ':'];
-const shadows = [...defined.keys()].filter((name) => BUILTINS.includes(name));
-check('(a\') no function has a builtin\'s name', shadows.length === 0, shadows.map((name) => `${name} at ${defined.get(name).join(', ')}`).join('; '));
-const aliases = queue.filter(({ code }) => /(^|[;&|(]\s*)(builtin\s+)?(alias|unalias)\s|expand_aliases|\benable\s+-n\b|\bhash\s+-p\b/.test(code));
-check('(a\') no alias is made', aliases.length === 0, aliases.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('; '));
+const shadows = [...defined.keys()].map((k) => k.replace(/^audio-harness\.sh:/, '')).filter((name) => BUILTINS.includes(name));
+check('(a\') no function has a builtin\'s name', shadows.length === 0, shadows.map((name) => `${name} at ${(defined.get(name) ?? defined.get(`audio-harness.sh:${name}`)).join(', ')}`).join('; '));
+// **Words that change what a command means are known lines, at any indent** (round 5: an indented `alias`, an
+// `extdebug` DEBUG trap and `set -o posix` each skipped `return 1`). Fail closed, as the known reads are.
+const RISKY = WORD('eval|alias|unalias|trap|enable|hash|shopt|set\\s+-o\\s+posix|set\\s+-T|set\\s+-o\\s+functrace|POSIXLY_CORRECT|extdebug|BASH_ENV|ENV');
+const KNOWN_RISKY = {
+  [PASS]: ["trap '' INT TERM", 'trap - INT TERM', 'trap cleanup EXIT'],
+  'audio-harness.sh': ["trap 'if [ \"$UP_COMPLETED\" != 1 ]; then note \"bringing the machine back after a failed up\"; cmd_down >/dev/null 2>&1 || true; fi' EXIT"],
+};
+const risky = queue.filter(({ rel, l, code }) => code && RISKY.test(bare(l)) && !(KNOWN_RISKY[rel] ?? []).includes(l.trim()));
+check('(a\') no alias is made', risky.length === 0, `lines with eval, alias, trap, shopt, hash, enable or posix mode that are not known lines: ${risky.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; ')}`);
+const staleRisky = Object.entries(KNOWN_RISKY).flatMap(([rel, list]) => list.filter((t) => !queue.some((x) => x.rel === rel && x.l.trim() === t)).map((t) => `${rel}: ${t}`));
+check('(a\') every known trap line is still there', staleRisky.length === 0, JSON.stringify(staleRisky));
+// `restore` runs the exempt put-back and destroys every sink of the family: nothing read runs it (round 5).
+const restores = queue.filter(({ l, code }) => code && /(^|[\s;&|(){}!`])(bash\s+|sh\s+)?\S*tone-sink\.sh\s+restore\b/.test(bare(l).replace(/""/g, '')));
+check('(a\') nothing read runs tone-sink.sh restore', restores.length === 0, restores.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
 // Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
 // "command not found" the run went past; `eval` defines what no pattern reads).
 const unmake = shared.filter(({ code }) => /(^|[;&|({!]\s*|\b(?:then|else|do)\s+)(builtin\s+|command\s+)?(unset\s+-\w*f|eval\b)/.test(code) || /\bunset\b[^#]*\b(die|say|exit|tone_press|tone_sink_guard_default|audio_check_press)\b/.test(code));
@@ -247,10 +292,10 @@ const guardBody = (() => {
   const end = start && ls.find(({ n, code }) => n > start.n && /^\}\s*$/.test(code));
   return start && end ? [start.n, end.n] : null;
 })();
-const stampCalls = queue.filter(({ code }) => /(tone-graph\.py|\$TONE_GRAPH)"?\s+stamp\s/.test(code));
+const stampCalls = queue.filter(({ code }) => /(tone-graph\.py|\$\{?TONE_GRAPH\}?)"?\s+stamp\s/.test(code));
 check('(a\') only the guard stamps from the shell', !!guardBody && stampCalls.length === 1 && stampCalls[0].rel === 'lib/tone-sink.sh' && stampCalls[0].n > guardBody[0] && stampCalls[0].n < guardBody[1],
   `lines that run tone-graph.py stamp: ${stampCalls.map(({ rel, n }) => `${rel}:${n}`).join(', ') || 'none'}`);
-const stampLines = queue.filter(({ code }) => /\$\{?STAMPS\b/.test(code));
+const stampLines = queue.filter(({ code }) => /\$\{?STAMPS\b|before-press/.test(code));
 const STAMP_STEPS = SEQUENCE.filter(([what]) => ['the stamp directory, in the run\'s profile', 'the web processes', 'one node of the family', 'the default, again', 'the probe\'s route', 'the press', 'the judge, with the four stamps'].includes(what)).map(([, re]) => re);
 const strayStamps = stampLines.filter(({ rel, code }) => rel !== PASS || !STAMP_STEPS.some((re) => re.test(code)));
 check('(a\') only the seven known lines name the stamp directory', strayStamps.length === 0 && stampLines.length === 7,
