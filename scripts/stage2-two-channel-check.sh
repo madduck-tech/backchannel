@@ -72,6 +72,8 @@ WORDS_B=(${BC_WORDS_B:-connect dots})
 
 say() { printf 'stage2-two-channel: %s\n' "$*"; }
 die() { printf 'stage2-two-channel: %s\n' "$*" >&2; exit 1; }
+# The sink pick and the default-output refusal, through the shared reader (#320).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/graph-reads.sh"
 
 command -v tauri-driver >/dev/null || die "tauri-driver is not installed: cargo install tauri-driver --locked"
 [ -x /usr/bin/WebKitWebDriver ] || die "WebKitWebDriver is not installed: apt install webkit2gtk-driver"
@@ -101,17 +103,8 @@ if [ "$MODE" = changed ]; then
   # The sinks are made after `trap cleanup EXIT`, below, so a failure making B still removes A.
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/gate-sinks.sh"
 else
-  read -r TARGET_SINK TARGET_DESC <<<"$(pw-dump | python3 -c '
-import json, sys
-sinks = []
-for o in json.load(sys.stdin):
-    p = (o.get("info") or {}).get("props") or {}
-    if p.get("media.class") == "Audio/Sink" and not (p.get("node.name") or "").startswith("backchannel_harness"):
-        sinks.append((p.get("node.name"), p.get("node.description", "")))
-speaker = next((s for s in sinks if "Speaker" in s[1]), None) or (sinks[0] if sinks else None)
-print(speaker[0], "|".join(speaker[1].split()) if speaker else "")')"
-  [ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
-  PICK="Monitor of ${TARGET_DESC//|/ }"
+  pick_two_channel_sink
+  PICK="Monitor of $TARGET_DESC"
   # These modes play into a real sink and record its monitor (#30), so a profile of theirs can hold
   # whatever else played there. It is never kept, passed or not.
   REAL_OUTPUT_RECORDED=1
@@ -311,35 +304,7 @@ except Exception: print("")')
   [ "$answer" = RESOLVED ] || fail_or_record "$2 was refused: '${answer:-<no answer>}'"
 }
 
-# What plays on the default output, by application, or why that cannot be read. A start in `changed`
-# mode that opened the default output's monitor, by design in step f or by a defect before it, records
-# everything listed here; so each start refuses to run while it is not empty. A graph with no default
-# sink fails closed: nothing can be shown silent there.
-default_output_players() {
-  pw-dump | python3 -c 'import json,sys
-d=json.load(sys.stdin); nodes={o["id"]:o for o in d if o.get("type","").endswith("Node")}
-sink=None
-for o in d:
-    if o.get("type","").endswith("Metadata") and ((o.get("props") or {}).get("metadata.name")=="default"):
-        for m in o.get("metadata") or []:
-            if m.get("key")=="default.audio.sink": sink=(m.get("value") or {}).get("name")
-sid=next((i for i,o in nodes.items() if ((o.get("info") or {}).get("props") or {}).get("node.name")==sink), None)
-if sid is None:
-    print("(no default sink in the graph, so nothing shows it silent)"); sys.exit()
-out=[]
-for o in d:
-    if o.get("type","").endswith("Link"):
-        inf=o.get("info") or {}
-        if inf.get("input-node-id")==sid:
-            p=((nodes.get(inf.get("output-node-id")) or {}).get("info") or {}).get("props") or {}
-            if str(p.get("media.class","")).startswith("Stream/Output"): out.append(p.get("application.name") or p.get("node.name") or "?")
-print(", ".join(sorted(set(out))))' || echo "(the graph could not be read)"
-}
-refuse_if_the_default_output_plays() {  # <which start>
-  local playing
-  playing=$(default_output_players)
-  [ -z "$playing" ] || die "something plays on the default output ($playing); $1 could record it, so the pass refuses to make it"
-}
+# `refuse_if_the_default_output_plays <which start>` is in `lib/graph-reads.sh`, with its reader (#320).
 
 # --- pick the system-audio monitor through the dropdown ----------------------------------
 S=$(by_text "Settings"); [ -n "$S" ] || die "no Settings button"

@@ -38,10 +38,10 @@
 #
 # One thing the descriptions do NOT do: survive. Measured 2026-09-05 -- `up` passes
 # `node.description=Backchannel harness microphone` for the source and
-# `node.description=Backchannel harness sink` for the sink, and `pw-dump` reports
+# `node.description=Backchannel harness sink` for the sink, and pw-dump reports
 # `Backchannel` for both. The application shows and logs the description, so anything
 # asserting on the string this script asks for will not match what the graph gives out.
-# Read it back from `pw-dump` instead.
+# Read it back from pw-dump instead.
 #
 # It needs a live PipeWire session, so it does not run in CI. That is why the audio half
 # of the gate is local-only; see gopnik.json.
@@ -79,7 +79,7 @@ require_tools() {
 }
 
 # Nodes matching one of our names, as "id name" lines. Read through `lib/capture-graph.py`, which reads a
-# split `pw-dump` (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).
+# split pw-dump (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).
 GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/capture-graph.py"
 harness_nodes() {
   python3 -I "$GRAPH" nodes 2>/dev/null | awk -F'\t' -v fam="$SRC_FAMILY" -v a="$SINK_NAME" -v b="$SYS_SINK_NAME" -v c="$SYS_SRC_NAME" '
@@ -219,7 +219,7 @@ cmd_up() {
     echo $! > "$STATE_DIR/loopback-system.pid"
 
     waited=0
-    # Not `pw-dump | grep -q`: grep -q closes the pipe on its first match, pw-dump takes
+    # Not pw-dump piped to grep -q: grep -q closes the pipe on its first match, pw-dump takes
     # SIGPIPE, and `set -o pipefail` then reports the pipeline as failed — so the wait
     # would spin exactly when the node had appeared. grep without -q drains its input.
     until [ -n "$(harness_nodes 2>/dev/null | grep "$SYS_SRC_NAME" || true)" ]; do

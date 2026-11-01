@@ -24,6 +24,10 @@ samples the graph every 250 ms and records, for each sample:
   person's microphone.
 
     capture-graph.py nodes                                      every node: id, name, media.class, description, tab-separated
+    capture-graph.py default-output                             `sink<TAB><name>` for the node `default.audio.sink` names,
+                                                                or nothing when the key is absent or names no node; then
+                                                                `playing<TAB><application>` for every Stream/Output*
+                                                                linked into it
     capture-graph.py app-linked <source> [<root-pid>]           exit 0 when an active link from <source> reaches a
                                                                 `cpal-pulseaudio-*` capture whose process descends
                                                                 from <root-pid>
@@ -34,7 +38,7 @@ samples the graph every 250 ms and records, for each sample:
     capture-graph.py check <out.jsonl> [--system NAME]... [--system-default-sink] [--recording]
                                                                 #293 item 2, exit 1 on any violation
 
-`nodes` and `app-linked` are the graph reads the gate scripts share, so that each reads a split dump (below)
+`nodes`, `default-output` and `app-linked` are the graph reads the gate scripts share, so that each reads a split dump (below)
 the same way; any `pw-dump` failure exits non-zero, never as an empty graph.
 
 `check` holds, in every sample: the recorder is linked from that sample's effective default and nothing
@@ -72,7 +76,7 @@ ENDED_GRACE = 1.0
 
 
 def dump():
-    # `pw-dump` can print a second array when the graph changes while it reads: 8 of 688 samples on
+    # `pw-dump` can print a second array when the graph changes while it reads: 8 of 696 reads on
     # 2026-10-31. Later arrays are updates, and an object whose `info` is null is gone. Not
     # `tone-graph.py`'s reader, which keys removal on `info` and so drops every metadata object.
     text = subprocess.run(['pw-dump'], capture_output=True, text=True, timeout=10, check=True).stdout
@@ -165,6 +169,25 @@ def cmd_nodes():
         if str(o.get('type', '')).endswith('Node'):
             p = tg.props(o)
             print('\t'.join(str(x or '').replace('\t', ' ') for x in (o.get('id'), p.get('node.name'), p.get('media.class'), p.get('node.description'))))
+
+
+def cmd_default_output():
+    objs = dump()
+    nodes = {o.get('id'): o for o in objs if str(o.get('type', '')).endswith('Node')}
+    sink = defaults(objs).get('default.audio.sink')
+    sid = next((i for i, o in nodes.items() if sink and tg.props(o).get('node.name') == sink), None)
+    if sid is None:
+        return
+    print(f'sink\t{sink}')
+    playing = set()
+    for l in (o for o in objs if str(o.get('type', '')).endswith('Link')):
+        i = l.get('info') or {}
+        if i.get('input-node-id') == sid:
+            p = tg.props(nodes.get(i.get('output-node-id')) or {})
+            if str(p.get('media.class', '')).startswith('Stream/Output'):
+                playing.add(p.get('application.name') or p.get('node.name') or '?')
+    for name in sorted(playing):
+        print(f'playing\t{name}')
 
 
 def cmd_app_linked(source, root):
@@ -312,6 +335,8 @@ if __name__ == '__main__':
         sys.exit(cmd_check(a[1], systems, '--system-default-sink' in a, '--recording' in a))
     elif a[:1] == ['nodes']:
         cmd_nodes()
+    elif a[:1] == ['default-output']:
+        cmd_default_output()
     elif a[:1] == ['app-linked']:
         sys.exit(cmd_app_linked(a[1], int(a[2]) if len(a) > 2 else None))
     else:

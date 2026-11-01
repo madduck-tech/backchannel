@@ -150,7 +150,7 @@ MIC_SEED="$HARNESS_DESC (input)"
 tone_sink_create
 
 # The system side is the harness's own sink, so nothing from the machine's speakers is recorded.
-# Through the shared reader: one `json.load` of a split `pw-dump` failed entry 27 on 2026-10-31.
+# Through the shared reader: one `json.load` of a split pw-dump failed entry 27 on 2026-10-31.
 SINK_DESC=$(harness_description backchannel_harness_sink) || die "the audio graph could not be read"
 [ -n "$SINK_DESC" ] || die "the harness sink is not in the graph after a successful 'up'"
 PICK="Monitor of $SINK_DESC"

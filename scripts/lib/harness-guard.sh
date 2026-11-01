@@ -19,17 +19,20 @@
 #                                                         save folders under the profile's HOME included,
 #                                                         and so does the database their transcripts are in
 #
-# The graph is read through `capture-graph.py`, which reads a split `pw-dump` (two arrays, 8 samples in
-# 688 on 2026-10-31) as one graph and fails on an unreadable one.
+# The graph is read through `capture-graph.py`, which reads a split pw-dump (two arrays, 8 of 696 reads
+# on 2026-10-31) as one graph and fails on an unreadable one.
 
 HARNESS_GUARD_GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capture-graph.py"
 
 # The description PipeWire reports for the node named <src>, or nothing; non-zero on an unreadable graph.
 # pw-loopback keeps only `Backchannel` of the one the harness asks for, so it is read, never assumed.
+# awk reads every row rather than exiting on the first: under `pipefail`, `printf | awk '…; exit'` returned
+# 141 with the description in hand once the rows outgrew the pipe (#320's gate adversary, measured at
+# 315 KB), and a caller read that as an unreadable graph.
 harness_description() {
   local nodes
   nodes=$(python3 -I "$HARNESS_GUARD_GRAPH" nodes 2>/dev/null) || return 1
-  printf '%s\n' "$nodes" | awk -F'\t' -v n="$1" '$2 == n { print $4; exit }'
+  awk -F'\t' -v n="$1" '$2 == n && !f { print $4; f = 1 }' <<<"$nodes"
 }
 
 harness_effective_source() {

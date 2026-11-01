@@ -9,7 +9,9 @@
 // Each case below breaks one condition of an input the guard accepts, and requires the guard to refuse it
 // with that condition's own message, so a case cannot pass by failing for another reason. The shims keep
 // the graph in a JSON file: the effective default input, the nodes, and the links. With `splitDump`,
-// `pw-dump` prints the graph and then a second, empty array, as it did in 8 of 688 samples on 2026-10-31.
+// `pw-dump` prints the graph and then a second, empty array. Of the 8 split reads in 696 on 2026-10-31, 6
+// began with the graph and 2 with a 44-character array, a removal record by its length; what followed
+// either was not kept.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
