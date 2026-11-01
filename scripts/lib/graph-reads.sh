@@ -16,25 +16,37 @@
 
 GR_GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capture-graph.py"
 
-# The reader's own last line is kept in the words: a timeout, a truncated dump and a reader bug must not
-# read the same (#320's gate adversary). `-W ignore` keeps a successful read's stderr empty, so the reads
-# below can take stderr with stdout.
-gr__unreadable() {  # <so what> <the reader's output>
-  local why=${2##*$'\n'}
+gr__unreadable() {  # <so what> [the reader's last line]
+  local why=${2-}
   die "the audio graph could not be read (${why:-capture-graph.py failed}), so $1"
+}
+
+# A read through the shared reader: its stdout into the variable named first, its status returned, and the
+# last line of its stderr in GR_WHY, so a timeout, a truncated dump and a reader bug do not read the same.
+# Stderr is kept apart from the answer: taken with it, a line the loader or a wrapper wrote on a read that
+# succeeded became the default sink's name, and the refusal went ahead on a graph with no default sink
+# (#320's gate adversary, round 2).
+gr__read() {  # <variable> <capture-graph.py command>
+  local err rc=0 got
+  err=$(mktemp "${TMPDIR:-/tmp}/graph-reads.XXXXXX") || { GR_WHY="could not make a temporary file"; return 1; }
+  got=$(python3 -I "$GR_GRAPH" "$2" 2>"$err") || rc=$?
+  GR_WHY=$(tail -n 1 "$err")
+  rm -f "$err"
+  printf -v "$1" '%s' "$got"
+  return "$rc"
 }
 
 # The rule both picks kept from 133d100 (two-channel :109-111, ui-record :66-69), over `nodes`' rows: the
 # Audio/Sink rows in graph order, two-channel's without `backchannel_harness*`; the first whose description
-# contains `Speaker`, else the first; and for ui-record, the first other sink by name. The description's
-# whitespace is collapsed and trimmed, as 133d100's `read` did, since `PICK` is matched with XPath's
-# `normalize-space()` (two-channel :354, ui-record :185).
+# contains `Speaker`, else the first; and for ui-record, the first other sink by name. Runs of spaces, tabs
+# and carriage returns in the description are collapsed and trimmed, as 133d100's Python `str.split()` did
+# for them, since `PICK` is matched with XPath's `normalize-space()` (two-channel :354, ui-record :185).
 gr__pick() {  # <nodes> <skip-harness|all>
   local row
   TARGET_SINK=""; TARGET_DESC=""; OTHER_SINK=""
   row=$(printf '%s\n' "$1" | awk -F'\t' -v skip="$2" '
     $3 == "Audio/Sink" && !(skip == "skip-harness" && index($2, "backchannel_harness") == 1) {
-      d = $4; gsub(/[ \t]+/, " ", d); sub(/^ /, "", d); sub(/ $/, "", d)
+      d = $4; gsub(/[ \t\r]+/, " ", d); sub(/^ /, "", d); sub(/ $/, "", d)
       n++; name[n] = $2; desc[n] = d
     }
     END {
@@ -52,7 +64,7 @@ gr__pick() {  # <nodes> <skip-harness|all>
 
 pick_two_channel_sink() {
   local nodes
-  if ! nodes=$(python3 -I -W ignore "$GR_GRAPH" nodes 2>&1); then gr__unreadable "no sink can be picked" "$nodes"; fi
+  if ! gr__read nodes nodes; then gr__unreadable "no sink can be picked" "$GR_WHY"; fi
   gr__pick "$nodes" skip-harness
   OTHER_SINK=""
   [ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
@@ -60,7 +72,7 @@ pick_two_channel_sink() {
 
 pick_ui_record_sink() {
   local nodes
-  if ! nodes=$(python3 -I -W ignore "$GR_GRAPH" nodes 2>&1); then gr__unreadable "no sink can be picked" "$nodes"; fi
+  if ! gr__read nodes nodes; then gr__unreadable "no sink can be picked" "$GR_WHY"; fi
   gr__pick "$nodes" all
   [ -n "$TARGET_SINK" ] || die "no Audio/Sink to target"
 }
@@ -71,8 +83,8 @@ pick_ui_record_sink() {
 # be shown silent there (133d100:329-331).
 refuse_if_the_default_output_plays() {  # <which start>
   local out sink playing=""
-  if ! out=$(python3 -I -W ignore "$GR_GRAPH" default-output 2>&1); then
-    gr__unreadable "nothing shows the default output silent; $1 is not made" "$out"
+  if ! gr__read out default-output; then
+    gr__unreadable "nothing shows the default output silent; $1 is not made" "$GR_WHY"
   fi
   sink=${out%%$'\n'*}
   [ -n "$sink" ] || die "no default output sink is in the graph, so nothing shows it silent; $1 is not made"
