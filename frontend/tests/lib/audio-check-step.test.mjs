@@ -519,6 +519,7 @@ for (const resumeRejects of [true, false]) {
   assert.ok(/^use crate::audio::devices::\{[^}]*\bdefault_input_device\b(?!\s+as\b)[^}]*\};/m.test(code(command)) && !/\bas\s+default_input_device\b/.test(code(command)),
     '#299 4: default_input_device is the devices module\'s, imported under its own name');
   assert.ok(!/\blet\s+(mut\s+)?system\b/.test(body), '#299 4: the command does not rebind the row it was asked to check');
+  assert.ok(!/\blet\s+(mut\s+)?default_input_device\b/.test(body), '#299 4: nor the lookup it passes');
   // A literal, not the type's declaration or a return type.
   const nonTest = code(command).slice(0, code(command).indexOf('#[cfg(test)]'));
   const literals = nonTest.match(/(?<!struct |-> )DeviceCheck\s*\{/g) ?? [];
@@ -608,14 +609,6 @@ async function keep({ platform = 'linux', stored = null, answers = [], holdWrite
         completeOnboarding: async () => { seen.completed += 1; seen.order.push('complete'); },
       }),
     },
-    '../OnboardingContainer': {
-      // The step's own title, description and step number are on screen too: a sentence added to the
-      // description is the likeliest way to tell the person, and condition 6 must see it.
-      OnboardingContainer: ({ children, footer, title, description, step }) =>
-        React.createElement('div', null,
-          React.createElement('h1', null, title), React.createElement('p', null, description), React.createElement('span', null, `step ${step}`),
-          children, React.createElement('footer', null, footer)),
-    },
     '@tauri-apps/api/core': {
       invoke: async (cmd, args) => {
         calls.push({ cmd, args: args === undefined ? undefined : structuredClone(args) });
@@ -637,13 +630,27 @@ async function keep({ platform = 'linux', stored = null, answers = [], holdWrite
       },
     },
   });
+  // A Web Audio stand-in of this section's own, running, so the system row's check does not depend on
+  // what an earlier section left on window.
+  window.AudioContext = class {
+    constructor() { this.state = 'running'; }
+    resume() { return Promise.resolve(); }
+    createOscillator() { return { frequency: {}, connect: (n) => n, start: () => {}, stop: () => {} }; }
+    createGain() { return { gain: {}, connect: () => this.destination }; }
+    get destination() { return {}; }
+    async close() { this.state = 'closed'; }
+  };
+  // The real OnboardingContainer, so the step's title, description and step strip are on screen as in
+  // the product. What renders outside the container -- a dialog, a popover -- is read separately.
+  const before = new Set(document.body.children);
   const container = document.createElement('div');
   document.body.appendChild(container);
   await act(async () => { createRoot(container).render(React.createElement(AudioCheckStep, null)); });
+  const outside = () => [...document.body.children].filter((e) => !before.has(e) && e !== container).map((e) => e.textContent).join('');
   // The platform is read in an effect, from a dynamic import.
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   const writes = () => calls.filter((c) => c.cmd === 'set_recording_preferences').map((c) => c.args.preferences);
-  return { container, calls, seen, writes };
+  return { container, calls, seen, writes, outside };
 }
 // The picker as a person uses it: open the trigger, press the option. Radix opens on a click that is
 // not a mouse's pointerdown, and selects on a click likewise; the options render in a portal. Not
@@ -816,8 +823,8 @@ for (const platform of ['linux', 'macos']) {
 
 // --- #299 condition 6: nothing on screen changes (ADR 0023) ----------------------------------------
 //
-// The step's text, button labels and aria-labels in six states, against a literal captured at `main`
-// (`133d100`) by this same function. The first four exist there; after Continue with the write held,
+// The step's text, button labels and aria-labels in six states, inside the real OnboardingContainer,
+// against a literal captured at `main` (`133d100`) by this same function. The first four exist there; after Continue with the write held,
 // and after it rejected, Continue only disables the buttons, so both compare with the after-words state.
 const screenOf = (c) => ({
   text: c.textContent,
@@ -825,10 +832,10 @@ const screenOf = (c) => ({
   labels: [...c.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')),
 });
 const SCREENS = {
-  idle: {"text": "Check your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.step 4MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
-  words: {"text": "Check your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.step 4MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingHeard: testing one twoThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
-  silent: {"text": "Check your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.step 4MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingNothing arrived. This device is open but silent — pick another.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
-  nowords: {"text": "Check your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.step 4MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingAudio arrived, but nothing came back as words.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Microphone", "The other side is heard through"]},
+  idle: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"]},
+  words: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingHeard: testing one twoThe other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"]},
+  silent: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingNothing arrived. This device is open but silent — pick another.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"]},
+  nowords: {"text": "1Transcription2Summariser3Download4Audio checkCheck your audioTwo devices carry a meeting: your microphone, and whatever the other side is heard through. This proves each one with words, not a moving bar.MicrophoneHeadset MicrophonePress check and say a sentence. The words come back only if this is the device that heard you.Check by speakingAudio arrived, but nothing came back as words.The other side is heard throughSpeakers MonitorThe app plays a tone through your speakers. This device should hear it — if it cannot, it is not a monitor of your output.Play a tone and listenContinueSkip thisSkipping is safe: if you set nothing here the app uses your system defaults.", "buttons": ["Headset Microphone", "Check by speaking", "Speakers Monitor", "Play a tone and listen", "Continue", "Skip this"], "labels": ["Setup steps", "Microphone", "The other side is heard through"]},
 };
 // Read half a second after each press, so a line rendered a moment later is seen too.
 const later = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
@@ -837,11 +844,13 @@ for (const platform of ['linux', 'macos']) {
   const idle = await keep({ platform });
   await later();
   states.idle = screenOf(idle.container);
+  holds(idle.outside() === '', `#299 6: nothing renders outside the step, idle (${platform}): ${idle.outside()}`);
   for (const [k, a] of [['words', 'words'], ['silent', 'silent'], ['nowords', 'nowords']]) {
-    const { container } = await keep({ platform, answers: [a] });
-    await checkMic(container);
+    const one = await keep({ platform, answers: [a] });
+    await checkMic(one.container);
     await later();
-    states[k] = screenOf(container);
+    states[k] = screenOf(one.container);
+    holds(one.outside() === '', `#299 6: nothing renders outside the step, ${k} (${platform}): ${one.outside()}`);
   }
   if (process.env.PRINT_SCREENS && platform === 'linux') console.log(JSON.stringify(states));
   for (const k of Object.keys(SCREENS)) same(states[k], SCREENS[k], `#299 6: the ${k} screen changed (${platform})`);
@@ -863,9 +872,14 @@ for (const platform of ['linux', 'macos']) {
     const held = await keep({ platform, holdWrite });
     await checkMic(held.container);
     await finish(held.container, 'Continue');
-    await later();
-    same(held.seen.order.includes('write') && finished(held.seen, platform) === 0, true, `#299 6: the sentinel: the write is held (${platform})`);
-    same(screenOf(held.container), SCREENS.words, `#299 6: Continue with the write held shows nothing new (${platform})`);
+    // Half a second into the hold, and three seconds: a line shown only once a write is slow is one of
+    // these.
+    for (const [at, wait] of [['0.5 s', 500], ['3 s', 2500]]) {
+      await act(async () => { await new Promise((r) => setTimeout(r, wait)); });
+      same(held.seen.order.includes('write') && finished(held.seen, platform) === 0, true, `#299 6: the sentinel: the write is held at ${at} (${platform})`);
+      same(screenOf(held.container), SCREENS.words, `#299 6: Continue with the write held shows nothing new at ${at} (${platform})`);
+      holds(held.outside() === '', `#299 6: nothing renders outside the step with the write held at ${at} (${platform}): ${held.outside()}`);
+    }
     await act(async () => { release(); await holdWrite; });
   }
   const rejected = await keep({ rejectWrite: true });

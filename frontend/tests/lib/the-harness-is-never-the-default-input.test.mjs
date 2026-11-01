@@ -97,8 +97,11 @@ function statements(src) {
 }
 function seedOf(name) {
   const src = sources.get(name);
-  // The statement that writes the store by redirection: a read of it, or `checked`'s override, is not the seed.
-  const writes = statements(src).filter((s) => />\s*"\$(APPDATA|store)\/recording_preferences\.json"/.test(s.text) && /preferred_mic_device/.test(s.text));
+  // Any statement that names the store and the key: a second write of the record pass's seed, by any
+  // means, is a second statement. In the core pass alone the seed is the write by redirection: its other
+  // statements naming both -- `checked`'s override and the check before Start -- are each held by 3f.
+  const writes = statements(src).filter((s) => /recording_preferences\.json"/.test(s.text) && /preferred_mic_device/.test(s.text)
+    && (name !== 'stage2-core-check.sh' || />\s*"\$APPDATA\/recording_preferences\.json"/.test(s.text)));
   const assigns = code(src).filter(({ line }) => /^\s*MIC_SEED=/.test(line)).map(({ line }) => line.trim());
   return { writes, assigns };
 }
@@ -137,13 +140,20 @@ check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writ
   ];
   const which = named.map(({ l }) => kinds.find(([, re]) => re.test(l))?.[0] ?? `unknown: ${l.trim()}`);
   const override = named.find((_, k) => which[k] === 'override');
-  const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^(if|elif|else|fi)\b/.test(l)) : undefined;
+  // The nearest if, elif, else or fi above it, at any indentation, is the checked branch's opener; and the
+  // statement opens on a line of its own, with nothing in front of `python3` to skip it.
+  const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^\s*(if|elif|else|fi)\b/.test(l)) : undefined;
   const statement = override ? lines.slice(override.i, override.i + 3).join('\n') : '';
+  const starts = override ? lines[override.i - 1] : '';
   check('3f the core seed is overridden in checked mode alone, and fails closed',
     JSON.stringify(which) === JSON.stringify(['seed', 'override', 'read-back', 'before Start'])
-      && opener === 'if [ "$MODE" = checked ]; then' && /\|\|\s*die\b/.test(statement),
-    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; its statement: ${JSON.stringify(statement)}`);
+      && opener === 'if [ "$MODE" = checked ]; then' && starts === "  python3 -I -c 'import json, sys" && /\|\|\s*die\b/.test(statement),
+    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; it starts '${starts}'; its statement: ${JSON.stringify(statement)}`);
 }
+
+// 3g. The gate runs `checked` (#299): without an entry, 3f's exemption would guard a mode nothing runs.
+check('3g gopnik.json stage 2 runs the core pass in checked mode', stage2.filter((e) => /stage2-core-check\.sh "\$APP" checked$/.test(e)).length === 1,
+  `${stage2.filter((e) => /stage2-core-check\.sh "\$APP" checked$/.test(e)).length} entries run it`);
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that
 // moves the default: the guard after `up` is the only check that sees the default move, since a source
