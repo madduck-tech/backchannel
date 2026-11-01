@@ -33,7 +33,11 @@ gr__read() {  # <variable> <capture-graph.py command>
   gr__err=$(mktemp "${TMPDIR:-/tmp}/graph-reads.XXXXXX") || { GR_WHY="no temporary file for the reader's errors, so no read was tried"; return 1; }
   exec {gr__fd}<>"$gr__err"; rm -f "$gr__err"
   gr__got=$(python3 -I "$GR_GRAPH" "$2" 2>&"$gr__fd") || gr__rc=$?
-  GR_WHY=$(awk 'NF { l = $0 } END { print l }' "/dev/fd/$gr__fd")
+  # Read in bash, from a fresh open of the file: gawk takes a `/dev/fd/N` argument as the open descriptor,
+  # whose offset is at the end once the reader has written, and read nothing (CI's runner, measured).
+  local gr__line
+  GR_WHY=""
+  while IFS= read -r gr__line || [ -n "$gr__line" ]; do [ -n "${gr__line//[[:space:]]/}" ] && GR_WHY=$gr__line; done < "/proc/self/fd/$gr__fd"
   exec {gr__fd}>&-
   [ -n "$GR_WHY" ] || GR_WHY="capture-graph.py exited $gr__rc"
   printf -v "$1" '%s' "$gr__got"
