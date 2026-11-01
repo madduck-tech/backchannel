@@ -347,6 +347,11 @@ function stampCases() {
     check(`stamps: probe-judge ${name}: exit ${want}, and a stamp only on a pass`, r.status === want && fs.existsSync(st) === (want === 0) && (want !== 0 || STAMP('probe').test(fs.readFileSync(st, 'utf8'))),
       `exit ${r.status}, the stamp ${fs.existsSync(st) ? JSON.stringify(fs.readFileSync(st, 'utf8')) : 'absent'}`);
   }
+  // A node id that is not a number is a refusal on stdout, for every command the pass runs (Stage 2 control R2).
+  for (const args of [['webenv', String(ROOT), SINK_NAME, 'x', '--stamp', dir, ''], ['probe-judge', out, '', '0', '--stamp', dir, SINK_NAME], ['judge', out, '--stamps', dir, '', SINK_NAME], ['stamps-ok', dir, SINK_NAME, '', out], ['stamp', dir, 'guard', SINK_NAME, '']]) {
+    const r = spawnSync('python3', ['-I', TOOL, ...args], { encoding: 'utf8' });
+    check(`stamps: ${args[0]} with an empty node id refuses on stdout`, r.status === 1 && /^tone-graph: \S+: an argument that must be a number is not one/.test(r.stdout) && !/Traceback/.test(r.stderr), `exit ${r.status}, stdout "${r.stdout.trim()}", stderr "${r.stderr.trim().slice(0, 200)}"`);
+  }
   // From the shell, only the guard stamps: the other three stamp from inside their own judgement.
   const gd = path.join(dir, 'guard-cli'); fs.rmSync(gd, { recursive: true, force: true }); fs.mkdirSync(gd);
   for (const c of ['webenv', 'one-sink', 'probe']) {
@@ -367,7 +372,7 @@ function oneSinkCases() {
     ['one-sink: another id', [node(51, { 'node.name': SINK_NAME })], 1, /the backchannel_tone_sink node in the graph is 51 named backchannel_tone_sink_1_1, not this run's 50/],
     ['one-sink: this run\'s', [SINK_NODE, node(52, { 'node.name': 'alsa_output.speakers' })], 0, /one node of the family, 50, named backchannel_tone_sink_1_1/],
     // Its refusal is the pass's `die` text, so it is on stdout: an empty id once died with no words (R2).
-    ['one-sink: an empty id', [SINK_NODE], 1, /^the tone sink's id is "", not a node id/, ''],
+    ['one-sink: an empty id', [SINK_NODE], 1, /^tone-graph: one-sink: an argument that must be a number is not one/, ''],
     ['one-sink: a graph it cannot read', null, 1, /^tone-graph: could not read the graph/],
   ];
   const sd = path.join(dir, 'one-sink.stamps');

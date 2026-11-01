@@ -471,8 +471,7 @@ def read_graph():
         sys.exit(f'tone-graph: could not read the graph: {e}')
 
 
-if __name__ == '__main__':
-    a = sys.argv[1:]
+def main(a):
     if a[:1] == ['watch'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--sentinel'):
         watch(int(a[1]), int(a[2]), a[3], int(a[5]) if len(a) == 6 else None)
     elif a[:1] == ['judge'] and len(a) == 2:
@@ -496,13 +495,7 @@ if __name__ == '__main__':
     elif a[:1] == ['webenv'] and len(a) in (4, 7) and (len(a) == 4 or a[4] == '--stamp'):
         sys.exit(webenv(int(a[1]), a[2], a[3], (a[5], int(a[6])) if len(a) == 7 else None))
     elif a[:1] == ['one-sink'] and len(a) in (4, 6) and (len(a) == 4 or a[4] == '--stamp'):
-        # Its refusal is the pass's `die` text, so every one goes to stdout: an empty id went to stderr as a
-        # traceback and the pass died on "before the press: " and nothing else (#266's Stage 2 control R2).
-        try:
-            sink = int(a[2])
-        except ValueError:
-            print(f'the tone sink\'s id is {json.dumps(a[2])}, not a node id, so nothing shows which node is this run\'s')
-            sys.exit(1)
+        sink = int(a[2])
         try:
             sys.exit(one_sink(a[1], sink, a[3], a[5] if len(a) == 6 else None))
         except Exception as e:
@@ -522,3 +515,13 @@ if __name__ == '__main__':
                   and (o.get('info') or {}).get('direction') == 'input' and props(o).get('node.id') == int(a[1])))
     else:
         sys.exit(__doc__)
+
+
+if __name__ == '__main__':
+    # A refusal is the pass's `die` text, so it goes to stdout: a node id that is not a number went to stderr
+    # as a traceback, and the pass died on "before the press: " and nothing else (#266's Stage 2 control R2).
+    try:
+        main(sys.argv[1:])
+    except ValueError as e:
+        print(f'tone-graph: {" ".join(sys.argv[1:2])}: an argument that must be a number is not one ({e}), so nothing shows which node is this run\'s')
+        sys.exit(1)
