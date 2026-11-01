@@ -8,7 +8,9 @@
 // **The event bus is the instrument.** Tauri dispatches one emission to the listeners registered when it was emitted,
 // in `HashSet` order, in one task. The bus snapshots the table at emit, calls each listener synchronously, and lets a
 // cell pick the order: `first` delivers in registration order, which puts the trigger's module-scope listener first,
-// and `reverse` puts it last. A listener registers when `listen` is called, before its promise resolves.
+// and `reverse` puts it last. A listener becomes active a few milliseconds after `listen` is called, when its
+// promise resolves, as Tauri's registration goes through IPC; an unlisten takes effect at once. So a listener that an
+// effect drops and registers again misses an emission that lands in between, as it would in the app.
 //
 // **A reload is a second `loadTsx` with a fresh listener table,** after the first root is unmounted and the window's
 // trigger singleton deleted, as a reload discards it. sessionStorage and the IndexedDB factory survive, as they do.
@@ -37,12 +39,14 @@ function eventBus() {
   let next = 1;
   const table = new Map();
   const onRegister = new Map();
-  const listen = async (event, cb) => {
+  const listen = (event, cb) => new Promise((resolve) => {
     const id = next++;
-    table.set(id, { event, cb });
-    onRegister.get(event)?.(cb);
-    return () => { table.delete(id); };
-  };
+    let gone = false;
+    setTimeout(() => {
+      if (!gone) { table.set(id, { event, cb }); onRegister.get(event)?.(cb); }
+      resolve(() => { gone = true; table.delete(id); });
+    }, 3);
+  });
   const count = (event) => [...table.values()].filter((l) => l.event === event).length;
   const emit = (event, payload, order = 'first') => {
     const ids = [...table.entries()].filter(([, l]) => l.event === event).map(([id]) => id);
@@ -130,13 +134,14 @@ function pageLoad(be, url, { bare = false, bus = eventBus() } = {}) {
     '@/hooks/useAppVersion': { useAppVersion: () => '0.0.0-test' },
   };
   const trigger = loadTsx('src/lib/recording-stop-trigger.ts', base);
+  const triggerLoaded = sleep(10); // its two registrations are active once this resolves
   const withTrigger = { ...base, '@/lib/recording-stop-trigger': trigger };
   const rs = loadTsx('src/contexts/RecordingStateContext.tsx', withTrigger);
   const withRs = { ...withTrigger, '@/contexts/RecordingStateContext': rs, './RecordingStateContext': rs };
   const tc = loadTsx('src/contexts/TranscriptContext.tsx', withRs);
   const withTc = { ...withRs, '@/contexts/TranscriptContext': tc, './TranscriptContext': tc };
   const post = loadTsx('src/contexts/RecordingPostProcessingProvider.tsx', withTc);
-  const registered = { stopped: bus.count('recording-stopped'), started: bus.count('recording-started') };
+  const registered = () => ({ stopped: bus.count('recording-stopped'), started: bus.count('recording-started') });
   const home = bare ? null : loadTsx('src/app/page.tsx', {
     ...withTc,
     '@/contexts/ConfigContext': { useConfig: () => ({ transcriptModelConfig: {}, selectedDevices: {} }) },
@@ -168,7 +173,7 @@ function pageLoad(be, url, { bare = false, bus = eventBus() } = {}) {
       home && h(home), sidebar && h(sidebar), view && h(ViewHost, { View: view, useRs: rs.useRecordingState }), h(Probe))))));
   });
   const unmount = () => act(async () => { root.unmount(); container.remove(); });
-  return { bus, toasts: stubs.toasts, registered, render, unmount, renders, rs, tc };
+  return { bus, toasts: stubs.toasts, registered, triggerLoaded, render, unmount, renders, rs, tc };
 }
 
 /** The transcript view with the recording flag the context gives, as TranscriptPanel passes it. */
@@ -210,7 +215,9 @@ async function backendStops(p, be, order = 'first', { afterComplete } = {}) {
   for (const [stage, message, progress] of PROGRESS) {
     await act(async () => { p.bus.emit('recording-shutdown-progress', { stage, message, progress }); });
   }
-  await settle(10); // the provider re-renders between `:634` and `:644`
+  // The provider re-renders between `:634` and `:644`: the last progress event's render commits, and the emission comes
+  // before a listener re-registered by that commit could be active.
+  await act(async () => {});
   afterComplete?.();
   be.st.recording = false;
   be.st.stopping = false;
@@ -231,7 +238,8 @@ for (const route of ROUTES) {
     const be = backend();
     const url = urlStore('/');
     const p = pageLoad(be, url);
-    check(`${cell}: the trigger module registers one recording-stopped and one recording-started listener`, p.registered.stopped === 1 && p.registered.started === 1, JSON.stringify(p.registered));
+    await p.triggerLoaded;
+    check(`${cell}: the trigger module registers one recording-stopped and one recording-started listener`, p.registered().stopped === 1 && p.registered().started === 1, JSON.stringify(p.registered()));
     await p.render();
     await settle();
     const stops = route === 'second stop' ? 2 : 1;
@@ -278,6 +286,7 @@ for (const route of ROUTES) {
   await recordHere(p1, be, [row(1)]);
   await p1.unmount();
   const p2 = pageLoad(be, url, { bus: p1.bus });
+  await p2.triggerLoaded;
   check(`${cell}: one trigger registration of each event`, p1.bus.count('recording-stopped') === 1 && p1.bus.count('recording-started') === 1, `${p1.bus.count('recording-stopped')} / ${p1.bus.count('recording-started')}`);
   await p2.render();
   await settle();
@@ -319,6 +328,7 @@ async function copyOf(p, id) {
   const id = await reloadAfter(be, url, [row(1), row(2)]);
   check(`${cell}: page 1 wrote the copy`, !!id);
   const p2 = pageLoad(be, url);
+  await p2.triggerLoaded;
   be.st.recording = false;
   await act(async () => { p2.bus.emit('recording-stopped', STOPPED); });
   await p2.render();
@@ -409,6 +419,7 @@ async function copyOf(p, id) {
   be.st.history = [hist(1), hist(2), hist(3)];
   const p2 = pageLoad(be, url);
   await p2.render();
+  await settle(20); // the row listener is active; the mount sync is still pending
   await act(async () => { p2.bus.emit('transcript-update', row(4)); });
   await settle();
   mount.resolve({ is_recording: true, is_stopping: false, is_paused: false, is_active: true, recording_duration: 12, active_duration: 12, mic_frames: 1 });
@@ -561,6 +572,27 @@ for (const [name, start, commitTo] of [
   await p.unmount();
 }
 
+{
+  // The guard drops on a Stop that fails, and nothing emits `recording-stopped`: a poll that reports no stop ends the
+  // state after a second, to RECORDING while the recording still runs (#328 item 4).
+  const cell = '4 a tray stop that fails returns to the recording';
+  resetWindow();
+  const be = backend();
+  const url = urlStore('/settings');
+  const p = pageLoad(be, url);
+  await p.render();
+  await settle();
+  await recordHere(p, be, [row(1)]);
+  be.st.stopping = true;
+  await act(async () => { p.bus.emit('recording-shutdown-progress', { stage: 'stopping_audio', message: 'Stopping audio capture...', progress: 20 }); });
+  await settle(700);
+  check(`${cell}: STOPPING while the guard is held`, p.renders.at(-1)?.status === 'stopping', p.renders.at(-1)?.status);
+  be.st.stopping = false; // the stop failed: the guard dropped, the recording runs on
+  await settle(2200);
+  check(`${cell}: back to RECORDING`, p.renders.at(-1)?.status === 'recording', p.renders.at(-1)?.status);
+  await p.unmount();
+}
+
 // --- item 1: the stop's progress, in the transport's spinner ---------------------------------------------------------
 
 {
@@ -619,7 +651,7 @@ for (const [where, start] of [['Home', '/'], ['settings', '/settings'], ['an old
     check(`${cell}: no Start`, during.every((r) => !r.start), JSON.stringify(during.map((r) => r.start)));
     check(`${cell}: no Pause or Stop`, during.every((r) => !r.live));
     check(`${cell}: no Listening state`, during.every((r) => !r.listening));
-    check(`${cell}: no live badge`, !document.querySelector('button')?.textContent?.includes('Open') || !(document.body.textContent ?? '').includes('Open'));
+    check(`${cell}: no live badge`, ![...document.querySelectorAll('button')].some((b) => /Open$/.test(b.textContent?.trim() ?? '') || b.getAttribute('aria-label') === 'Recording — open session'));
     await p.unmount();
   }
 }
@@ -633,6 +665,7 @@ for (const [where, start] of [['Home', '/'], ['settings', '/settings'], ['an old
   const url = urlStore('/');
   const id = await reloadAfter(be, url, [row(1)]);
   const p2 = pageLoad(be, url);
+  await p2.triggerLoaded;
   be.st.recording = false;
   await act(async () => { p2.bus.emit('recording-stopped', STOPPED); });
   await p2.render();
