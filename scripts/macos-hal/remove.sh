@@ -9,7 +9,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 BEFORE=${1:?census taken before the install}
-RUN=$REPO/experiments/hal-runs/$(date +%Y%m%d-%H%M%S)-remove; mkdir -p "$RUN"
+RUN=${BC_HAL_RUNS:-$REPO/experiments/hal-runs}/$(date +%Y%m%d-%H%M%S)-remove; mkdir -p "$RUN"
 cp "$BEFORE" "$RUN/before-install.json"
 shopt -s nullglob
 bundles=(/Library/Audio/Plug-Ins/HAL/Backchannel*.driver)

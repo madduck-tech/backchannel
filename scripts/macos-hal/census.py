@@ -132,10 +132,13 @@ def compare(before, after, expect_added=(), allow_residue_uid=()):
         elif name not in b:
             diffs.append(("plugin added", name))
         else:
-            # Only the fields both censuses recorded: a census from before -dvvv has no CDHash,
-            # and its absence is not a change (the gate on #316).
-            common = set(b[name]) & set(a[name])
-            if any(b[name][k] != a[name][k] for k in common):
+            # A census from before -dvvv has no CDHash, and only that absence is excused (gate
+            # round 1 on #316); any other one-sided key, such as unsigned_or_unreadable, is a
+            # change (round 2).
+            keys = set(b[name]) | set(a[name])
+            if "CDHash" not in b[name] or "CDHash" not in a[name]:
+                keys.discard("CDHash")
+            if any(b[name].get(k) != a[name].get(k) for k in keys):
                 diffs.append(("plugin signature changed", name))
     bd = {d["uid"]: d for d in before.get("devices", [])}
     ad = {d["uid"]: d for d in after.get("devices", [])}
@@ -149,6 +152,11 @@ def compare(before, after, expect_added=(), allow_residue_uid=()):
     for u in BACKCHANNEL_UIDS:
         if (before.get("backchannel_uids") or {}).get(u) != (after.get("backchannel_uids") or {}).get(u):
             diffs.append(("backchannel uid changed", u))
+    # S2b: the bridges are hidden. Expected additions excuse a new Backchannel device, so a
+    # visible bridge is named on its own and never excused (gate round 2 on #316).
+    for u, d in sorted((after.get("backchannel_uids") or {}).items()):
+        if "bridge" in u and isinstance(d, dict) and d.get("hidden") is False:
+            diffs.append(("bridge visible", u))
     if before.get("defaults") != after.get("defaults"):
         diffs.append(("defaults changed", json.dumps({"before": before.get("defaults"), "after": after.get("defaults")})))
     for field in ("device_settings_keys", "launchd_services", "launch_agents", "driver_hosts", "identities"):

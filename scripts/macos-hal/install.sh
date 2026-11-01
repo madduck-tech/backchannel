@@ -6,7 +6,7 @@
 # Run by the product owner in a terminal: it asks for the administrator password twice, for the
 # copy and for restarting coreaudiod, which interrupts all audio for a few seconds. Never during a
 # call. The census is taken as the user before and after, and compared; the run's files land in
-# experiments/hal-runs/<time>-install/.
+# experiments/hal-runs/<time>-install/ (BC_HAL_RUNS overrides the directory; the tests use it).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 DRIVER=${1:?path to the .driver bundle}
@@ -16,7 +16,7 @@ DRIVER=${DRIVER%/}
 [ -d "$DRIVER" ] || { echo "no such bundle: $DRIVER" >&2; exit 1; }
 NAME=$(basename "$DRIVER")
 case "$NAME" in Backchannel*.driver) ;; *) echo "refusing to install $NAME: only Backchannel*.driver" >&2; exit 1 ;; esac
-RUN=$REPO/experiments/hal-runs/$(date +%Y%m%d-%H%M%S)-install; mkdir -p "$RUN"
+RUN=${BC_HAL_RUNS:-$REPO/experiments/hal-runs}/$(date +%Y%m%d-%H%M%S)-install; mkdir -p "$RUN"
 codesign -dv "$DRIVER" > "$RUN/codesign.txt" 2>&1 || true
 HELPER_ARG=(); [ -z "${BC_HELPER:-}" ] || HELPER_ARG=(--helper "$BC_HELPER")
 python3 -I "$HERE/census.py" take ${HELPER_ARG[@]+"${HELPER_ARG[@]}"} > "$RUN/before.json"

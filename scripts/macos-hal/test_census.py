@@ -115,6 +115,27 @@ class TheComparator(unittest.TestCase):
         after["hal_plugins"]["BlackHole2ch.driver"]["CDHash"] = "bbbb"
         self.assertEqual(census.compare(BASE, after), ([], []))
 
+    def test_a_sentinel_that_becomes_unsigned_is_a_signature_change(self):
+        # Only a missing CDHash is excused; every other one-sided key is a change (gate round 2 on #316).
+        before, after = copy.deepcopy(BASE), copy.deepcopy(BASE)
+        before["hal_plugins"]["BlackHole2ch.driver"]["CDHash"] = "aaaa"
+        after["hal_plugins"]["BlackHole2ch.driver"] = {"unsigned_or_unreadable": "code object is not signed at all"}
+        self.assertEqual(census.compare(before, after)[1], [("plugin signature changed", "BlackHole2ch.driver")])
+
+    def test_a_visible_bridge_is_unexpected_even_when_backchannel_is_expected(self):
+        after = installed()
+        after["backchannel_uids"]["tech.madduck.backchannel.bridge-in"]["hidden"] = False
+        _, unexpected = census.compare(BASE, after, EXPECT)
+        self.assertEqual(unexpected, [("bridge visible", "tech.madduck.backchannel.bridge-in")])
+
+    def test_the_visible_bridge_build_on_record_is_caught(self):
+        run = os.path.join(census.REPO, "experiments", "hal-runs", "20261101-090423-install")
+        if not os.path.exists(os.path.join(run, "after.json")):
+            self.skipTest("the S2c run is on the development Mac only")
+        with open(os.path.join(run, "before.json")) as f, open(os.path.join(run, "after.json")) as g:
+            _, unexpected = census.compare(json.load(f), json.load(g), EXPECT)
+        self.assertIn(("bridge visible", "tech.madduck.backchannel.bridge-out"), unexpected)
+
     def test_launchctl_services_are_parsed(self):
         out = ("gui/501 = {\n\tservices = {\n\t\t     612      0 \tcom.apple.Finder\n"
                "\t\t       -      0 \ttech.madduck.backchannel.helper\n\t}\n}\n")
