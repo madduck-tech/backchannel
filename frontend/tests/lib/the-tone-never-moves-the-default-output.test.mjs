@@ -45,9 +45,9 @@ const bare = (l) => {
   }
   return out;
 };
-const WORD = (w) => new RegExp(`(^|[\\s;&|(){}!\`])(${w})(?=\\s|$|;|\\)|=|>|<|&|\\||\\}|\`)`);
-// What bash runs as code in a line: outside quotes, and inside every `$( … )` or backtick that a double-quoted
-// string holds. Single-quoted text and the rest of a double-quoted string are text (round 7: a
+const WORD = (w) => new RegExp(`(^|[\\s;&|()!\`]|(?<!\\$)\\{)(${w})(?=\\s|$|;|\\)|=|>|<|&|\\||\\}|\`)`);
+// What bash runs as code in a line: outside quotes, and inside every `$( … )`, `${ … }` or backtick that a
+// double-quoted string holds (round 8: `"${BC_TONE_REPAIR:-restore}"`, the pass's own idiom for a default). Single-quoted text and the rest of a double-quoted string are text (round 7: a
 // `"$(bash … restore)"` went unseen by `bare()`, which empties the whole quoted string).
 const codeView = (l) => {
   let out = ''; let q = null;
@@ -57,9 +57,10 @@ const codeView = (l) => {
     if (q === '"') {
       if (c === '\\') { i++; continue; }
       if (c === '"') { q = null; continue; }
-      if (c === '$' && l[i + 1] === '(') {
+      if (c === '$' && (l[i + 1] === '(' || l[i + 1] === '{')) {
+        const [open, close] = l[i + 1] === '(' ? ['(', ')'] : ['{', '}'];
         let depth = 0; let j = i + 1;
-        for (; j < l.length; j++) { if (l[j] === '(') depth++; else if (l[j] === ')' && --depth === 0) break; }
+        for (; j < l.length; j++) { if (l[j] === open) depth++; else if (l[j] === close && --depth === 0) break; }
         out += ' ' + l.slice(i + 2, j) + ' '; i = j; continue;
       }
       if (c === '`') { const j = l.indexOf('`', i + 1); out += ' ' + l.slice(i + 1, j < 0 ? l.length : j) + ' '; i = j < 0 ? l.length : j; }
@@ -282,7 +283,7 @@ check('(a\') every known trap line is still there', staleRisky.length === 0, JSO
 // a quoted path to the script, or one held in a variable, hid it from a rule that named the path, so the rule
 // names the word: `restore` as a bare word anywhere a line's code holds it, or a word that is exactly a quoted
 // "restore". A message that tells a person to run it (`run 'bash scripts/lib/tone-sink.sh restore'`) is text.
-const restores = queue.filter(({ l, code }) => code && (/(^|[^\w./-])restore(?![\w./-])/.test(codeView(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\||>|<)/.test(l.replace(/(^|\s)#.*$/, ''))));
+const restores = queue.filter(({ l, code }) => code && (/(^|[^\w./])restore(?![\w./-])/.test(codeView(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\||>|<)/.test(l.replace(/(^|\s)#.*$/, ''))));
 check('(a\') nothing read runs tone-sink.sh restore', restores.length === 0, restores.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
 // Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
 // "command not found" the run went past; `eval` defines what no pattern reads).

@@ -215,6 +215,17 @@ r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'reuse-id'))}`);
 check('3 an id reused by another node is left alone', r.status === 0 && !(now().destroyed ?? []).length && now().nodes.length === 1 && /node \d+ now names someone-elses-stream, not backchannel_tone_sink_\d+_\d+, so it is left alone/.test(r.stdout),
   `exit ${r.status}, destroyed ${JSON.stringify(now().destroyed)}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
 
+// 3b. An id reused by another run's sink of the same family is left alone too: the name compared is this run's,
+// not the family's (#266's gate adversary, round 8, found a family match passing case 3).
+graph({ configured: HEADSET, effective: HEADSET });
+fs.writeFileSync(path.join(bin, 'reuse-id-family'), `#!/usr/bin/env python3
+import json, os
+S = os.environ['SHIM_STATE']; st = json.load(open(S)); st['nodes'] = [{'id': n['id'], 'name': 'backchannel_tone_sink_1793500000_4242'} for n in st['nodes']]; json.dump(st, open(S, 'w'))
+`, { mode: 0o755 });
+r = pass(`tone_sink_create; ${JSON.stringify(path.join(bin, 'reuse-id-family'))}`);
+check('3b an id reused by another run\'s sink of the family is left alone', r.status === 0 && !(now().destroyed ?? []).length && now().nodes.length === 1 && /node \d+ now names backchannel_tone_sink_1793500000_4242, not backchannel_tone_sink_\d+_\d+, so it is left alone/.test(r.stdout),
+  `exit ${r.status}, destroyed ${JSON.stringify(now().destroyed)}, nodes ${JSON.stringify(now().nodes)}: ${r.stdout}${r.stderr}`);
+
 // 4. Legacy: a run from before #266 that never put the default back. The next run refuses, and restore
 // writes the original back, for the constant and for a twin.
 for (const sink of [CONSTANT, TWIN]) {
