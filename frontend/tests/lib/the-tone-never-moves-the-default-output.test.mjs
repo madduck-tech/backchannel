@@ -250,8 +250,11 @@ const risky = queue.filter(({ rel, l, code }) => code && RISKY.test(bare(l)) && 
 check('(a\') no alias is made', risky.length === 0, `lines with eval, alias, trap, shopt, hash, enable or posix mode that are not known lines: ${risky.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; ')}`);
 const staleRisky = Object.entries(KNOWN_RISKY).flatMap(([rel, list]) => list.filter((t) => !queue.some((x) => x.rel === rel && x.l.trim() === t)).map((t) => `${rel}: ${t}`));
 check('(a\') every known trap line is still there', staleRisky.length === 0, JSON.stringify(staleRisky));
-// `restore` runs the exempt put-back and destroys every sink of the family: nothing read runs it (round 5).
-const restores = queue.filter(({ l, code }) => code && /(^|[\s;&|(){}!`])(bash\s+|sh\s+)?\S*tone-sink\.sh\s+restore\b/.test(bare(l).replace(/""/g, '')));
+// `restore` runs the exempt put-back and destroys every sink of the family: nothing read runs it (round 5). Round 6:
+// a quoted path to the script, or one held in a variable, hid it from a rule that named the path, so the rule
+// names the word: `restore` as a bare word anywhere a line's code holds it, or a word that is exactly a quoted
+// "restore". A message that tells a person to run it (`run 'bash scripts/lib/tone-sink.sh restore'`) is text.
+const restores = queue.filter(({ l, code }) => code && (WORD('restore').test(bare(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\|)/.test(l.replace(/(^|\s)#.*$/, ''))));
 check('(a\') nothing read runs tone-sink.sh restore', restores.length === 0, restores.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
 // Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
 // "command not found" the run went past; `eval` defines what no pattern reads).
@@ -329,12 +332,15 @@ const ASSIGNS = [
   /(^|[;&|(]\s*)([A-Za-z_]\w*=\S*\s+)*(read|mapfile|readarray)\s+(-\S+\s+)*([A-Za-z_]\w*\s+)*TONE_SINK_NAME\b/,
   /(^|[;&|(]\s*)for\s+TONE_SINK_NAME\b/,
 ];
+// And any bare `TONE_SINK_NAME` in a shell file that is not a parameter expansion is an assignment (round 6:
+// `if ! read -r TONE_SINK_NAME` and `while IFS= read -r TONE_SINK_NAME` escaped the forms above).
+const bareNamed = (l) => [...bare(l).matchAll(/(^|.)(\{[#!]?)?\bTONE_SINK_NAME\b/g)].some((m) => !(m[1] === '$' || (m[2] && bare(l)[m.index + m[1].length - 1] === '$') || m[1] === '{' || m[1] === '#' || m[1] === '!'));
 const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) { if (e.name !== '__pycache__') walk(p); continue; }
     fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => {
-      if (!/^\s*#/.test(l) && ASSIGNS.some((re) => re.test(l.trim()))) assigned.push({ rel: path.relative(SCRIPTS, p), n: i + 1, l: l.trim() });
+      if (!/^\s*#/.test(l) && (ASSIGNS.some((re) => re.test(l.trim())) || (p.endsWith('.sh') && bareNamed(l)))) assigned.push({ rel: path.relative(SCRIPTS, p), n: i + 1, l: l.trim() });
     });
   }
 };
