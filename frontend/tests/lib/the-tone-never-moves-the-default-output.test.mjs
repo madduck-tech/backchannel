@@ -45,7 +45,32 @@ const bare = (l) => {
   }
   return out;
 };
-const WORD = (w) => new RegExp(`(^|[\\s;&|(){}!\`])(${w})(?=\\s|$|;|\\)|=)`);
+const WORD = (w) => new RegExp(`(^|[\\s;&|(){}!\`])(${w})(?=\\s|$|;|\\)|=|>|<|&|\\||\\}|\`)`);
+// What bash runs as code in a line: outside quotes, and inside every `$( … )` or backtick that a double-quoted
+// string holds. Single-quoted text and the rest of a double-quoted string are text (round 7: a
+// `"$(bash … restore)"` went unseen by `bare()`, which empties the whole quoted string).
+const codeView = (l) => {
+  let out = ''; let q = null;
+  for (let i = 0; i < l.length; i++) {
+    const c = l[i];
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (q === '"') {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') { q = null; continue; }
+      if (c === '$' && l[i + 1] === '(') {
+        let depth = 0; let j = i + 1;
+        for (; j < l.length; j++) { if (l[j] === '(') depth++; else if (l[j] === ')' && --depth === 0) break; }
+        out += ' ' + l.slice(i + 2, j) + ' '; i = j; continue;
+      }
+      if (c === '`') { const j = l.indexOf('`', i + 1); out += ' ' + l.slice(i + 1, j < 0 ? l.length : j) + ' '; i = j < 0 ? l.length : j; }
+      continue;
+    }
+    if (c === '#' && (i === 0 || /\s/.test(l[i - 1]))) break;
+    if (c === "'" || c === '"') { q = c; out += ' '; continue; }
+    out += c;
+  }
+  return out;
+};
 
 // --- (a) -----------------------------------------------------------------------------------------------
 
@@ -137,11 +162,14 @@ const KNOWN = {
     'pw-metadata -n default 0 default.configured.audio.source "$(cat "$STATE_DIR/original-default-source")" >/dev/null || true',
   ],
   'lib/tone-sink.sh': [
+    'pw-cli destroy "$TONE_SINK_ID" >/dev/null 2>&1',
     'out=$(pw-metadata -n default 0 default.configured.audio.sink 2>/dev/null) || return 1',
     'out=$(pw-metadata -n default 0 default.audio.sink 2>/dev/null) || return 1',
   ],
 };
-const TOOL = /pw-metadata|pactl|wpctl/;
+// `pw-cli destroy` too: an inline loop over the family destroyed another run's sink with the census green
+// (round 7's m1).
+const TOOL = /pw-metadata|pactl|wpctl|pw-cli\s+(destroy|d)\b/;
 const unknown = queue.filter(({ rel, code }) => TOOL.test(code) && !(KNOWN[rel] ?? []).includes(code.trim()));
 check('(a) every line that names a default-output tool is a known read', unknown.length === 0,
   `lines the pass reaches that name pw-metadata, pactl or wpctl and are not known reads:\n    ${unknown.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('\n    ')}`);
@@ -254,7 +282,7 @@ check('(a\') every known trap line is still there', staleRisky.length === 0, JSO
 // a quoted path to the script, or one held in a variable, hid it from a rule that named the path, so the rule
 // names the word: `restore` as a bare word anywhere a line's code holds it, or a word that is exactly a quoted
 // "restore". A message that tells a person to run it (`run 'bash scripts/lib/tone-sink.sh restore'`) is text.
-const restores = queue.filter(({ l, code }) => code && (WORD('restore').test(bare(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\|)/.test(l.replace(/(^|\s)#.*$/, ''))));
+const restores = queue.filter(({ l, code }) => code && (/(^|[^\w./-])restore(?![\w./-])/.test(codeView(l)) || /(^|[\s;&|(){}!`])(["'])restore\2(?=\s|$|;|\)|&|\||>|<)/.test(l.replace(/(^|\s)#.*$/, ''))));
 check('(a\') nothing read runs tone-sink.sh restore', restores.length === 0, restores.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
 // Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
 // "command not found" the run went past; `eval` defines what no pattern reads).
