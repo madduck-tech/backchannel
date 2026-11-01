@@ -122,15 +122,27 @@ check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writ
   `the record seed at line ${rec.writes[0]?.n} is inside ${rec.writes[0]?.depth} if-block(s), opens with '${recOpen}', and follows '${recBefore}'`);
 
 // 3f. The one exemption from the core seed (#299): `checked` stores no microphone, so first run's audio
-// check is what stores it. The override is that mode's alone.
+// check is what stores it. Every line of the core pass that names the key is one of four, by what it says:
+// the seed, `checked`'s override, its read-back, and the check before Start. Any other spelling of a
+// write -- `.update(...)`, `.pop(...)`, `del`, `jq` -- is a fifth line, and fails. The override sits
+// directly in `if [ "$MODE" = checked ]; then`, not in its `else`, and dies when the read-back fails.
 {
   const lines = sources.get('stage2-core-check.sh').split('\n');
-  // Any spelling of a Python write of None, and a JSON null, to the key.
-  const at = lines.map((l, i) => (/preferred_mic_device"?\]?\s*=\s*None|preferred_mic_device\s*=\s*None|"preferred_mic_device":\s*null/.test(l) && !/^\s*#/.test(l) ? i : -1)).filter((i) => i >= 0);
-  const opener = at.length === 1 ? lines.slice(0, at[0]).reverse().find((l) => /^(if|fi)\b/.test(l)) : undefined;
-  const statement = at.length === 1 ? lines.slice(at[0], at[0] + 4).join('\n') : '';
-  check('3f the core seed is overridden in checked mode alone, and fails closed', at.length === 1 && opener === 'if [ "$MODE" = checked ]; then' && /\|\|\s*die\b/.test(statement),
-    `${at.length} override(s); the block it sits in opens with '${opener}'; the statement: ${JSON.stringify(statement)}`);
+  const named = lines.map((l, i) => ({ l, i })).filter(({ l }) => /preferred_mic_device/.test(l) && !/^\s*#/.test(l));
+  const kinds = [
+    ['seed', /^printf '\{"preferences":\{.*"preferred_mic_device":"%s"/],
+    ['override', /^p = sys\.argv\[1\]; d = json\.load\(open\(p\)\); d\["preferences"\]\["preferred_mic_device"\] = None; json\.dump\(d, open\(p, "w"\)\)$/],
+    ['read-back', /^sys\.exit\(0 if json\.load\(open\(p\)\)\["preferences"\]\.get\("preferred_mic_device"\) is None else 1\)' \\$/],
+    ['before Start', /^want = \{.*"preferred_mic_device": sys\.argv\[3\]/],
+  ];
+  const which = named.map(({ l }) => kinds.find(([, re]) => re.test(l))?.[0] ?? `unknown: ${l.trim()}`);
+  const override = named.find((_, k) => which[k] === 'override');
+  const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^(if|elif|else|fi)\b/.test(l)) : undefined;
+  const statement = override ? lines.slice(override.i, override.i + 3).join('\n') : '';
+  check('3f the core seed is overridden in checked mode alone, and fails closed',
+    JSON.stringify(which) === JSON.stringify(['seed', 'override', 'read-back', 'before Start'])
+      && opener === 'if [ "$MODE" = checked ]; then' && /\|\|\s*die\b/.test(statement),
+    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; its statement: ${JSON.stringify(statement)}`);
 }
 
 // 6. The guard, where each pass needs it. Without these the census above can go green on a pass that

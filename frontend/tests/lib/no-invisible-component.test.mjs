@@ -79,7 +79,6 @@ const BACKLOG = new Set([
   'src/components/PaneDivider.tsx',
   'src/components/PermissionWarning.tsx',
   'src/components/PreferenceSettings.tsx',
-  'src/components/RecordingSettings.tsx',
   'src/components/SettingTabs.tsx',
   'src/components/Sidebar/SidebarProvider.tsx',
   'src/components/SpeakerLabelSettings.tsx',
