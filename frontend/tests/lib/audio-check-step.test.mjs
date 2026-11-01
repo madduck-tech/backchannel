@@ -633,7 +633,9 @@ const checkSystem = async (c) => {
   await click(byText(c, 'Play a tone and listen'));
   await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
 };
-const finish = (c, how) => click(buttons(c).find((b) => b.textContent.trim() === (how === 'Skip' ? 'Skip this' : 'Continue')));
+// By place, not label: the step's last two buttons are Continue and Skip, and a control that relabels one
+// must reach the case it breaks rather than end the run here.
+const finish = (c, how) => click(buttons(c).slice(-2)[how === 'Skip' ? 1 : 0]);
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 150)); });
 const finished = (seen, platform) => (platform === 'macos' ? seen.next : seen.completed);
 const as = (mic) => ({ ...READ, preferred_mic_device: mic });
@@ -642,6 +644,9 @@ const as = (mic) => ({ ...READ, preferred_mic_device: mic });
 const red299 = [];
 const same = (actual, want, label) => { if (!isDeepStrictEqual(actual, want)) red299.push(`${label} -- got ${JSON.stringify(actual)}, want ${JSON.stringify(want)}`); };
 const holds = (cond, label) => { if (!cond) red299.push(label); };
+// A rejection that escapes the step's handlers is a defect of its own, and must not end the run before the
+// list below is printed.
+process.on('unhandledRejection', (e) => { red299.push(`#299: a rejection escaped the step: ${e}`); });
 
 // --- #299 condition 1: a non-default check with words is stored, and nothing else changes ----------
 for (const platform of ['linux', 'macos']) {
@@ -748,34 +753,36 @@ for (const platform of ['linux', 'macos']) {
   await settle();
   const stored = writes()[0];
   holds(stored, '#299 5: the sentinel: condition 1 wrote a struct');
-  const { RecordingSettings } = loadTsx('src/components/RecordingSettings.tsx', {
-    ...boundaryStubs().modules,
-    sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {} }) },
-    '@tauri-apps/api/core': {
-      invoke: async (cmd) => {
-        if (cmd === 'get_recording_preferences') return structuredClone(stored);
-        if (cmd === 'get_audio_devices') return KEEP_DEVICES;
-        if (cmd === 'get_default_recordings_folder_path') return '/srv/elsewhere';
-        // AudioBackendSelector's list, which it reads whatever the platform: none here.
-        if (cmd === 'get_audio_backend_info') return [];
-        return null;
+  if (stored) {
+    const { RecordingSettings } = loadTsx('src/components/RecordingSettings.tsx', {
+      ...boundaryStubs().modules,
+      sonner: { toast: Object.assign(() => {}, { success: () => {}, error: () => {} }) },
+      '@tauri-apps/api/core': {
+        invoke: async (cmd) => {
+          if (cmd === 'get_recording_preferences') return structuredClone(stored);
+          if (cmd === 'get_audio_devices') return KEEP_DEVICES;
+          if (cmd === 'get_default_recordings_folder_path') return '/srv/elsewhere';
+          // AudioBackendSelector's list, which it reads whatever the platform: none here.
+          if (cmd === 'get_audio_backend_info') return [];
+          return null;
+        },
       },
-    },
-  });
-  const host = document.createElement('div');
-  document.body.appendChild(host);
-  const log = console.log;
-  console.log = () => {};
-  await act(async () => { createRoot(host).render(React.createElement('form', null, React.createElement(RecordingSettings, null))); });
-  await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-  console.log = log;
-  const trigger = host.querySelector('button[role="combobox"]');
-  const native = host.querySelectorAll('select')[0];
-  const shown = trigger?.textContent.trim() || '';
-  holds(
-    shown === 'Headset Microphone' || (native && native.value === 'Headset Microphone (input)' && !/Default Microphone/.test(shown)),
-    `#299 5: Settings' microphone picker must read the microphone first run stored: the trigger reads '${shown}', the native select '${native?.value}'`
-  );
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const log = console.log;
+    console.log = () => {};
+    await act(async () => { createRoot(host).render(React.createElement('form', null, React.createElement(RecordingSettings, null))); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    console.log = log;
+    const trigger = host.querySelector('button[role="combobox"]');
+    const native = host.querySelectorAll('select')[0];
+    const shown = trigger?.textContent.trim() || '';
+    holds(
+      shown === 'Headset Microphone' || (native && native.value === 'Headset Microphone (input)' && !/Default Microphone/.test(shown)),
+      `#299 5: Settings' microphone picker must read the microphone first run stored: the trigger reads '${shown}', the native select '${native?.value}'`
+    );
+  }
 }
 
 // --- #299 condition 6: nothing on screen changes (ADR 0023) ----------------------------------------
