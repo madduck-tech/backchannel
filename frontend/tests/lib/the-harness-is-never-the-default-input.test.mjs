@@ -149,15 +149,30 @@ check('3e on every run, outside any branch', rec.writes.length === 1 && rec.writ
   const opener = override ? lines.slice(0, override.i).reverse().find((l) => /^\s*(if|elif|else|fi|while|until|for|case|esac|do|done)\b/.test(l)) : undefined;
   const statement = override ? lines.slice(override.i, override.i + 3).join('\n') : '';
   const above = override ? lines.slice(override.i - 3, override.i) : [];
-  // The check before Start reads the store and writes nothing to it.
+  // Both Python programs exactly as written: a `|| true` before the `|| die`, or the check before Start
+  // writing the store by some other spelling, is then a different text, not a pattern to outrun.
+  const OVERRIDE_LINES = [
+    'p = sys.argv[1]; d = json.load(open(p)); d["preferences"]["preferred_mic_device"] = None; json.dump(d, open(p, "w"))',
+    "sys.exit(0 if json.load(open(p))[\"preferences\"].get(\"preferred_mic_device\") is None else 1)' \\",
+    '    "$APPDATA/recording_preferences.json" || die "checked: the seed still names a microphone after the override"',
+  ].join('\n');
+  const BEFORE_START_LINES = [
+    "  python3 -I -c 'import json, sys",
+    'p = json.load(open(sys.argv[1]))["preferences"]',
+    'want = {"save_folder": sys.argv[2], "auto_save": True, "file_format": "mp4", "preferred_mic_device": sys.argv[3], "preferred_system_device": sys.argv[4]}',
+    'bad = {k: (p.get(k), v) for k, v in want.items() if p.get(k) != v}',
+    'print("; ".join(f"{k} is {got!r}, not {v!r}" for k, (got, v) in bad.items()))',
+    "sys.exit(1 if bad else 0)' \"$APPDATA/recording_preferences.json\" \"$PROFILE/rec\" \"$MIC_SEED\" \"$PICK (output)\" > \"$PROFILE/checked-store.txt\" \\",
+    '    || die "checked: first run did not store the microphone it proved, or moved another field: $(cat "$PROFILE/checked-store.txt")"',
+  ].join('\n');
   const beforeStart = named.find((_, k) => which[k] === 'before Start');
   const program = beforeStart ? lines.slice(beforeStart.i - 2, beforeStart.i + 5).join('\n') : '';
   check('3f the core seed is overridden in checked mode alone, and fails closed',
     JSON.stringify(which) === JSON.stringify(['seed', 'override', 'read-back', 'before Start'])
       && opener === 'if [ "$MODE" = checked ]; then'
       && JSON.stringify(above) === JSON.stringify(['if [ "$MODE" = checked ]; then', '  # Read back, so an override that did not take cannot leave the seed to satisfy the check before Start.', "  python3 -I -c 'import json, sys"])
-      && /\|\|\s*die\b/.test(statement) && !/json\.dump|open\([^)]*["']w["']/.test(program),
-    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; the lines above it: ${JSON.stringify(above)}; its statement: ${JSON.stringify(statement)}; the check before Start writes: ${/json\.dump|open\([^)]*["']w["']/.test(program)}`);
+      && statement === OVERRIDE_LINES && program === BEFORE_START_LINES,
+    `the lines naming preferred_mic_device are ${JSON.stringify(which)}; the override's block opens with '${opener}'; the lines above it: ${JSON.stringify(above)}; its statement: ${JSON.stringify(statement)}; the override as written: ${statement === OVERRIDE_LINES}; the check before Start as written: ${program === BEFORE_START_LINES}`);
 }
 
 // 3g. The gate runs `checked` (#299): without an entry, 3f's exemption would guard a mode nothing runs.
