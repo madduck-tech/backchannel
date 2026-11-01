@@ -360,6 +360,14 @@ function stampCases() {
   }
   const g = spawnSync('python3', ['-I', TOOL, 'stamp', gd, 'guard', SINK_NAME, String(SINK)], { encoding: 'utf8' });
   check('stamps: the guard stamps from the shell', g.status === 0 && STAMP('guard').test(fs.readFileSync(path.join(gd, 'guard'), 'utf8')), `exit ${g.status}`);
+
+  // One clock for the stamps and the samples: the monotonic one, which Node's hrtime reads too on Linux
+  // (CLOCK_MONOTONIC for both). A stamp on the wall clock would refuse every press; a sample on it would make
+  // the before-first-sample rule vacuous without a sound (round 4's G3a, G3b).
+  const now = Number(process.hrtime.bigint()) / 1e9;
+  const stampT = Number(fs.readFileSync(path.join(gd, 'guard'), 'utf8').trim().split(' ')[3]);
+  check('stamps: a stamp is on the monotonic clock', Math.abs(now - stampT) < 30, `the stamp reads ${stampT}, the monotonic clock ${now}`);
+  check('stamps: a sample is on the monotonic clock', first <= now && now - first < CASE_TIMEOUT_MS / 1000 * 40, `the first sample reads ${first}, the monotonic clock ${now}`);
 }
 
 // One node of the family, this run's: no node, two, or another id each refuse.

@@ -36,8 +36,10 @@ const lines = (rel) => fs.readFileSync(path.join(SCRIPTS, rel), 'utf8').split('\
 const PASS = 'stage2-core-check.sh';
 // The files the pass sources, by `.` or `source`, followed through each library's own. A line that sources
 // something the census cannot resolve fails it: a file it does not read could hold anything. A source is
-// found wherever it sits in the line, after `&&`, `;` or `command`, not only at its start (round 3).
-const SOURCES = /(?:^\s*|[;&|(]\s*|\b(?:command|builtin)\s+)(?:\.|source)\s+("(?:[^"\\]|\\.|"[^"]*")*?"(?=\s|;|$|&|\|)|\S+)/g;
+// found in any command position: at the line's start, after `;`, `&&`, `||`, `|`, `(`, `{` or `!`, and after
+// `then`, `else`, `elif`, `do`, `time`, `command` or `builtin` (round 3 found `&&`; round 4 found eight
+// spellings the round-3 pattern still missed). `eval` is refused outright below.
+const SOURCES = /(?:^|[;&|({!]|\b(?:then|else|elif|do|time|command|builtin)\b)\s*(?:\.|source)\s+("(?:[^"\\]|\\.|"[^"]*")*?"(?=\s|;|$|&|\|)|[^\s;)}]+)/g;
 const resolve = (rel, arg) => {
   const m = /^"\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)\/([\w./-]+\.sh)"$/.exec(arg)
     || /^"\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)\/([\w./-]+\.sh)"$/.exec(arg)
@@ -78,7 +80,11 @@ for (const rel of [...files, 'audio-harness.sh']) {
       exempt.push(line); if (/^\s*\}\s*$/.test(line.code) || /;\s*\}\s*$/.test(line.code)) inExempt = false; continue;
     }
     if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then\s*$/.test(line.code)) { guard = true; continue; }
-    if (guard) { if (/^fi\s*$/.test(line.code)) guard = false; continue; }
+    if (guard) {
+      // Its `else` would run when the file is sourced, unread (round 4's R1).
+      check('(a) a direct-run block has no else', !/^(else|elif)\b/.test(line.code), `${rel}:${line.n}: \`${line.code.trim()}\` in the direct-run block runs when the file is sourced`);
+      if (/^fi\s*$/.test(line.code)) guard = false; continue;
+    }
     queue.push(line);
   }
   check('(a) the exempt function and the direct-run block close', !inExempt && !guard, `${rel}: ${inExempt ? EXEMPT[rel] + '()' : 'the direct-run block'} is still open at the end of the file`);
@@ -124,8 +130,8 @@ const ends = (code) => /^\s*\}/.test(code) || /;\s*\}\s*$/.test(code);
 const passTop = (() => {
   const out = []; let fn = null;
   for (const line of passLines) {
-    const def = /^(?:function\s+)?([A-Za-z_][\w]*)(?:\(\))?\s*\{/.exec(line.code);
-    if (def && /^(function\s|[A-Za-z_][\w]*\(\))/.test(line.code)) { fn = /\}\s*$/.test(line.code.slice(def[0].length)) ? null : def[1]; continue; }
+    const def = /^(?:function\s+)?([A-Za-z_][\w]*)\s*(?:\(\s*\))?\s*\{/.exec(line.code);
+    if (def && /^(function\s|[A-Za-z_][\w]*\s*\(\s*\))/.test(line.code)) { fn = /\}\s*$/.test(line.code.slice(def[0].length)) ? null : def[1]; continue; }
     if (fn) { if (ends(line.code)) fn = null; continue; }
     out.push(line);
   }
@@ -163,7 +169,7 @@ if (first !== null && press !== null) {
   const closes = span.filter(({ code }) => /^\s*(fi|esac|done|else|elif)\b/.test(code) || /^\s*[})]/.test(code));
   const heredocs = span.filter(({ code }) => /<<(?!<)/.test(code));
   const exits = span.filter(({ code }) => /(^|[;&|{(]\s*|\s)(exit|return)(\s|;|$)/.test(code));
-  const defs = span.filter(({ code }) => /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\(\)\s*\{)/.test(code));
+  const defs = span.filter(({ code }) => /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\s*\(\s*\)\s*\{)/.test(code));
   for (const [what, found] of [['a block that does not close on its line', opens], ['a block that closes, opened before the first check', closes], ['a heredoc', heredocs], ['an exit or return', exits], ['a definition', defs]]) {
     check(`(a') nothing between the first check and the press can skip one: ${what}`, found.length === 0, found.map(({ n, code }) => `${PASS}:${n}: ${code.trim()}`).join('; '));
   }
@@ -188,7 +194,7 @@ check('(a\') tone_press refuses without the stamps', !!body && passLines.some(({
 // **No function is defined twice, none with a builtin's name, and no alias.** Redefining the guard, `die` or
 // `exit` above the checks, or aliasing one, kept round 2's census green (round 3). The pass and the
 // libraries it sources share one shell; `audio-harness.sh` runs in its own and is left out.
-const DEF = /^\s*(?:function\s+([^\s(){}]+)|([^\s(){}=]+)\s*\(\s*\))/;
+const DEF = /(?:^\s*|[;&|{]\s*|\b(?:then|else|do)\s+)(?:function\s+([^\s(){}]+)|([A-Za-z_][\w.:-]*)\s*\(\s*\)\s*\{)/;
 const shared = queue.filter(({ rel }) => rel !== 'audio-harness.sh');
 const defined = new Map();
 for (const { rel, n, code } of shared) {
@@ -200,8 +206,62 @@ check('(a\') no function is defined twice', twice.length === 0, twice.map(([name
 const BUILTINS = ['exit', 'return', 'builtin', 'command', 'source', '.', 'eval', 'exec', 'set', 'shopt', 'trap', 'alias', 'unalias', 'enable', 'printf', 'echo', 'read', 'test', '[', 'kill', 'wait', 'sleep', 'mkdir', 'python3', 'curl', 'cat', 'true', 'false', ':'];
 const shadows = [...defined.keys()].filter((name) => BUILTINS.includes(name));
 check('(a\') no function has a builtin\'s name', shadows.length === 0, shadows.map((name) => `${name} at ${defined.get(name).join(', ')}`).join('; '));
-const aliases = queue.filter(({ code }) => /(^|[;&|(]\s*)(alias|unalias)\s|expand_aliases|\benable\s+-n\b/.test(code));
+const aliases = queue.filter(({ code }) => /(^|[;&|(]\s*)(builtin\s+)?(alias|unalias)\s|expand_aliases|\benable\s+-n\b|\bhash\s+-p\b/.test(code));
 check('(a\') no alias is made', aliases.length === 0, aliases.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('; '));
+// Nothing unmakes a function, and nothing builds code from a string (round 4: `unset -f` left the guard's line a
+// "command not found" the run went past; `eval` defines what no pattern reads).
+const unmake = shared.filter(({ code }) => /(^|[;&|({!]\s*|\b(?:then|else|do)\s+)(builtin\s+|command\s+)?(unset\s+-\w*f|eval\b)/.test(code) || /\bunset\b[^#]*\b(die|say|exit|tone_press|tone_sink_guard_default|audio_check_press)\b/.test(code));
+check('(a\') no function is unset and no code is built from a string', unmake.length === 0, unmake.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('; '));
+
+// **`tone_press`, `say` and `die` are fixed text.** Round 4: the census held only that `tone_press` named
+// `stamps-ok`, so deleting its `return 1`, inverting its `if`, or moving the press above it stayed green, and
+// `die` without its `exit 1` too. Each is compared line for line with this text, which changes only with it.
+const FIXED = {
+  say: [`say() { printf 'stage2-core: %s\\n' "$*"; }`],
+  die: [`die() { printf 'stage2-core: %s\\n' "$*" >&2; exit 1; }`],
+  tone_press: [
+    `tone_press() {  # <stamp dir> <the tone's sampler file>`,
+    `  local why`,
+    `  if ! why=$(python3 -I scripts/lib/tone-graph.py stamps-ok "$1" "$TONE_SINK_NAME" "$TONE_SINK_ID" "$2"); then`,
+    `    say "the tone was not pressed: $why"`,
+    `    return 1`,
+    `  fi`,
+    `  say "$why"`,
+    `  audio_check_press "The other side is heard through" "Play a tone and listen"`,
+    `}`,
+  ],
+};
+for (const [name, text] of Object.entries(FIXED)) {
+  const at = passLines.findIndex(({ code }) => code.startsWith(`${name}() {`));
+  const got = at < 0 ? [] : passLines.slice(at, at + text.length).map(({ l }) => l);
+  const diff = text.findIndex((t, i) => got[i] !== t);
+  check(`(a') ${name} is its fixed text`, at >= 0 && diff < 0, at < 0 ? `no ${name}() in the pass` : `line ${passLines[at + diff]?.n}: ${JSON.stringify(got[diff])}, not ${JSON.stringify(text[diff])}`);
+}
+
+// **Only the guard stamps from the shell, and only the seven known lines name the stamp directory.** A stamp
+// written by any other line, or a file written into the directory, would let the press through (round 4's F1,
+// F2: deliberate edits, held all the same).
+const guardBody = (() => {
+  const ls = lines('lib/tone-sink.sh');
+  const start = ls.find(({ code }) => /^tone_sink_guard_default\(\) \{/.test(code));
+  const end = start && ls.find(({ n, code }) => n > start.n && /^\}\s*$/.test(code));
+  return start && end ? [start.n, end.n] : null;
+})();
+const stampCalls = queue.filter(({ code }) => /(tone-graph\.py|\$TONE_GRAPH)"?\s+stamp\s/.test(code));
+check('(a\') only the guard stamps from the shell', !!guardBody && stampCalls.length === 1 && stampCalls[0].rel === 'lib/tone-sink.sh' && stampCalls[0].n > guardBody[0] && stampCalls[0].n < guardBody[1],
+  `lines that run tone-graph.py stamp: ${stampCalls.map(({ rel, n }) => `${rel}:${n}`).join(', ') || 'none'}`);
+const stampLines = queue.filter(({ code }) => /\$\{?STAMPS\b/.test(code));
+const STAMP_STEPS = SEQUENCE.filter(([what]) => ['the stamp directory, in the run\'s profile', 'the web processes', 'one node of the family', 'the default, again', 'the probe\'s route', 'the press', 'the judge, with the four stamps'].includes(what)).map(([, re]) => re);
+const strayStamps = stampLines.filter(({ rel, code }) => rel !== PASS || !STAMP_STEPS.some((re) => re.test(code)));
+check('(a\') only the seven known lines name the stamp directory', strayStamps.length === 0 && stampLines.length === 7,
+  `${stampLines.length} lines name it; not one of the seven: ${strayStamps.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('; ')}`);
+
+// **Two presses in everything read: the microphone's, bare, and the tone's, in tone_press.** Any other call of
+// `audio_check_press` could press the tone by spelling its text another way (round 4's P1, P6).
+const pressCalls = queue.filter(({ code }) => /(^|[^\w-])audio_check_press([^\w-]|$)/.test(code) && !/^audio_check_press\(\) \{/.test(code));
+const strayPress = pressCalls.filter(({ rel, code }) => !(rel === PASS && (code.trim() === 'audio_check_press' || code === FIXED.tone_press[7])));
+check('(a\') the two presses are the microphone\'s and tone_press\'s', strayPress.length === 0 && pressCalls.length === 2,
+  `${pressCalls.length} calls; others: ${strayPress.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('; ')}`);
 
 // --- (b) -----------------------------------------------------------------------------------------------
 
