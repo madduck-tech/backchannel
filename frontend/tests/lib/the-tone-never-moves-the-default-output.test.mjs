@@ -65,7 +65,13 @@ for (const rel of [...files, 'audio-harness.sh']) {
   let inExempt = false; let guard = false;
   for (const line of lines(rel)) {
     if (EXEMPT[rel] && new RegExp(`^${EXEMPT[rel]}\\(\\)\\s*\\{`).test(line.code)) { inExempt = true; exempt.push(line); continue; }
-    if (inExempt) { exempt.push(line); if (/^\s*\}\s*$/.test(line.code) || /;\s*\}\s*$/.test(line.code)) inExempt = false; continue; }
+    if (inExempt) {
+      // A definition inside it means its end was not found, and whatever it swallowed went unread.
+      const inner = /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\(\)\s*\{)/.test(line.code);
+      check('(a) the exempt function closes before the next definition', !inner, `${rel}:${line.n}: a definition inside ${EXEMPT[rel]}(), so its end was not found`);
+      if (inner) { inExempt = false; queue.push(line); continue; }
+      exempt.push(line); if (/^\s*\}\s*$/.test(line.code) || /;\s*\}\s*$/.test(line.code)) inExempt = false; continue;
+    }
     if (rel !== PASS && rel !== 'audio-harness.sh' && /^if \[ "\$\{BASH_SOURCE\[0\]\}" = "\$0" \]; then\s*$/.test(line.code)) { guard = true; continue; }
     if (guard) { if (/^fi\s*$/.test(line.code)) guard = false; continue; }
     queue.push(line);
@@ -143,10 +149,12 @@ for (const [what, re] of SEQUENCE) {
 if (first !== null && press !== null) {
   const span = passLines.filter(({ n }) => n >= first && n <= press);
   const opens = span.filter(({ code }) => (/^\s*(if|case|while|until|for|select|function)\b/.test(code) || /^\s*[{(]/.test(code)) && !/(\bfi|\besac|\bdone|\}|\))\s*$/.test(code));
+  // A block that closes here opened before the first check, and so encloses it.
+  const closes = span.filter(({ code }) => /^\s*(fi|esac|done)\b/.test(code) || /^\s*[})]/.test(code));
   const heredocs = span.filter(({ code }) => /<<(?!<)/.test(code));
   const exits = span.filter(({ code }) => /(^|[;&|{(]\s*|\s)(exit|return)(\s|;|$)/.test(code));
   const defs = span.filter(({ code }) => /^\s*(function\s+[A-Za-z_]|[A-Za-z_][\w]*\(\)\s*\{)/.test(code));
-  for (const [what, found] of [['a block that does not close on its line', opens], ['a heredoc', heredocs], ['an exit or return', exits], ['a definition', defs]]) {
+  for (const [what, found] of [['a block that does not close on its line', opens], ['a block that closes, opened before the first check', closes], ['a heredoc', heredocs], ['an exit or return', exits], ['a definition', defs]]) {
     check(`(a') nothing between the first check and the press can skip one: ${what}`, found.length === 0, found.map(({ n, code }) => `${PASS}:${n}: ${code.trim()}`).join('; '));
   }
 }
