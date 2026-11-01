@@ -119,7 +119,7 @@ function writes(code) {
 }
 const written = joined(queue).filter(({ code }) => writes(code));
 check('(a) nothing the pass reaches writes a default output', written.length === 0,
-  `writes reached from the pass:\n    ${written.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('\n    ')}`);
+  `writes reached from the pass, each as one logical line:\n    ${written.map(({ rel, n, code }) => `${rel}:${n}: ${code.trim()}`).join('\n    ')}`);
 // The census sees what it is for: tone-sink.sh's legacy put-back writes the key, and is not reached.
 check('(a) the legacy put-back is a write the pass does not reach', joined(functions.tone_sink_put_back ?? []).some(({ code }) => writes(code)) && !reached.has('tone_sink_put_back'),
   `tone_sink_put_back ${functions.tone_sink_put_back ? 'is' : 'is not'} defined, ${reached.has('tone_sink_put_back') ? 'is' : 'is not'} reached`);
