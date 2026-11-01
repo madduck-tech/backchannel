@@ -575,6 +575,13 @@ say "$COUNT badge(s), none of them 0%, none NaN"
 STOP=$(find_el '{"using":"xpath","value":"//button[@aria-label=\"Stop recording\"]"}')
 [ -n "$STOP" ] || die "no Stop control"
 click "$STOP" "Stop recording"
+# The stop, as the window shows it (#328 item 6): from the press until the saved meeting's page commits, sampled every
+# 50 ms. At least one of the backend's stage messages is in the spinner, and no Start is drawn before the navigation.
+STOP_SEEN=$(python3 -I scripts/lib/stop-sampler.py "$BASE" 600 "Stopping audio capture..." \
+  "Processing remaining transcript chunks..." "Processing transcripts..." "Finalizing transcription..." \
+  "Finalizing recording and cleaning up resources..." "Recording stopped successfully") \
+  || die "the stop, as the window showed it (#328): $STOP_SEEN"
+say "the stop, as the window showed it: $STOP_SEEN"
 await "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Start recording')" \
       'the recording to finish' 90
 say "stopped"
