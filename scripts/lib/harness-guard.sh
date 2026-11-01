@@ -19,7 +19,7 @@
 #                                                         save folders under the profile's HOME included,
 #                                                         and so does the database their transcripts are in
 #
-# The graph is read through `capture-graph.py`, which reads a split `pw-dump` (two arrays, 8 of 696 reads
+# The graph is read through `capture-graph.py`, which reads a split pw-dump (two arrays, 8 of 696 reads
 # on 2026-10-31) as one graph and fails on an unreadable one.
 
 HARNESS_GUARD_GRAPH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capture-graph.py"

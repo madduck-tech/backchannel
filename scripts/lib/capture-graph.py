@@ -24,9 +24,10 @@ samples the graph every 250 ms and records, for each sample:
   person's microphone.
 
     capture-graph.py nodes                                      every node: id, name, media.class, description, tab-separated
-    capture-graph.py default-output                             the node `default.audio.sink` names, or an empty line when
-                                                                the key is absent or names no node; then, one per line,
-                                                                the application of every Stream/Output* linked into it
+    capture-graph.py default-output                             `sink<TAB><name>` for the node `default.audio.sink` names,
+                                                                or nothing when the key is absent or names no node; then
+                                                                `playing<TAB><application>` for every Stream/Output*
+                                                                linked into it
     capture-graph.py app-linked <source> [<root-pid>]           exit 0 when an active link from <source> reaches a
                                                                 `cpal-pulseaudio-*` capture whose process descends
                                                                 from <root-pid>
@@ -175,9 +176,9 @@ def cmd_default_output():
     nodes = {o.get('id'): o for o in objs if str(o.get('type', '')).endswith('Node')}
     sink = defaults(objs).get('default.audio.sink')
     sid = next((i for i, o in nodes.items() if sink and tg.props(o).get('node.name') == sink), None)
-    print(sink if sid is not None else '')
     if sid is None:
         return
+    print(f'sink\t{sink}')
     playing = set()
     for l in (o for o in objs if str(o.get('type', '')).endswith('Link')):
         i = l.get('info') or {}
@@ -186,7 +187,7 @@ def cmd_default_output():
             if str(p.get('media.class', '')).startswith('Stream/Output'):
                 playing.add(p.get('application.name') or p.get('node.name') or '?')
     for name in sorted(playing):
-        print(name)
+        print(f'playing\t{name}')
 
 
 def cmd_app_linked(source, root):

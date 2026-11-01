@@ -1,5 +1,5 @@
 # The graph reads of the two-channel and ui-record passes (#320), through `capture-graph.py`, which reads a
-# split `pw-dump` (two arrays) as one graph and fails on an unreadable one. Sourced by both passes after
+# split pw-dump (two arrays) as one graph and fails on an unreadable one. Sourced by both passes after
 # their `die` and before their first read.
 #
 #   pick_two_channel_sink                    TARGET_SINK, TARGET_DESC: the sink whose monitor two-channel picks
@@ -26,14 +26,18 @@ gr__unreadable() {  # <so what> [the reader's last line]
 # Stderr is kept apart from the answer: taken with it, a line the loader or a wrapper wrote on a read that
 # succeeded became the default sink's name, and the refusal went ahead on a graph with no default sink
 # (#320's gate adversary, round 2).
+# The file is unlinked as soon as it is open, so a signal during the read leaves nothing behind; its last
+# non-blank line is the cause, or the reader's status when it said nothing (round 3).
 gr__read() {  # <variable> <capture-graph.py command>
-  local err rc=0 got
-  err=$(mktemp "${TMPDIR:-/tmp}/graph-reads.XXXXXX") || { GR_WHY="could not make a temporary file"; return 1; }
-  got=$(python3 -I "$GR_GRAPH" "$2" 2>"$err") || rc=$?
-  GR_WHY=$(tail -n 1 "$err")
-  rm -f "$err"
-  printf -v "$1" '%s' "$got"
-  return "$rc"
+  local gr__err gr__fd gr__rc=0 gr__got
+  gr__err=$(mktemp "${TMPDIR:-/tmp}/graph-reads.XXXXXX") || { GR_WHY="no temporary file for the reader's errors, so no read was tried"; return 1; }
+  exec {gr__fd}<>"$gr__err"; rm -f "$gr__err"
+  gr__got=$(python3 -I "$GR_GRAPH" "$2" 2>&"$gr__fd") || gr__rc=$?
+  GR_WHY=$(awk 'NF { l = $0 } END { print l }' "/dev/fd/$gr__fd")
+  exec {gr__fd}>&-
+  [ -n "$GR_WHY" ] || GR_WHY="capture-graph.py exited $gr__rc"
+  printf -v "$1" '%s' "$gr__got"
+  return "$gr__rc"
 }
 
 # The rule both picks kept from 133d100 (two-channel :109-111, ui-record :66-69), over `nodes`' rows: the
@@ -86,8 +90,9 @@ refuse_if_the_default_output_plays() {  # <which start>
   if ! gr__read out default-output; then
     gr__unreadable "nothing shows the default output silent; $1 is not made" "$GR_WHY"
   fi
-  sink=${out%%$'\n'*}
+  # Marked rows only, so a line a wrapper or the loader printed is never taken for the sink (round 3).
+  sink=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "sink" { print $2 }')
+  playing=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "playing" { printf "%s%s", (n++ ? ", " : ""), $2 }')
   [ -n "$sink" ] || die "no default output sink is in the graph, so nothing shows it silent; $1 is not made"
-  [ "$out" = "$sink" ] || playing=${out#*$'\n'}
-  [ -z "$playing" ] || die "something plays on the default output (${playing//$'\n'/, }); $1 could record it, so the pass refuses to make it"
+  [ -z "$playing" ] || die "something plays on the default output ($playing); $1 could record it, so the pass refuses to make it"
 }

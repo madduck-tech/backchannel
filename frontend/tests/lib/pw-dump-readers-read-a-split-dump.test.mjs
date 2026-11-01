@@ -14,8 +14,9 @@
 //   as a statement of its own, never inside `$(…)`, and each is defined in one file. A test of a function
 //   alone cannot see its call site, which is where round 2 of the critic measured three silent paths;
 // - **the functions, run** against `pw-dump` shims in both modes the passes could run them in, without
-//   `set -e` and under `set -euo pipefail`, each followed by an unconditional sentinel: 42 runs, the
-//   issue's 40 and two on a graph large enough to fill a pipe.
+//   `set -e` and under `set -euo pipefail`, each followed by an unconditional sentinel: 56 runs, the
+//   issue's 40, two on a graph large enough to fill a pipe, and 14 with a reader whose stderr or stdout
+//   carries a line on a read that succeeds.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -38,18 +39,27 @@ const check = (name, cond, detail) => { if (!cond) failures.push(`${name}: ${det
 // census until it is added here, which the diff shows. JSON is read too; a file of any other type fails.
 const ALLOWED = {
   'scripts/audio-harness.sh': [
-    '# `node.description=Backchannel harness sink` for the sink, and `pw-dump` reports',
-    '# Read it back from `pw-dump` instead.',
-    '# split `pw-dump` (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).',
-    '# Not `pw-dump | grep -q`: grep -q closes the pipe on its first match, pw-dump takes',
+    '# `node.description=Backchannel harness sink` for the sink, and pw-dump reports',
+    '# Read it back from pw-dump instead.',
+    '# split pw-dump (two arrays) as one graph: a single `json.load` took one for an empty graph (#293).',
+    '# Not pw-dump piped to grep -q: grep -q closes the pipe on its first match, pw-dump takes',
   ],
-  'scripts/lib/gate-sinks.sh': ['# The descriptions are read through #293\'s `harness_description`, so a split `pw-dump` is one graph (#320).'],
-  'scripts/lib/graph-reads.sh': ['# split `pw-dump` (two arrays) as one graph and fails on an unreadable one. Sourced by both passes after'],
-  'scripts/lib/harness-guard.sh': ['# The graph is read through `capture-graph.py`, which reads a split `pw-dump` (two arrays, 8 of 696 reads'],
-  'scripts/lib/tone-sink.sh': ['# "the person chose another output", which dropped the only record of the original; and a `pw-dump`'],
-  'scripts/stage2-core-check.sh': ['# Through the shared reader: one `json.load` of a split `pw-dump` failed entry 27 on 2026-10-31.'],
+  'scripts/lib/gate-sinks.sh': ['# The descriptions are read through #293\'s `harness_description`, so a split pw-dump is one graph (#320).'],
+  'scripts/lib/graph-reads.sh': ['# split pw-dump (two arrays) as one graph and fails on an unreadable one. Sourced by both passes after'],
+  'scripts/lib/harness-guard.sh': ['# The graph is read through `capture-graph.py`, which reads a split pw-dump (two arrays, 8 of 696 reads'],
+  'scripts/lib/tone-sink.sh': ['# "the person chose another output", which dropped the only record of the original; and a pw-dump'],
+  'scripts/stage2-core-check.sh': ['# Through the shared reader: one `json.load` of a split pw-dump failed entry 27 on 2026-10-31.'],
 };
 const TYPES = new Set(['.sh', '.py', '.js', '.mjs', '.json', '.ps1']);
+// A name in backticks, or a substitution, runs inside an unquoted heredoc, so no exempt line may hold one;
+// and each exempt line occurs once in its file, so a copy elsewhere in it is not exempt by its twin (round 3).
+for (const [file, list] of Object.entries(ALLOWED)) {
+  const text = fs.readFileSync(path.join(repo, file), 'utf8').split('\n').map((l) => l.trim());
+  for (const line of list) {
+    check('C1 an exempt line runs nothing', !/[`]|\$\(/.test(line.replace(/`[^`]*json\.load[^`]*`|`harness_description`|`capture-graph\.py`|`node\.description=Backchannel harness sink`/g, '')) && !/`[^`]*pw-dump[^`]*`|\$\(/.test(line), `${file}: "${line}" names pw-dump in backticks or holds a substitution`);
+    check('C1 an exempt line occurs once', text.filter((l) => l === line).length === 1, `${file}: "${line}" occurs ${text.filter((l) => l === line).length} times`);
+  }
+}
 const READERS = new Set(['scripts/lib/capture-graph.py', 'scripts/lib/tone-graph.py']);
 // `audio-harness.sh`'s presence check names the tool and runs `command -v` on it, nothing else.
 const presence = (lines, n) => /^\s*for t in [\w .-]*\bpw-dump\b[\w .-]*; do\s*$/.test(lines[n]) && /^\s*command -v "\$t" >\/dev\/null \|\| die /.test(lines[n + 1] ?? '');
@@ -133,6 +143,10 @@ for (const pass of ['scripts/stage2-two-channel-check.sh', 'scripts/stage2-ui-re
   check(`W1 ${pass} sources graph-reads.sh`, src >= 0 && die >= 0 && die < src && src < first,
     `the source line at ${src + 1}, die() at ${die + 1}, the first call at ${first + 1}: it must come after die() and before the first call`);
 }
+// graph-reads.sh runs the reader in one place, gr__read, which keeps its stderr out of the answer.
+const reads = read('scripts/lib/graph-reads.sh').split('\n').map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => /\bpython3\b/.test(l) && !/^\s*#/.test(l));
+check('W1 graph-reads.sh runs python3 once, in gr__read', reads.length === 1 && /gr__got=\$\(python3 -I "\$GR_GRAPH" "\$2" 2>&"\$gr__fd"\)/.test(reads[0].l),
+  `python3 lines: ${JSON.stringify(reads)}`);
 check('W1 gate-sinks.sh sources harness-guard.sh', code['scripts/lib/gate-sinks.sh'].some((l) => l.trim() === '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness-guard.sh"'),
   'two-channel sources harness-guard.sh only after gate_sinks_create runs, so gate-sinks.sh must source it itself');
 
@@ -176,7 +190,7 @@ const UNREAD = /could not be read/;
 const PICK_A = dump(
   [meta('alsa_output.builtin'), sink(41, 'alsa_output.usb', 'USB Audio'), sink(42, 'alsa_output.hdmi', 'HDMI Output'),
     node(55, 'alsa_output.virtual', 'Audio/Sink/Virtual', 'Speaker Virtual'), sink(49, 'alsa_output.lower', 'speaker lowercase')],
-  [sink(43, 'alsa_output.builtin', ' Speaker  + Headphones '), sink(48, 'alsa_output.second', 'Speaker Two'), gone(41)],
+  [sink(43, 'alsa_output.builtin', ' Speaker \r + Headphones '), sink(48, 'alsa_output.second', 'Speaker Two'), gone(41)],
 );
 const PICK_B = dump(
   [gone(99)],
@@ -281,30 +295,37 @@ console.log(lines.join('\n'));
 const noisy = path.join(root, 'noisy');
 fs.mkdirSync(noisy);
 fs.writeFileSync(path.join(noisy, 'python3'), `#!/bin/sh\necho "ld.so: a warning on a read that succeeds" >&2\nexec /usr/bin/python3 "$@"\n`, { mode: 0o755 });
+// And one whose stdout carries a line: only marked rows are read, so it changes nothing either.
+const chatty = path.join(root, 'chatty');
+fs.mkdirSync(chatty);
+fs.writeFileSync(path.join(chatty, 'python3'), `#!/bin/sh\necho "a wrapper's banner"\nexec /usr/bin/python3 "$@"\n`, { mode: 0o755 });
 const NOISY = [
   ['pick_two_channel_sink', 'graph-reads.sh', [], ['TARGET_SINK', 'TARGET_DESC'], 'a', PICK_A, answer({ TARGET_SINK: 'alsa_output.builtin', TARGET_DESC: 'Speaker + Headphones' })],
   ['refuse_if_the_default_output_plays', 'graph-reads.sh', ['the start'], [], 'd', REF_D, goesOn],
   ['refuse_if_the_default_output_plays', 'graph-reads.sh', ['the start'], [], 'e1', REF_E1, missing],
   ['refuse_if_the_default_output_plays', 'graph-reads.sh', ['the start'], [], 'e2', REF_E2, missing],
 ];
-for (const [fn, lib, args, vars, shim, text, judge] of NOISY) {
+for (const [fn, lib, args, vars, shim, text, judge, wrap = noisy] of [...NOISY, ...NOISY.slice(1).map((c) => [...c, chatty])]) {
   for (const mode of ['plain', 'strict']) {
     const d = fs.mkdtempSync(path.join(root, 'shim-'));
     fs.writeFileSync(path.join(d, 'dump'), text);
     const script = [mode === 'strict' ? 'set -euo pipefail' : '', `die() { printf 'pass: %s\\n' "$*" >&2; exit 1; }`, `. ${JSON.stringify(path.join(LIB, lib))}`,
       `${fn}${args.map((x) => ` ${JSON.stringify(x)}`).join('')}`, 'echo SENTINEL', ...vars.map((v) => `printf '%s=%s\\n' ${v} "\${${v}-<unset>}"`)].join('\n');
-    const r = spawnSync('bash', ['-c', script], { env: { PATH: `${noisy}:${bin}:/usr/bin:/bin`, HOME: root, PW_SHIM: d }, encoding: 'utf8' });
+    const r = spawnSync('bash', ['-c', script], { env: { PATH: `${wrap}:${bin}:/usr/bin:/bin`, HOME: root, PW_SHIM: d }, encoding: 'utf8' });
     const out = r.stdout.split('\n');
     const got = { sentinel: out.includes('SENTINEL'), err: r.stderr.split('\n').filter((l) => !/^ld\.so: /.test(l)).join('\n').trim(), vars: Object.fromEntries(out.filter((l) => /^\w+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])) };
     const verdict = judge(got);
     runs++;
-    lines.push(`${verdict ? 'FAIL' : 'ok  '} ${fn} (${shim}, a noisy reader) ${mode}${verdict ? `: ${verdict}` : ''}`);
-    if (verdict) failures.push(`F ${fn} on (${shim}) with a reader that writes to stderr and succeeds, ${mode === 'strict' ? 'under set -euo pipefail' : 'without set -e'}: ${verdict}`);
+    const how = wrap === noisy ? 'writes to stderr' : 'writes a line to stdout';
+    lines.push(`${verdict ? 'FAIL' : 'ok  '} ${fn} (${shim}, a reader that ${how}) ${mode}${verdict ? `: ${verdict}` : ''}`);
+    if (verdict) failures.push(`F ${fn} on (${shim}) with a reader that ${how} and succeeds, ${mode === 'strict' ? 'under set -euo pipefail' : 'without set -e'}: ${verdict}`);
   }
 }
-console.log(lines.slice(-8).join('\n'));
-// The issue's 40, 2 on (f), which fills a pipe, and 8 with a reader that writes to stderr and succeeds.
-check('F the run count', runs === 50, `${runs} runs, not 50`);
+console.log(lines.slice(-14).join('\n'));
+// The issue's 40; 2 on (f), which fills a pipe; 8 with a reader that writes to stderr and succeeds, of which
+// the refusal's 6 can tell the fix from the defect (the picks drop a line without tabs either way); and 6
+// with a reader that writes a line to stdout.
+check('F the run count', runs === 56, `${runs} runs, not 56`);
 check('F nothing reached the real graph', !fs.existsSync(guardLog), `a PipeWire tool other than the shim was called: ${fs.existsSync(guardLog) ? fs.readFileSync(guardLog, 'utf8') : ''}`);
 
 fs.rmSync(root, { recursive: true, force: true });

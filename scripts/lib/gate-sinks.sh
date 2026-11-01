@@ -11,7 +11,7 @@
 #   gate_sink_remove <name>      removes one of them now, and returns once the graph no longer has it
 #   gate_sink_is_default <name>  exits 0 when <name> is the effective default output
 #
-# The descriptions are read through #293's `harness_description`, so a split `pw-dump` is one graph (#320).
+# The descriptions are read through #293's `harness_description`, so a split pw-dump is one graph (#320).
 # This file sources `harness-guard.sh` itself: two-channel sources it only after `gate_sinks_create` runs.
 
 GATE_SINK_A=backchannel_gate_sink_a

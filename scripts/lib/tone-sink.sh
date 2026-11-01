@@ -19,7 +19,7 @@
 #   - `restore` exited 0 when its write had not taken effect.
 #
 # Round 3 found two checks that failed open: a configured default that could not be read counted as
-# "the person chose another output", which dropped the only record of the original; and a `pw-dump`
+# "the person chose another output", which dropped the only record of the original; and a pw-dump
 # that printed two arrays read as "no stale node". Both now fail closed: what cannot be read is never
 # taken as an answer.
 #

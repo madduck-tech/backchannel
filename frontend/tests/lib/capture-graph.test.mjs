@@ -88,9 +88,9 @@ r = spawnSync('python3', ['-I', GRAPH, 'nodes'], { env, encoding: 'utf8' });
 if (r.status === 0) failures.push(`17 an unreadable graph read as an empty one: exit ${r.status}, '${r.stdout}'`);
 
 // `default-output` (#320): the node `default.audio.sink` names, then what plays into it, through the same
-// reader. On a split dump that adds the playing link, the link is seen; when the second array removes the
-// sink's node, or the key is absent, the first line is empty, so the refusal can tell "no default sink"
-// from "nothing plays"; and an unreadable graph exits non-zero.
+// reader, as marked rows. On a split dump that adds the playing link, the link is seen; when the second array
+// removes the sink's node, or the key is absent, no `sink` row is printed, so the refusal can tell "no
+// default sink" from "nothing plays"; and an unreadable graph exits non-zero.
 // A stream's node name differs from its application's, and a node that is not a stream is linked in too,
 // so a reader that names streams by node, or lists whatever is linked, answers otherwise.
 const out = (id, app) => ({ id, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': `${app.toLowerCase()}-stream-${id}`, 'media.class': 'Stream/Output/Audio', 'application.name': app } } });
@@ -103,11 +103,11 @@ const defaultOutput = (...arrays) => {
   return spawnSync('python3', ['-I', GRAPH, 'default-output'], { env, encoding: 'utf8' });
 };
 r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), out(72, 'mpv'), loopback, linked(77, 76, 70)], [linked(73, 71, 70), linked(74, 72, 70), out(75, 'unlinked')]);
-if (r.status !== 0 || r.stdout !== 'alsa_output.speakers\nFirefox\nmpv\n') failures.push(`18 default-output on a split dump: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+if (r.status !== 0 || r.stdout !== 'sink\talsa_output.speakers\nplaying\tFirefox\nplaying\tmpv\n') failures.push(`18 default-output on a split dump: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
 r = defaultOutput([sinkMeta('alsa_output.speakers'), speakers, out(71, 'Firefox'), linked(73, 71, 70)], [{ id: 70, info: null }, { id: 73, info: null }]);
-if (r.status !== 0 || r.stdout !== '\n') failures.push(`19 default-output with the default sink's node removed: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+if (r.status !== 0 || r.stdout !== '') failures.push(`19 default-output with the default sink's node removed: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
 r = defaultOutput([sinkMeta(null), speakers, out(71, 'Firefox'), linked(73, 71, 70)]);
-if (r.status !== 0 || r.stdout !== '\n') failures.push(`20 default-output with no default.audio.sink key: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
+if (r.status !== 0 || r.stdout !== '') failures.push(`20 default-output with no default.audio.sink key: exit ${r.status}, ${JSON.stringify(r.stdout)}: ${r.stderr}`);
 fs.writeFileSync(path.join(bin, 'pw-dump'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 r = spawnSync('python3', ['-I', GRAPH, 'default-output'], { env, encoding: 'utf8' });
 if (r.status === 0) failures.push(`21 default-output read an unreadable graph: exit ${r.status}, '${r.stdout}'`);
