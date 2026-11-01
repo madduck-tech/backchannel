@@ -15,8 +15,9 @@
 //   round 2's static rule was beaten by one-line edits (#266's gate adversary, round 3), so what the census
 //   now holds is that the press cannot be reached any other way. One line in all the files read presses
 //   the tone, inside `tone_press`; no function is defined twice in the pass and the libraries it sources,
-//   none is defined with a builtin's name, and no alias is made. No file under `scripts/` names `restore` but
-//   known lines, and every script a read line names is under `scripts/`;
+//   none is defined with a builtin's name, and no alias is made. No file under `scripts/` names `restore`, a
+//   default-output tool, the tone's button or its row, or a raw click, but on known lines; every click among the
+//   lines read is a known line; and every script a read line names is under `scripts/`;
 // - **(b)** the `tauri-driver` launch line carries `PULSE_SINK="$TONE_SINK_NAME"` and
 //   `GST_PLUGIN_FEATURE_RANK="$TONE_GST_PIN"`, and `$TONE_GST_PIN` holds the four entries item 4 names;
 // - **(c)** `tone-sink.sh` assigns `$TONE_SINK_NAME` once, as the family followed by a run id, and no file
@@ -315,22 +316,91 @@ const KNOWN_RESTORE = {
   ],
   'test-update-locally.js': [`console.log('⚠️  IMPORTANT: Restore production endpoint after testing!');`],
 };
-// How many times each known line occurs: the first is in the two destroy paths, so it is there twice.
-const RESTORE_COUNT = { [KNOWN_RESTORE['lib/tone-sink.sh'][0]]: 2 };
-const restoreLines = [];
+// Every line of every file under `scripts/`, with comments cut and quotes and backslashes removed.
+const scriptLines = [];
 const walkAll = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) { if (e.name !== '__pycache__') walkAll(p); continue; }
     const js = /\.(m?js|cjs|ts)$/.test(p);
-    fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => { if (/\brestore\b/i.test(unquoted(l, js))) restoreLines.push({ rel: path.relative(SCRIPTS, p), n: i + 1, t: l.trim() }); });
+    fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => scriptLines.push({ rel: path.relative(SCRIPTS, p), n: i + 1, t: l.trim(), u: unquoted(l, js) }));
   }
 };
 walkAll(SCRIPTS);
-const restores = restoreLines.filter(({ rel, t }) => !(KNOWN_RESTORE[rel] ?? []).includes(t));
-check('(a\') nothing under scripts/ names restore but the known lines', restores.length === 0, restores.map(({ rel, n, t }) => `${rel}:${n}: ${t}`).join('; '));
-const restoreCounts = Object.entries(KNOWN_RESTORE).flatMap(([rel, list]) => list.map((t) => [rel, t, restoreLines.filter((x) => x.rel === rel && x.t === t).length])).filter(([, t, got]) => got !== (RESTORE_COUNT[t] ?? 1));
-check('(a\') every known restore line is there, as often as it is known', restoreCounts.length === 0, restoreCounts.map(([rel, t, got]) => `${rel}: ${got}x ${t}`).join('; '));
+// A word that may appear only on known lines, by file and exact text, as often as each is listed.
+const knownAnywhere = (what, line, re, known) => {
+  const hits = scriptLines.filter(({ u }) => re.test(u));
+  const stray = hits.filter(({ rel, t }) => !(known[rel] ?? []).includes(t));
+  check(`(a') nothing under scripts/ names ${what} but the known lines`, stray.length === 0, stray.map(({ rel, n, t }) => `${rel}:${n}: ${t}`).join('; '));
+  const counts = Object.entries(known).flatMap(([rel, list]) => [...new Set(list)].map((t) => [rel, t, list.filter((x) => x === t).length, hits.filter((x) => x.rel === rel && x.t === t).length]))
+    .filter(([, , want, got]) => want !== got);
+  check(`(a') every known ${line} is there, as often as it is known`, counts.length === 0, counts.map(([rel, t, , got]) => `${rel}: ${got}x ${t}`).join('; '));
+};
+// The first line is in the two destroy paths, so it is listed twice.
+knownAnywhere('restore', 'restore line', /\brestore\b/i, { ...KNOWN_RESTORE, 'lib/tone-sink.sh': [KNOWN_RESTORE['lib/tone-sink.sh'][0], ...KNOWN_RESTORE['lib/tone-sink.sh']] });
+
+// **The default-output tools, the tone's button and a raw click, likewise** (round 10). The rule above reads only
+// what the pass sources; a helper it runs as a process, a `.py` among them, could move the default output or destroy
+// another run's sink, and `pw-cli` with `destroy` on the next line, or the tool's name in a variable, passed a rule
+// that wanted both on one line. So any mention of a tool, anywhere under `scripts/`, is a known line. The same goes
+// for the tone's button and the row it sits in, which a press by position finds by the row's label, and for every
+// way of clicking or typing that does not go through `webdriver.sh`'s two helpers.
+knownAnywhere('a default-output tool', 'tool line', /pw-metadata|pactl|pacmd|wpctl|pw-cli/i, {
+  'audio-harness.sh': [
+    'for t in pw-cli pw-cat pw-loopback pw-metadata pw-dump; do',
+    'pw-metadata -n default 2>/dev/null \\',
+    'pw-metadata -n default 0 default.configured.audio.source "{\\"name\\":\\"$SRC_NAME\\"}" >/dev/null',
+    'pw-metadata -n default 0 default.configured.audio.source "$(cat "$STATE_DIR/original-default-source")" >/dev/null || true',
+  ],
+  'lib/gate-sinks.sh': [
+    `[ -z "$ids" ] || die "a node named $name is already in the graph (node $ids); remove it with 'pw-cli destroy $ids' first"`,
+    'pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$name node.description=\\"$desc\\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }" >/dev/null \\',
+    'for id in $GATE_SINK_IDS; do pw-cli destroy "$id" >/dev/null 2>&1 || true; done',
+    'for id in $ids; do pw-cli destroy "$id" >/dev/null 2>&1 || die "could not remove $1 (node $id)"; done',
+    'pw-metadata -n default 0 default.audio.sink 2>/dev/null | grep "\\"name\\":\\"$1\\"" >/dev/null',
+  ],
+  'lib/harness-guard.sh': ['pw-metadata -n default 0 default.audio.source 2>/dev/null \\'],
+  'lib/tone-sink.sh': [
+    'out=$(pw-metadata -n default 0 default.configured.audio.sink 2>/dev/null) || return 1',
+    'out=$(pw-metadata -n default 0 default.audio.sink 2>/dev/null) || return 1',
+    'pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$TONE_SINK_NAME node.description=\\"Backchannel tone sink\\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }" >/dev/null \\',
+    'pw-metadata -n default 0 default.configured.audio.sink "$orig" >/dev/null',
+    'pw-cli destroy "$TONE_SINK_ID" >/dev/null 2>&1',
+    'for id in $ids; do pw-cli destroy "$id" >/dev/null 2>&1; done',
+  ],
+});
+knownAnywhere('the tone\'s button or its row', 'button line', /play a tone|heard through/i, {
+  [PASS]: [
+    'audio_check_press "The other side is heard through" "Play a tone and listen"',
+    `STRIG=$(find_el '{"using":"xpath","value":"//button[@aria-label=\\"The other side is heard through\\"]"}')`,
+    `await "(function(){var t=[...document.querySelectorAll('button[aria-label]')].find(b=>b.getAttribute('aria-label')==='The other side is heard through');return !!t&&t.textContent.indexOf('Backchannel tone sink')>=0;})()" \\`,
+  ],
+});
+knownAnywhere('a raw click or keystroke', 'raw click line', /\.click\s*\(|dispatchEvent|\/click\b|\/value\b|\/actions\b/i, {
+  'lib/webdriver.sh': [
+    `resp=$(curl -s -m 20 -X POST "$BASE/element/$el/click" -H 'Content-Type: application/json' -d '{}')`,
+    `resp=$(curl -s -m 20 -X POST "$BASE/element/$el/value" -H 'Content-Type: application/json' -d "$body")`,
+  ],
+});
+// And every call of the two helpers among the lines read is a known line: a new click, even of a locator that names
+// nothing, is a visible diff here (round 10's press by position).
+const KNOWN_CLICKS = {
+  [PASS]: [
+    'click "$CAT" "the catalogue button"', 'type_into "$FIELD" "$MODEL_ID" "the catalogue\'s search field"',
+    'click "$ROW" "the catalogue row for $MODEL_ID"', 'click "$OPT" "the $MODEL_ID row"',
+    'click "$CONT" "Continue on the transcription screen"', 'click "$CONT" "Continue on the summariser screen"',
+    'click "$CONT" "Continue on the download screen"', 'click "$TRIG" "the microphone picker"',
+    'click "$OPT" "the harness microphone"', 'click "$STRIG" "the system picker"', 'click "$SOPT" "the tone sink\'s monitor"',
+    'click "$FIN" "the control that finishes first run"', 'click "$R" "Start recording"', 'click "$STOP" "Stop recording"',
+    'click "$G" "Generate Summary"',
+  ],
+  'lib/audio-check.sh': ['click "$el" "$action"'],
+};
+const clickCalls = queue.filter(({ l, code }) => code && /(^|[\s;&|(){}!`])(click|type_into)(?=\s|$|;)/.test(bare(l)) && !/^\s*(click|type_into)\(\)/.test(code));
+const strayClicks = clickCalls.filter(({ rel, l }) => !(KNOWN_CLICKS[rel] ?? []).includes(l.trim()));
+check('(a\') every click among the lines read is a known line', strayClicks.length === 0, strayClicks.map(({ rel, n, l }) => `${rel}:${n}: ${l.trim()}`).join('; '));
+const staleClicks = Object.entries(KNOWN_CLICKS).flatMap(([rel, list]) => list.filter((t) => clickCalls.filter((x) => x.rel === rel && x.l.trim() === t).length !== 1).map((t) => `${rel}: ${t}`));
+check('(a\') every known click is there once', staleClicks.length === 0, staleClicks.join('; '));
 // **A script a read line names is a file under `scripts/`,** so the rule above reads it (round 9's N2, a helper the
 // pass runs, and its spelling outside `scripts/`). A path is resolved from the repository, from `scripts/`, and from
 // the naming file's own directory (`"$(dirname …)/lib/x.sh"`, `"$VAR/x.js"`); one that resolves to no file there, or
@@ -425,8 +495,9 @@ const ASSIGNS = [
   /(^|[;&|(]\s*)for\s+TONE_SINK_NAME\b/,
 ];
 // And any bare `TONE_SINK_NAME` in a shell file that is not a parameter expansion is an assignment (round 6:
-// `if ! read -r TONE_SINK_NAME` and `while IFS= read -r TONE_SINK_NAME` escaped the forms above).
-const bareNamed = (l) => [...bare(l).matchAll(/(^|.)(\{[#!]?)?\bTONE_SINK_NAME\b/g)].some((m) => !(m[1] === '$' || (m[2] && bare(l)[m.index + m[1].length - 1] === '$') || m[1] === '{' || m[1] === '#' || m[1] === '!'));
+// `if ! read -r TONE_SINK_NAME` and `while IFS= read -r TONE_SINK_NAME` escaped the forms above). Read with the quotes
+// removed, not emptied, so a quoted name is seen too (round 10: `read -r "TONE_SINK_NAME"`, `declare -n r="TONE_SINK_NAME"`).
+const bareNamed = (l) => { const u = unquoted(l, false); return [...u.matchAll(/(^|.)(\{[#!]?)?\bTONE_SINK_NAME\b/g)].some((m) => !(m[1] === '$' || (m[2] && u[m.index + m[1].length - 1] === '$') || m[1] === '{' || m[1] === '#' || m[1] === '!')); };
 const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
