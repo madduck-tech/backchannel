@@ -107,7 +107,7 @@ tone_sink_create() {
     && die "harness: the effective default output is already a tone sink ($TONE_DEFAULT_BEFORE); run 'bash scripts/lib/tone-sink.sh restore' first"
   pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$TONE_SINK_NAME node.description=\"Backchannel tone sink\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }" >/dev/null \
     || die "harness: could not create the tone sink"
-  # By the clock, at most 5 s each: a slow `pw-dump` must not stretch a wait the words call 5 s.
+  # By the clock, at most 5 s each: a slow pw-dump must not stretch a wait the words call 5 s.
   local n ids end ports=0
   end=$(( $(date +%s%3N) + 5000 ))
   until [ "$(date +%s%3N)" -ge "$end" ]; do
@@ -169,7 +169,7 @@ tone_sink_put_back() {
 }
 
 # The EXIT trap's half: the node this run made, and only while its id still names it. PipeWire gives a
-# freed id to the next object (three `pw-dump` clients in a row each got id 99, #266's critic), so once the
+# freed id to the next object (three pw-dump clients in a row each got id 99, #266's critic), so once the
 # sink is gone the id may be someone else's. A run stopped before its node's id was read leaves the node,
 # for `restore` to clear.
 # Returns non-zero, and keeps the id for `restore`, unless the node is known to be gone: a graph that cannot
